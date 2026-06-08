@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useActionState } from "react";
-import { signUp, type AuthActionState } from "@/actions/auth";
+import { signUp } from "@/actions/auth";
+import type { AuthActionState } from "@/lib/validations/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";

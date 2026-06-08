@@ -1,11 +1,9 @@
 "use client";
 
 import { useActionState, useState } from "react";
-import { Camera, Plus, Trash2 } from "lucide-react";
-import {
-  createSiteVisit,
-  type SiteVisitActionState,
-} from "@/actions/site-visits";
+import { Camera, FileUp, Plus, Trash2 } from "lucide-react";
+import { createScope } from "@/actions/scopes";
+import type { ScopeActionState } from "@/lib/validations/scope";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -17,9 +15,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { JOB_TYPES } from "@/lib/validations/site-visit";
-
-const initialState: SiteVisitActionState = {};
+import type { ScopeType } from "@/types/database";
 
 interface Measurement {
   label: string;
@@ -27,12 +23,17 @@ interface Measurement {
   unit: string;
 }
 
-export function NewSiteVisitForm() {
-  const [state, formAction, pending] = useActionState(
-    createSiteVisit,
-    initialState
-  );
-  const [jobType, setJobType] = useState<string>("");
+interface AddScopeFormProps {
+  projectId: string;
+  scopeTypes: ScopeType[];
+}
+
+export function AddScopeForm({ projectId, scopeTypes }: AddScopeFormProps) {
+  const boundAction = createScope.bind(null, projectId);
+  const [state, formAction, pending] = useActionState(boundAction, {} as ScopeActionState);
+
+  const [isCustom, setIsCustom] = useState(false);
+  const [scopeTypeId, setScopeTypeId] = useState("");
   const [measurements, setMeasurements] = useState<Measurement[]>([
     { label: "", value: "", unit: "" },
   ]);
@@ -67,6 +68,8 @@ export function NewSiteVisitForm() {
 
   return (
     <form action={formAction} className="space-y-6">
+      <input type="hidden" name="isCustom" value={String(isCustom)} />
+      <input type="hidden" name="scopeTypeId" value={isCustom ? "" : scopeTypeId} />
       <input
         type="hidden"
         name="measurements"
@@ -78,96 +81,108 @@ export function NewSiteVisitForm() {
           }))
         )}
       />
-      <input type="hidden" name="jobType" value={jobType} />
 
       <section className="space-y-4">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-          Visit details
+          Scope type
         </h2>
 
-        <div className="space-y-2">
-          <Label htmlFor="title">Visit title</Label>
-          <Input
-            id="title"
-            name="title"
-            placeholder="e.g. Kitchen reno — Smith residence"
-            required
-          />
-          {state.fieldErrors?.title && (
-            <p className="text-sm text-destructive">{state.fieldErrors.title[0]}</p>
-          )}
+        <div className="flex gap-2">
+          <Button
+            type="button"
+            variant={!isCustom ? "default" : "outline"}
+            className="flex-1"
+            onClick={() => setIsCustom(false)}
+          >
+            From list
+          </Button>
+          <Button
+            type="button"
+            variant={isCustom ? "default" : "outline"}
+            className="flex-1"
+            onClick={() => setIsCustom(true)}
+          >
+            Custom scope
+          </Button>
         </div>
 
-        <div className="space-y-2">
-          <Label htmlFor="clientName">Client name</Label>
-          <Input id="clientName" name="clientName" placeholder="Client name" required />
-          {state.fieldErrors?.clientName && (
-            <p className="text-sm text-destructive">
-              {state.fieldErrors.clientName[0]}
-            </p>
-          )}
-        </div>
-
-        <div className="space-y-2">
-          <Label htmlFor="clientPhone">Client phone</Label>
-          <Input
-            id="clientPhone"
-            name="clientPhone"
-            type="tel"
-            placeholder="04xx xxx xxx"
-          />
-        </div>
-
-        <div className="space-y-2">
-          <Label htmlFor="siteAddress">Site address</Label>
-          <Input
-            id="siteAddress"
-            name="siteAddress"
-            placeholder="Street address"
-            required
-          />
-          {state.fieldErrors?.siteAddress && (
-            <p className="text-sm text-destructive">
-              {state.fieldErrors.siteAddress[0]}
-            </p>
-          )}
-        </div>
-
-        <div className="space-y-2">
-          <Label>Job type</Label>
-          <Select value={jobType} onValueChange={setJobType} required>
-            <SelectTrigger>
-              <SelectValue placeholder="Select job type" />
-            </SelectTrigger>
-            <SelectContent>
-              {JOB_TYPES.map((type) => (
-                <SelectItem key={type} value={type}>
-                  {type}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {state.fieldErrors?.jobType && (
-            <p className="text-sm text-destructive">{state.fieldErrors.jobType[0]}</p>
-          )}
-        </div>
+        {isCustom ? (
+          <div className="space-y-2">
+            <Label htmlFor="customScopeName">Custom scope name</Label>
+            <Input
+              id="customScopeName"
+              name="customScopeName"
+              placeholder="e.g. Pool cabana"
+            />
+            {state.fieldErrors?.customScopeName && (
+              <p className="text-sm text-destructive">
+                {state.fieldErrors.customScopeName[0]}
+              </p>
+            )}
+          </div>
+        ) : (
+          <div className="space-y-2">
+            <Label>Scope type</Label>
+            <Select value={scopeTypeId} onValueChange={setScopeTypeId}>
+              <SelectTrigger>
+                <SelectValue placeholder="Select scope of work" />
+              </SelectTrigger>
+              <SelectContent>
+                {scopeTypes.map((type) => (
+                  <SelectItem key={type.id} value={type.id}>
+                    {type.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {state.fieldErrors?.scopeTypeId && (
+              <p className="text-sm text-destructive">
+                {state.fieldErrors.scopeTypeId[0]}
+              </p>
+            )}
+          </div>
+        )}
       </section>
 
       <section className="space-y-4">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-          Notes
+          Scope details
         </h2>
-        <Textarea
-          name="notes"
-          placeholder="What did you see on site? Scope, issues, access, materials…"
-          rows={5}
-        />
+
+        <div className="space-y-2">
+          <Label htmlFor="locationArea">Location / area</Label>
+          <Input
+            id="locationArea"
+            name="locationArea"
+            placeholder="e.g. Ground floor bathroom"
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="description">Description</Label>
+          <Textarea
+            id="description"
+            name="description"
+            placeholder="What work is included in this scope?"
+            rows={3}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="notes">Notes</Label>
+          <Textarea
+            id="notes"
+            name="notes"
+            placeholder="Site conditions, finishes, exclusions…"
+            rows={4}
+          />
+        </div>
       </section>
 
       <section className="space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-            Quick measurements
+            Measurements
           </h2>
           <Button type="button" variant="ghost" size="sm" onClick={addMeasurement}>
             <Plus className="h-4 w-4" />
@@ -179,7 +194,7 @@ export function NewSiteVisitForm() {
           {measurements.map((m, index) => (
             <div key={index} className="space-y-2 rounded-lg border p-3">
               <Input
-                placeholder="Label (e.g. Kitchen width)"
+                placeholder="Label"
                 value={m.label}
                 onChange={(e) => updateMeasurement(index, "label", e.target.value)}
               />
@@ -216,13 +231,9 @@ export function NewSiteVisitForm() {
         <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
           Photos
         </h2>
-
         <label className="flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-input bg-muted/30 px-6 py-10 transition-colors hover:bg-muted/50">
           <Camera className="mb-3 h-8 w-8 text-muted-foreground" />
           <span className="text-sm font-medium">Tap to add photos</span>
-          <span className="mt-1 text-xs text-muted-foreground">
-            Take photos or choose from gallery
-          </span>
           <input
             type="file"
             name="photos"
@@ -233,7 +244,6 @@ export function NewSiteVisitForm() {
             onChange={handlePhotoChange}
           />
         </label>
-
         {photoPreview.length > 0 && (
           <div className="grid grid-cols-3 gap-2">
             {photoPreview.map((src, i) => (
@@ -249,6 +259,23 @@ export function NewSiteVisitForm() {
         )}
       </section>
 
+      <section className="space-y-4">
+        <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+          Documents
+        </h2>
+        <label className="flex cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed border-input bg-muted/30 px-6 py-8 transition-colors hover:bg-muted/50">
+          <FileUp className="mb-3 h-7 w-7 text-muted-foreground" />
+          <span className="text-sm font-medium">Upload plans or specs</span>
+          <input
+            type="file"
+            name="documents"
+            accept=".pdf,.doc,.docx,image/*"
+            multiple
+            className="hidden"
+          />
+        </label>
+      </section>
+
       {state.error && (
         <p className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
           {state.error}
@@ -256,7 +283,7 @@ export function NewSiteVisitForm() {
       )}
 
       <Button type="submit" className="w-full" size="lg" disabled={pending}>
-        {pending ? "Saving visit…" : "Save site visit"}
+        {pending ? "Saving scope…" : "Add scope of work"}
       </Button>
     </form>
   );

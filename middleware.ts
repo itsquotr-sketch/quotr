@@ -5,18 +5,44 @@ const publicRoutes = ["/login", "/signup", "/auth/callback"];
 
 const appRoutes = [
   "/dashboard",
-  "/site-visits",
-  "/jobs",
+  "/projects",
   "/estimates",
+  "/quotes",
   "/rates",
   "/assemblies",
   "/subcontractors",
+  "/rfqs",
   "/settings",
 ];
 
+const legacyRedirects: Record<string, string> = {
+  "/jobs": "/projects",
+  "/site-visits": "/projects",
+  "/site-visits/new": "/projects/new",
+};
+
 export async function middleware(request: NextRequest) {
-  const { supabaseResponse, user, supabase } = await updateSession(request);
+  // Allow Server Action POSTs through without redirect interference
+  if (request.method === "POST" && request.headers.has("next-action")) {
+    const { supabaseResponse } = await updateSession(request);
+    return supabaseResponse;
+  }
+
   const { pathname } = request.nextUrl;
+
+  if (legacyRedirects[pathname]) {
+    const url = request.nextUrl.clone();
+    url.pathname = legacyRedirects[pathname];
+    return NextResponse.redirect(url);
+  }
+
+  if (pathname.startsWith("/site-visits/") && pathname !== "/site-visits/new") {
+    const url = request.nextUrl.clone();
+    url.pathname = "/projects";
+    return NextResponse.redirect(url);
+  }
+
+  const { supabaseResponse, user, supabase } = await updateSession(request);
 
   const isPublicRoute =
     publicRoutes.some((route) => pathname.startsWith(route)) ||

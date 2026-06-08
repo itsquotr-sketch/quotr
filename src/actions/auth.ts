@@ -2,13 +2,11 @@
 
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
-import { signInSchema, signUpSchema } from "@/lib/validations/auth";
-
-export type AuthActionState = {
-  error?: string;
-  success?: string;
-  fieldErrors?: Record<string, string[]>;
-};
+import {
+  signInSchema,
+  signUpSchema,
+  type AuthActionState,
+} from "@/lib/validations/auth";
 
 export async function signUp(
   _prevState: AuthActionState,

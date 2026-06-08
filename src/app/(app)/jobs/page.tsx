@@ -1,12 +1,5 @@
-import { Briefcase } from "lucide-react";
-import { PlaceholderPage } from "@/components/shared/placeholder-page";
+import { redirect } from "next/navigation";
 
 export default function JobsPage() {
-  return (
-    <PlaceholderPage
-      title="Jobs"
-      description="Track active projects from site visit to completion."
-      icon={Briefcase}
-    />
-  );
+  redirect("/projects");
 }

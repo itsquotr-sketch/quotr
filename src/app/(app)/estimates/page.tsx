@@ -5,7 +5,7 @@ export default function EstimatesPage() {
   return (
     <PlaceholderPage
       title="Estimates"
-      description="Turn site visits into structured estimates and quotes."
+      description="Build estimates from your project scopes."
       icon={Calculator}
     />
   );

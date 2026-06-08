@@ -13,3 +13,9 @@ export const signInSchema = z.object({
 
 export type SignUpInput = z.infer<typeof signUpSchema>;
 export type SignInInput = z.infer<typeof signInSchema>;
+
+export type AuthActionState = {
+  error?: string;
+  success?: string;
+  fieldErrors?: Record<string, string[]>;
+};

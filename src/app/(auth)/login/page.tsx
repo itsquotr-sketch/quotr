@@ -5,7 +5,7 @@ export default function LoginPage() {
     <div>
       <h1 className="text-2xl font-bold tracking-tight">Welcome back</h1>
       <p className="mt-2 text-muted-foreground">
-        Sign in to continue capturing site visits and building quotes.
+        Sign in to manage projects, scopes and quotes.
       </p>
       <div className="mt-8">
         <SignInForm />

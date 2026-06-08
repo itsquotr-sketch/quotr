@@ -43,7 +43,11 @@ export default function RootLayout({
   return (
     <html lang="en" className={cn("font-sans", notoSans.variable, playfairDisplayHeading.variable)}>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} min-h-dvh font-sans antialiased`}
+        className={cn(
+          geistSans.variable,
+          geistMono.variable,
+          "min-h-dvh bg-background font-sans text-foreground antialiased"
+        )}
       >
         {children}
       </body>

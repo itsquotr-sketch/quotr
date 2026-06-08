@@ -1,9 +1,9 @@
 import { Skeleton } from "@/components/ui/skeleton";
 
-export default function SiteVisitsLoading() {
+export default function ProjectsLoading() {
   return (
     <div>
-      <Skeleton className="mb-2 h-8 w-40" />
+      <Skeleton className="mb-2 h-8 w-32" />
       <Skeleton className="mb-6 h-4 w-56" />
       <div className="space-y-3">
         {Array.from({ length: 4 }).map((_, i) => (
