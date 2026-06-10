@@ -143,6 +143,18 @@ export function isTemplateRequiredQuestion(
   return getTemplateRequiredQuestionKeys(workAreaTypeKey).includes(key);
 }
 
+export function isTemplateAffectsEstimateQuestion(
+  workAreaTypeKey: string,
+  questionKey: string | null | undefined
+): boolean {
+  const key = normalizeQuestionKey(questionKey);
+  if (!key) return true;
+  const template = getScopeTemplateByWorkAreaType(workAreaTypeKey);
+  if (!template) return true;
+  const question = template.questions.find((q) => q.questionKey === key);
+  return question?.affectsEstimate ?? true;
+}
+
 function templateConstraintToAssistant(
   constraint: ScopeTemplateConstraint
 ): AssistantConstraint {

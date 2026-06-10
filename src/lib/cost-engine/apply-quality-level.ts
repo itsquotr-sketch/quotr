@@ -21,8 +21,8 @@ export function applyQualityLevelToBand(
 
   switch (qualityLevel) {
     case "budget": {
-      typical = Math.round(low + (typical - low) * 0.55);
-      high = Math.round(typical * 1.15);
+      typical = Math.round(typical * 0.85);
+      high = Math.round(Math.min(high, typical * 1.1));
       assumptions.push(
         "Budget / basic finish — lower specification materials and allowances assumed."
       );
@@ -41,14 +41,13 @@ export function applyQualityLevelToBand(
         "Premium / high-end finish — higher specification materials and subcontractor allowances assumed."
       );
       qualityNote =
-        "Premium finish selected — range increased for higher specification materials/subcontractor allowances.";
+        "Premium finish selected — range increased for higher specification materials.";
       break;
     }
     case "unknown":
     default: {
       low = Math.round(low * 0.9);
       high = Math.round(high * 1.25);
-      missingInformation.push("Finish level unknown.");
       qualityNote = "Finish level unknown — estimate range kept wider.";
       break;
     }

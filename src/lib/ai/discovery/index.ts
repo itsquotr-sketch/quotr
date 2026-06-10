@@ -1,17 +1,19 @@
-export type {
-  DiscoveryProvider,
-} from "@/lib/ai/discovery/discovery-provider";
+export type { IDiscoveryProvider, DiscoveryProvider } from "@/lib/ai/discovery/discovery-provider";
 export type {
   DiscoveryRisk,
   DiscoveryRunContext,
   DiscoveryRunOutcome,
   DiscoveryRunResult,
   DiscoveryProviderMeta,
+  DiscoveryProviderError,
+  DiscoveryExistingAnswer,
 } from "@/lib/ai/discovery/types";
 export {
   DISCOVERY_PROMPT_VERSION,
-  DISCOVERY_V1_SYSTEM_PROMPT,
+  DISCOVERY_V2_SYSTEM_PROMPT,
   buildDiscoveryUserPrompt,
+  buildDiscoverySystemPrompt,
+  buildDiscoveryResponsesInput,
 } from "@/lib/ai/discovery/prompts";
 export {
   aiDiscoveryOutputSchema,
@@ -21,9 +23,12 @@ export {
 export {
   OpenAiDiscoveryProvider,
   openAiDiscoveryProvider,
-  discoverProjectWithPreferredProvider,
   isOpenAiDiscoveryAvailable,
-} from "@/lib/ai/discovery/openai-discovery-provider";
+  mapOpenAiDiscoveryError,
+} from "@/lib/ai/discovery/providers/openai-discovery-provider";
+export {
+  discoverProjectWithPreferredProvider,
+} from "@/lib/ai/discovery/discover-project";
 export {
   RuleBasedDiscoveryProvider,
   ruleBasedAiDiscoveryProvider,
@@ -38,3 +43,4 @@ export {
   applyWorkAreaSuggestions,
   syncDiscoveryQuestionsToScopes,
 } from "@/lib/ai/discovery/apply-discovery-results";
+export { enrichDiscoveryContext } from "@/lib/ai/discovery/build-discovery-context";

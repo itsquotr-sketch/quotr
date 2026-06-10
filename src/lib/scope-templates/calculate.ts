@@ -2,8 +2,10 @@ import type { ScopeTemplate } from "@/lib/scope-templates/types";
 import { getAnswerValue } from "@/lib/question-keys";
 import type { PackageRate } from "@/types/database";
 import { PLACEHOLDER_BASE_RANGES } from "@/lib/constants/quick-estimate";
+import type { QualityLevel } from "@/lib/constants/quality-level";
 
 type CostBand = { low: number; typical: number; high: number };
+type RangeMultipliers = { low: number; high: number };
 
 export type TemplateCalculationResult = {
   band: CostBand;
@@ -17,7 +19,7 @@ export type TemplateCalculationResult = {
 };
 
 function parseNumber(value: string | undefined): number | null {
-  if (!value?.trim()) return null;
+  if (value === undefined) return null;
   const num = Number(value);
   return Number.isFinite(num) && num > 0 ? num : null;
 }
@@ -40,26 +42,60 @@ function findPackageRate(
 function checkRequiredFacts(
   template: ScopeTemplate,
   answers: Record<string, string>
-): { missing: string[]; hasAll: boolean } {
-  const missing: string[] = [];
-  for (const key of template.estimateRules.requiredFactKeys) {
-    if (!parseNumber(getAnswerValue(answers, key))) {
-      const fact =
-        template.requiredFacts.find((f) => f.key === key) ??
-        template.questions.find((q) => q.questionKey === key);
-      missing.push(`${fact?.label ?? key} not provided`);
-    }
-  }
-  return { missing, hasAll: missing.length === 0 };
+): boolean {
+  return template.estimateRules.requiredFactKeys.every((key) =>
+    Boolean(parseNumber(getAnswerValue(answers, key)))
+  );
+}
+
+function getDeckMultipliers(
+  answers: Record<string, string>
+): RangeMultipliers | null {
+  const area = parseNumber(getAnswerValue(answers, "deck.area_m2"));
+  if (!area) return null;
+  const material = getAnswerValue(answers, "deck.material_type");
+  const materialKnown = Boolean(material && material !== "unknown");
+  if (materialKnown) return { low: 0.9, high: 1.15 };
+  return { low: 0.85, high: 1.25 };
+}
+
+function getRetainingWallMultipliers(
+  answers: Record<string, string>
+): RangeMultipliers | null {
+  const length = parseNumber(
+    getAnswerValue(answers, "retaining_wall.length_m")
+  );
+  const height = parseNumber(
+    getAnswerValue(answers, "retaining_wall.height_m")
+  );
+  if (!length || !height) return null;
+  return { low: 0.88, high: 1.18 };
+}
+
+function getBathroomMultipliers(
+  answers: Record<string, string>,
+  effectiveQualityLevel: QualityLevel
+): RangeMultipliers | null {
+  const area = parseNumber(getAnswerValue(answers, "bathroom.floor_area_m2"));
+  if (!area) return null;
+
+  const scopeFinish = getAnswerValue(answers, "bathroom.finish_level");
+  const finishKnown =
+    effectiveQualityLevel !== "unknown" ||
+    Boolean(scopeFinish && scopeFinish !== "unknown");
+
+  if (finishKnown) return { low: 0.88, high: 1.22 };
+  return { low: 0.8, high: 1.35 };
 }
 
 export function calculateFromTemplate(
   template: ScopeTemplate,
   answers: Record<string, string>,
-  packageRates: PackageRate[]
+  packageRates: PackageRate[],
+  effectiveQualityLevel: QualityLevel = "unknown"
 ): TemplateCalculationResult {
   const pkg = findPackageRate(packageRates, template.workAreaTypeKey);
-  const { missing, hasAll } = checkRequiredFacts(template, answers);
+  const hasAll = checkRequiredFacts(template, answers);
   const inputs: string[] = [];
   const allowances: string[] = [];
   let low = 0;
@@ -67,26 +103,27 @@ export function calculateFromTemplate(
   let high = 0;
   let usedPackage = false;
 
-  const rules = template.estimateRules;
   const rates = template.benchmarkRates;
 
-  switch (rules.calculationType) {
+  switch (template.estimateRules.calculationType) {
     case "deck_area": {
       const area = parseNumber(getAnswerValue(answers, "deck.area_m2"));
-      if (area) {
+      const multipliers = getDeckMultipliers(answers);
+
+      if (area && multipliers) {
         const rate = pkg
           ? Number(pkg.typical_base_cost ?? pkg.base_cost)
           : rates.typical;
         typical = area * rate;
-        low = typical * rules.lowMultiplier;
-        high = typical * rules.highMultiplier;
+        low = typical * multipliers.low;
+        high = typical * multipliers.high;
         usedPackage = Boolean(pkg);
         inputs.push(
           `${template.name}: ${area} m² × $${Math.round(rate)}/m² typical (template: ${template.key})`
         );
 
         if (getAnswerValue(answers, "deck.level_type") === "elevated") {
-          const mod = rules.elevatedModifier ?? 1.15;
+          const mod = template.estimateRules.elevatedModifier ?? 1.15;
           low *= mod;
           typical *= mod;
           high *= mod;
@@ -127,14 +164,15 @@ export function calculateFromTemplate(
         getAnswerValue(answers, "retaining_wall.height_m")
       );
       const wallArea = length && height ? length * height : null;
+      const multipliers = getRetainingWallMultipliers(answers);
 
-      if (wallArea) {
+      if (wallArea && multipliers) {
         const rate = pkg
           ? Number(pkg.typical_base_cost ?? pkg.base_cost)
           : rates.typical;
         typical = wallArea * rate;
-        low = typical * rules.lowMultiplier;
-        high = typical * rules.highMultiplier;
+        low = typical * multipliers.low;
+        high = typical * multipliers.high;
         usedPackage = Boolean(pkg);
         inputs.push(
           `${template.name}: ${length}m × ${height}m = ${wallArea.toFixed(1)}m² × $${Math.round(rate)}/m² typical (template: ${template.key})`
@@ -170,9 +208,18 @@ export function calculateFromTemplate(
       const area = parseNumber(
         getAnswerValue(answers, "bathroom.floor_area_m2")
       );
-      if (area) {
-        const finishLevel =
+      const multipliers = getBathroomMultipliers(answers, effectiveQualityLevel);
+
+      if (area && multipliers) {
+        const scopeFinish =
           getAnswerValue(answers, "bathroom.finish_level") ?? "standard";
+        const finishLevel =
+          effectiveQualityLevel !== "unknown"
+            ? effectiveQualityLevel
+            : scopeFinish !== "unknown"
+              ? scopeFinish
+              : "standard";
+
         let rate = pkg
           ? Number(pkg.typical_base_cost ?? pkg.base_cost)
           : rates.typical;
@@ -181,15 +228,15 @@ export function calculateFromTemplate(
         if (finishLevel === "premium") rate = rates.high;
 
         typical = area * rate;
-        low = typical * rules.lowMultiplier;
-        high = typical * rules.highMultiplier;
+        low = typical * multipliers.low;
+        high = typical * multipliers.high;
         usedPackage = Boolean(pkg);
         inputs.push(
           `${template.name}: ${area} m² × $${Math.round(rate)}/m² typical (template: ${template.key})`
         );
 
         if (isYes(getAnswerValue(answers, "bathroom.layout_changing"))) {
-          const mod = rules.layoutChangeModifier ?? 1.2;
+          const mod = template.estimateRules.layoutChangeModifier ?? 1.2;
           low *= mod;
           typical *= mod;
           high *= mod;
@@ -227,8 +274,10 @@ export function calculateFromTemplate(
   }
 
   const confidenceReason = hasAll
-    ? `Key measurements provided for ${template.name} template.`
-    : `Missing key facts for ${template.name} template — range kept wider.`;
+    ? usedPackage
+      ? `${template.name}: measurements provided using your saved rates.`
+      : `${template.name}: measurements provided using benchmark template rates.`
+    : `${template.name}: missing key facts — wide placeholder range used.`;
 
   return {
     band: {
@@ -239,9 +288,9 @@ export function calculateFromTemplate(
     usedPackage,
     usedTemplate: true,
     templateKey: template.key,
-    missing,
+    missing: [],
     inputs,
     allowances,
-    confidenceReason: hasAll ? confidenceReason : confidenceReason,
+    confidenceReason,
   };
 }

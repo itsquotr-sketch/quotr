@@ -41,6 +41,13 @@ export async function recalculateQuickEstimate(
     templatesUsed: result.templatesUsed,
     keyFactsUsed: result.keyFactsUsed,
     confidenceReason: result.confidenceReason,
+    rangeQuality: result.rangeQuality,
+    rangeQualityLabel: result.rangeQualityLabel,
+    rangeQualityReason: result.rangeQualityReason,
+    rangeWidthPercent: result.rangeWidthPercent,
+    tightenSuggestions: result.tightenSuggestions,
+    rangeLowDrivers: result.rangeLowDrivers,
+    rangeHighDrivers: result.rangeHighDrivers,
   });
 
   const updatePayload = result.canCalculate

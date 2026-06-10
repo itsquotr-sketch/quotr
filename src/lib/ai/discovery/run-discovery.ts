@@ -1,6 +1,8 @@
 import { createHash } from "crypto";
 import { applyDiscoveryResults } from "@/lib/ai/discovery/apply-discovery-results";
-import { discoverProjectWithPreferredProvider } from "@/lib/ai/discovery/openai-discovery-provider";
+import { enrichDiscoveryContext } from "@/lib/ai/discovery/build-discovery-context";
+import { discoverProjectWithPreferredProvider } from "@/lib/ai/discovery/discover-project";
+import { DISCOVERY_PROMPT_VERSION } from "@/lib/ai/discovery/prompts";
 import type { DiscoveryRunContext, DiscoveryRunOutcome } from "@/lib/ai/discovery/types";
 import { devLog } from "@/lib/dev-log";
 import type { DiscoveryResult } from "@/lib/discovery/types";
@@ -171,7 +173,7 @@ export async function runProjectDiscovery(
       input_hash: inputHash,
       provider: "pending",
       model: null,
-      prompt_version: "discovery_v1",
+      prompt_version: DISCOVERY_PROMPT_VERSION,
       status: "running",
       created_by: userId,
     })
@@ -182,7 +184,13 @@ export async function runProjectDiscovery(
     logSupabaseError("runProjectDiscovery.createRun", pendingError);
   }
 
-  const outcome = await discoverProjectWithPreferredProvider(context);
+  const enrichedContext = await enrichDiscoveryContext(
+    supabase,
+    organisationId,
+    context
+  );
+
+  const outcome = await discoverProjectWithPreferredProvider(enrichedContext);
 
   devLog("discovery.run.outcome", {
     provider: outcome.provider.id,
@@ -200,12 +208,15 @@ export async function runProjectDiscovery(
     const { error: updateError } = await supabase
       .from("discovery_runs")
       .update({
-        provider: outcome.provider.id,
+        provider: outcome.attemptedProviderId ?? outcome.provider.id,
         model: outcome.result.model,
         prompt_version: outcome.result.promptVersion,
         raw_output: rawOutput,
         parsed_output: parsedOutput,
-        status: "completed",
+        status:
+          outcome.usedFallback && outcome.attemptedProviderId === "openai"
+            ? "failed"
+            : "completed",
         error_message: outcome.usedFallback ? outcome.fallbackReason ?? null : null,
       })
       .eq("id", pendingRun.id)

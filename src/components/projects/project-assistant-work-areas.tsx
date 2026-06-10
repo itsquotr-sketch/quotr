@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useState, useTransition } from "react";
+import { CheckCircle2 } from "lucide-react";
 import {
   acceptScopeSuggestion,
   acceptScopeSuggestionWithEdits,
@@ -18,25 +19,26 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  formatSuggestionConfidence,
-  labelForScopeSuggestionStatus,
-} from "@/lib/constants/scope-builder";
+import { formatSuggestionConfidence } from "@/lib/constants/scope-builder";
 import type { ScopeSuggestionActionState } from "@/lib/validations/scope-suggestion";
-import type { ProjectScopeSuggestion } from "@/types/database";
+import type { ProjectScope, ProjectScopeSuggestion } from "@/types/database";
+import { cn } from "@/lib/utils";
 
 interface ProjectAssistantWorkAreasProps {
   projectId: string;
   suggestions: ProjectScopeSuggestion[];
+  confirmedScopes: (ProjectScope & { scope_types: { name: string } | null })[];
 }
 
 export function ProjectAssistantWorkAreas({
   projectId,
   suggestions,
+  confirmedScopes,
 }: ProjectAssistantWorkAreasProps) {
   const pending = suggestions.filter((s) => s.status === "pending");
+  const hasConfirmed = confirmedScopes.length > 0;
 
-  if (pending.length === 0) {
+  if (pending.length === 0 && !hasConfirmed) {
     return (
       <p className="text-sm text-muted-foreground">
         No work areas identified yet. Save your notes and tap{" "}
@@ -47,23 +49,80 @@ export function ProjectAssistantWorkAreas({
   }
 
   return (
-    <div className="space-y-3">
-      <p className="text-xs text-muted-foreground">
+    <div className="space-y-4">
+      <p className="text-sm text-muted-foreground">
         Review each work area Quotr found in your notes. Accept to confirm, or
         edit the details first.
       </p>
-      {pending.map((suggestion) => (
-        <WorkAreaCard
-          key={suggestion.id}
-          projectId={projectId}
-          suggestion={suggestion}
-        />
-      ))}
+
+      {hasConfirmed && (
+        <div className="space-y-3">
+          {confirmedScopes.map((scope) => (
+            <ConfirmedWorkAreaCard key={scope.id} scope={scope} />
+          ))}
+        </div>
+      )}
+
+      {pending.length > 0 && (
+        <div className="space-y-3">
+          {hasConfirmed && (
+            <h4 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              Awaiting confirmation
+            </h4>
+          )}
+          {pending.map((suggestion) => (
+            <DetectedWorkAreaCard
+              key={suggestion.id}
+              projectId={projectId}
+              suggestion={suggestion}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
-function WorkAreaCard({
+function ConfirmedWorkAreaCard({
+  scope,
+}: {
+  scope: ProjectScope & { scope_types: { name: string } | null };
+}) {
+  const scopeNote =
+    scope.description?.trim() ||
+    scope.scope_types?.name ||
+    "Confirmed work area";
+
+  return (
+    <div className="rounded-xl border border-primary/20 bg-primary/5 p-4">
+      <div className="flex flex-wrap items-start justify-between gap-2">
+        <div className="space-y-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="font-semibold">{scope.name}</p>
+            <StatusBadge label="Confirmed" />
+          </div>
+          {scope.scope_types?.name && (
+            <StatusBadge label={scope.scope_types.name} />
+          )}
+        </div>
+        <span className="inline-flex shrink-0 items-center gap-1 text-xs text-primary">
+          <CheckCircle2 className="h-3.5 w-3.5" />
+          Confirmed
+        </span>
+      </div>
+      <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+        {scopeNote}
+      </p>
+      {scope.location_area && (
+        <p className="mt-1 text-xs text-muted-foreground">
+          Location: {scope.location_area}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function DetectedWorkAreaCard({
   projectId,
   suggestion,
 }: {
@@ -75,10 +134,7 @@ function WorkAreaCard({
   const [feedback, setFeedback] = useState<string | null>(null);
   const [editOpen, setEditOpen] = useState(false);
 
-  function runAction(
-    action: "accept" | "reject",
-    suggestionId: string
-  ) {
+  function runAction(action: "accept" | "reject", suggestionId: string) {
     setFeedback(null);
     setActiveAction(`${action}-${suggestionId}`);
     startTransition(async () => {
@@ -93,14 +149,15 @@ function WorkAreaCard({
         return;
       }
       setFeedback(
-        action === "accept"
-          ? "Work area confirmed."
-          : "Work area dismissed."
+        action === "accept" ? "Work area confirmed." : "Work area dismissed."
       );
     });
   }
 
   const isBusy = pending && activeAction?.endsWith(suggestion.id);
+  const confidenceLabel = formatSuggestionConfidence(
+    Number(suggestion.confidence)
+  );
 
   return (
     <>
@@ -108,28 +165,31 @@ function WorkAreaCard({
         <div className="flex flex-wrap items-center gap-2">
           <p className="font-semibold">{suggestion.suggested_name}</p>
           <StatusBadge label={suggestion.suggested_scope_type} />
-          <StatusBadge
-            label={labelForScopeSuggestionStatus(suggestion.status)}
-          />
-          <StatusBadge
-            label={formatSuggestionConfidence(Number(suggestion.confidence))}
-          />
+          <StatusBadge label="Detected" />
+          <StatusBadge label={confidenceLabel} />
         </div>
 
         {suggestion.suggested_description && (
-          <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+          <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
             {suggestion.suggested_description}
           </p>
         )}
 
         {suggestion.suggested_location_area && (
-          <p className="mt-2 text-sm text-muted-foreground">
-            Area: {suggestion.suggested_location_area}
+          <p className="mt-1 text-xs text-muted-foreground">
+            Location: {suggestion.suggested_location_area}
           </p>
         )}
 
         {feedback && (
-          <p className="mt-3 rounded-lg bg-primary/10 px-3 py-2 text-sm text-primary">
+          <p
+            className={cn(
+              "mt-3 rounded-lg px-3 py-2 text-sm",
+              feedback.includes("dismissed")
+                ? "bg-muted text-muted-foreground"
+                : "bg-primary/10 text-primary"
+            )}
+          >
             {feedback}
           </p>
         )}
@@ -152,7 +212,7 @@ function WorkAreaCard({
             disabled={isBusy}
             onClick={() => setEditOpen(true)}
           >
-            Edit before accepting
+            Edit
           </Button>
           <Button
             type="button"

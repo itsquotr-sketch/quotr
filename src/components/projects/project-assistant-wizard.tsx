@@ -15,10 +15,11 @@ import {
 } from "@/lib/project-constraints-load";
 import {
   PROJECT_ASSISTANT_STEPS,
+  resolveQuestionDef,
   resolveWorkAreaTypeKey,
 } from "@/lib/project-assistant-questions";
 import { normalizeQuestionKey } from "@/lib/question-keys";
-import { readAnswerValue } from "@/lib/scope-answer-format";
+import { isAnswered } from "@/lib/scope-answer-state";
 import { getIncludedTradesForWorkAreas } from "@/lib/project-assistant-trades";
 import type { DiscoveryResult } from "@/lib/discovery";
 import type { ProjectDiscoveryMeta } from "@/lib/discovery-meta";
@@ -93,13 +94,26 @@ export function ProjectAssistantWizard({
     const keys = new Set<string>();
     for (const q of scopeQuestions) {
       const row = q.scope_answers?.[0];
-      const answer = readAnswerValue(row?.answer, row?.source).trim();
-      if (!answer) continue;
+      const typeKey = resolveWorkAreaTypeKey(
+        confirmedScopes.find((s) => s.id === q.project_scope_id)?.scope_types
+          ?.name ?? null,
+        confirmedScopes.find((s) => s.id === q.project_scope_id)?.name ?? ""
+      );
+      const def = resolveQuestionDef(q, typeKey);
+      const inputType = q.question_type ?? def?.inputType ?? "text";
+      if (
+        !isAnswered(row?.answer, row?.source, {
+          inputType: inputType as "text" | "number" | "select" | "boolean",
+          requiresPositiveNumber: inputType === "number",
+        })
+      ) {
+        continue;
+      }
       const key = normalizeQuestionKey(q.question_key);
       if (key) keys.add(key);
     }
     return keys;
-  }, [scopeQuestions]);
+  }, [scopeQuestions, confirmedScopes]);
 
   const constraints = useMemo(
     () =>
@@ -148,9 +162,19 @@ export function ProjectAssistantWizard({
     () =>
       scopeQuestions.filter((q) => {
         const row = q.scope_answers?.[0];
-        return Boolean(readAnswerValue(row?.answer, row?.source).trim());
+        const scope = confirmedScopes.find((s) => s.id === q.project_scope_id);
+        const typeKey = resolveWorkAreaTypeKey(
+          scope?.scope_types?.name ?? null,
+          scope?.name ?? ""
+        );
+        const def = resolveQuestionDef(q, typeKey);
+        const inputType = q.question_type ?? def?.inputType ?? "text";
+        return isAnswered(row?.answer, row?.source, {
+          inputType: inputType as "text" | "number" | "select" | "boolean",
+          requiresPositiveNumber: inputType === "number",
+        });
       }).length,
-    [scopeQuestions]
+    [scopeQuestions, confirmedScopes]
   );
 
   const selectedConstraintLabels = useMemo(
@@ -237,6 +261,7 @@ export function ProjectAssistantWizard({
           <ProjectAssistantWorkAreas
             projectId={projectId}
             suggestions={suggestions}
+            confirmedScopes={confirmedScopes}
           />
         )}
 
@@ -284,6 +309,7 @@ export function ProjectAssistantWizard({
               questionsAnswered={questionsAnswered}
               questionsTotal={scopeQuestions.length}
               selectedConstraintLabels={selectedConstraintLabels}
+              discovery={discovery}
             />
           </div>
         )}

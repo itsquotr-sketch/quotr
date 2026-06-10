@@ -1,3 +1,5 @@
+import type { RangeQuality } from "@/lib/cost-engine/range-quality";
+
 export function parseQuickEstimateSummary(notes: string | null): {
   workAreasIncluded: string[];
   questionsAnswered: number;
@@ -16,6 +18,13 @@ export function parseQuickEstimateSummary(notes: string | null): {
   templatesUsed?: string[];
   keyFactsUsed?: string[];
   confidenceReason?: string | null;
+  rangeQuality?: RangeQuality;
+  rangeQualityLabel?: string;
+  rangeQualityReason?: string | null;
+  rangeWidthPercent?: number | null;
+  tightenSuggestions?: string[];
+  rangeLowDrivers?: string[];
+  rangeHighDrivers?: string[];
 } | null {
   if (!notes) return null;
   try {
@@ -37,6 +46,13 @@ export function parseQuickEstimateSummary(notes: string | null): {
       templatesUsed?: string[];
       keyFactsUsed?: string[];
       confidenceReason?: string | null;
+      rangeQuality?: RangeQuality;
+      rangeQualityLabel?: string;
+      rangeQualityReason?: string | null;
+      rangeWidthPercent?: number | null;
+      tightenSuggestions?: string[];
+      rangeLowDrivers?: string[];
+      rangeHighDrivers?: string[];
     };
     if (Array.isArray(parsed.includedTrades) || Array.isArray(parsed.workAreasIncluded)) {
       return {
@@ -59,6 +75,13 @@ export function parseQuickEstimateSummary(notes: string | null): {
         templatesUsed: parsed.templatesUsed ?? [],
         keyFactsUsed: parsed.keyFactsUsed ?? [],
         confidenceReason: parsed.confidenceReason ?? null,
+        rangeQuality: parsed.rangeQuality,
+        rangeQualityLabel: parsed.rangeQualityLabel,
+        rangeQualityReason: parsed.rangeQualityReason ?? null,
+        rangeWidthPercent: parsed.rangeWidthPercent ?? null,
+        tightenSuggestions: parsed.tightenSuggestions ?? [],
+        rangeLowDrivers: parsed.rangeLowDrivers ?? [],
+        rangeHighDrivers: parsed.rangeHighDrivers ?? [],
       };
     }
   } catch {

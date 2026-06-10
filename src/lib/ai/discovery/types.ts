@@ -26,11 +26,31 @@ export type DiscoveryProviderMeta = {
   version: string;
 };
 
+export type DiscoveryExistingAnswer = {
+  key: string;
+  value: string;
+  source?: string;
+  workAreaTypeKey?: string;
+};
+
 export type DiscoveryRunContext = {
   projectId: string;
   organisationId: string;
   userId: string;
   inputText: string;
+  /** Confirmed project scopes — helps AI avoid re-suggesting work areas */
+  confirmedWorkAreas?: { typeKey: string; name: string }[];
+  /** Facts already extracted or saved from a prior run */
+  existingFacts?: DiscoveryFact[];
+  /** User or discovery answers already on file */
+  existingAnswers?: DiscoveryExistingAnswer[];
+};
+
+export type DiscoveryProviderError = {
+  success: false;
+  provider: string;
+  error: string;
+  errorCode?: string;
 };
 
 export type DiscoveryRunOutcome = {
@@ -39,6 +59,8 @@ export type DiscoveryRunOutcome = {
   usedFallback: boolean;
   fallbackReason?: string;
   rawOutput?: unknown;
+  /** When AI was attempted but fell back to rules */
+  attemptedProviderId?: string;
 };
 
 export type {

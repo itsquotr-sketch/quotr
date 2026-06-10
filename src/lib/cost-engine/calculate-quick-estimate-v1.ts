@@ -8,20 +8,25 @@ import {
   adjustConfidenceForQualityLevel,
   applyQualityLevelToBand,
 } from "@/lib/cost-engine/apply-quality-level";
-import { normaliseQualityLevel } from "@/lib/constants/quality-level";
+import { buildMissingInformation } from "@/lib/cost-engine/build-missing-information";
+import {
+  buildConfidenceReason,
+  resolveConfidenceLevel,
+} from "@/lib/cost-engine/build-confidence";
+import {
+  computeRangeWidthPercent,
+  resolveRangeQuality,
+} from "@/lib/cost-engine/range-quality";
+import { resolveEffectiveQualityLevel } from "@/lib/cost-engine/resolve-quality-level";
+import { buildRangeDrivers } from "@/lib/cost-engine/tighten-suggestions";
+import { hasPositiveAnswer } from "@/lib/scope-answer-state";
 import {
   type QuickEstimateInput,
   type QuickEstimateOutput,
 } from "@/lib/cost-engine/quick-estimate-input";
-import { getAnswerValue } from "@/lib/question-keys";
 import { getIncludedTradesForWorkAreas } from "@/lib/project-assistant-trades";
 import { calculateFromTemplate } from "@/lib/scope-templates/calculate";
 import { getScopeTemplateByWorkAreaType } from "@/lib/scope-templates";
-function parseNumber(value: string | undefined): number | null {
-  if (!value?.trim()) return null;
-  const num = Number(value);
-  return Number.isFinite(num) && num > 0 ? num : null;
-}
 
 function deriveBudgetFit(
   clientBudget: number | null,
@@ -41,11 +46,9 @@ type CostBand = { low: number; typical: number; high: number };
 type AreaCalcResult = {
   band: CostBand;
   usedPackage: boolean;
-  missing: string[];
   inputs: string[];
   allowances: string[];
   templateKey?: string;
-  confidenceReason?: string | null;
 };
 
 function calcGenericArea(name: string): AreaCalcResult {
@@ -57,7 +60,6 @@ function calcGenericArea(name: string): AreaCalcResult {
       high: base.high,
     },
     usedPackage: false,
-    missing: [`${name}: using generic allowance`],
     inputs: [`${name} (generic)`],
     allowances: [`Generic allowance for ${name}`],
   };
@@ -70,7 +72,7 @@ function hasKeyMeasurementsForArea(
   const template = getScopeTemplateByWorkAreaType(workAreaTypeKey);
   if (template) {
     return template.estimateRules.requiredFactKeys.every((key) =>
-      Boolean(parseNumber(getAnswerValue(answers, key)))
+      hasPositiveAnswer(answers, key)
     );
   }
   return true;
@@ -84,6 +86,12 @@ export function calculateQuickEstimateV1(
   const marginMultiplier = 1 + targetMarginPercent / 100;
   const workAreaTypes = input.workAreas.map((w) => w.workAreaTypeKey);
   const includedTrades = getIncludedTradesForWorkAreas(workAreaTypes);
+
+  const effectiveQualityLevel = resolveEffectiveQualityLevel(
+    input.quickEstimate.quality_level,
+    input.workAreas,
+    input.discovery
+  );
 
   if (input.workAreas.length === 0) {
     return {
@@ -112,6 +120,13 @@ export function calculateQuickEstimateV1(
       templatesUsed: [],
       keyFactsUsed: [],
       confidenceReason: null,
+      rangeQuality: "rough",
+      rangeQualityLabel: "Rough",
+      rangeQualityReason: "No confirmed work areas.",
+      rangeWidthPercent: null,
+      tightenSuggestions: [],
+      rangeLowDrivers: [],
+      rangeHighDrivers: [],
     };
   }
 
@@ -119,13 +134,11 @@ export function calculateQuickEstimateV1(
   let costTypical = 0;
   let costHigh = 0;
   let usedPackageRates = false;
-  const missingInformation: string[] = [];
   const inputsUsed: string[] = [];
   const allowances: string[] = [];
   const assumptions: string[] = [];
   const templatesUsed: string[] = [];
   const keyFactsUsed: string[] = [];
-  const confidenceReasons: string[] = [];
   const allAnswers: Record<string, string> = {};
 
   for (const area of input.workAreas) {
@@ -135,24 +148,24 @@ export function calculateQuickEstimateV1(
     let result: AreaCalcResult;
 
     if (template) {
-      const calc = calculateFromTemplate(template, area.answers, input.packageRates);
+      const calc = calculateFromTemplate(
+        template,
+        area.answers,
+        input.packageRates,
+        effectiveQualityLevel
+      );
       result = {
         band: calc.band,
         usedPackage: calc.usedPackage,
-        missing: calc.missing,
         inputs: calc.inputs,
         allowances: calc.allowances,
         templateKey: calc.templateKey,
-        confidenceReason: calc.confidenceReason,
       };
       templatesUsed.push(template.key);
       for (const inputLine of calc.inputs) {
         if (inputLine.includes("× $")) {
           keyFactsUsed.push(`${area.name}: ${inputLine}`);
         }
-      }
-      if (calc.confidenceReason) {
-        confidenceReasons.push(calc.confidenceReason);
       }
     } else {
       result = calcGenericArea(area.name);
@@ -162,7 +175,6 @@ export function calculateQuickEstimateV1(
     costTypical += result.band.typical;
     costHigh += result.band.high;
     if (result.usedPackage) usedPackageRates = true;
-    missingInformation.push(...result.missing);
     inputsUsed.push(...result.inputs.map((i) => `${area.name}: ${i}`));
     allowances.push(...result.allowances);
     assumptions.push(
@@ -178,27 +190,60 @@ export function calculateQuickEstimateV1(
     allAnswers
   );
 
-  const qualityLevel = normaliseQualityLevel(input.quickEstimate.quality_level);
-  const qualityAdjustment = applyQualityLevelToBand(constrained, qualityLevel);
-  const adjustedBand = qualityAdjustment.band;
+  const qualityAdjustment = applyQualityLevelToBand(
+    constrained,
+    effectiveQualityLevel
+  );
+  let adjustedBand = qualityAdjustment.band;
+
+  // System confidence overrides AI — AI cannot raise confidence above facts
+  const hasKeyMeasurements = input.workAreas.every((area) =>
+    hasKeyMeasurementsForArea(area.workAreaTypeKey, area.answers)
+  );
+
+  const aiConfidence = input.discovery?.confidence;
+  if (
+    aiConfidence != null &&
+    aiConfidence < 0.5 &&
+    !hasKeyMeasurements
+  ) {
+    adjustedBand = {
+      low: Math.round(adjustedBand.low * 0.95),
+      typical: adjustedBand.typical,
+      high: Math.round(adjustedBand.high * 1.05),
+    };
+  }
 
   const clientBudget = input.quickEstimate.client_budget
     ? Number(input.quickEstimate.client_budget)
     : null;
 
-  const hasKeyMeasurements = input.workAreas.every((area) =>
-    hasKeyMeasurementsForArea(area.workAreaTypeKey, area.answers)
+  const hasCustomScope = input.workAreas.some(
+    (area) =>
+      !getScopeTemplateByWorkAreaType(area.workAreaTypeKey) ||
+      area.workAreaTypeKey.toLowerCase().includes("custom")
   );
 
-  let confidenceLevel: QuickEstimateOutput["confidenceLevel"] = "low";
-  if (hasKeyMeasurements && usedPackageRates) {
-    confidenceLevel = "high";
-  } else if (hasKeyMeasurements) {
-    confidenceLevel = "medium";
-  }
+  const uniqueTemplates = [...new Set(templatesUsed)];
+
+  const constraintsReviewed =
+    input.quickEstimate.quality_level != null &&
+    input.quickEstimate.quality_level !== "unknown";
+
+  const confidenceInput = {
+    hasKeyMeasurements,
+    usedPackageRates,
+    qualityLevel: effectiveQualityLevel,
+    templatesUsed: uniqueTemplates,
+    hasCustomScope,
+    constraintsReviewed:
+      constraintsReviewed || effectiveQualityLevel !== "unknown",
+  };
+
+  let confidenceLevel = resolveConfidenceLevel(confidenceInput);
   confidenceLevel = adjustConfidenceForQualityLevel(
     confidenceLevel,
-    qualityLevel,
+    effectiveQualityLevel,
     hasKeyMeasurements
   );
 
@@ -209,12 +254,34 @@ export function calculateQuickEstimateV1(
   const recommendedSellLow = Math.round(adjustedBand.low * marginMultiplier);
   const recommendedSellHigh = Math.round(adjustedBand.high * marginMultiplier);
 
-  const confidenceReason =
-    confidenceReasons.length > 0
-      ? confidenceReasons.join(" ")
-      : hasKeyMeasurements
-        ? "Key measurements provided for confirmed work areas."
-        : "Missing key measurements — estimate range kept wider.";
+  const confidenceReason = buildConfidenceReason(confidenceLevel, confidenceInput);
+
+  const rangeWidthPercent = computeRangeWidthPercent(
+    adjustedBand.low,
+    adjustedBand.high,
+    adjustedBand.typical
+  );
+
+  const rangeQualityResult = resolveRangeQuality({
+    confidenceLevel,
+    hasKeyMeasurements,
+    qualityLevel: effectiveQualityLevel,
+    usedPackageRates,
+    constraintsReviewed: confidenceInput.constraintsReviewed,
+    rangeWidthPercent,
+  });
+
+  const missingInformation = buildMissingInformation({
+    workAreas: input.workAreas,
+    scopeQuestions: input.scopeQuestions,
+    effectiveQualityLevel,
+  });
+
+  const rangeDrivers = buildRangeDrivers({
+    scopeQuestions: input.scopeQuestions,
+    constraintsApplied,
+    qualityLevelNote: qualityAdjustment.qualityNote,
+  });
 
   return {
     canCalculate: true,
@@ -238,20 +305,24 @@ export function calculateQuickEstimateV1(
     risks: [
       "Draft estimate only — not quote-ready without detailed take-off",
       ...(missingInformation.length > 0
-        ? ["Missing key information — estimate may change significantly"]
+        ? ["Key gaps remain — estimate may change after site check"]
         : []),
     ],
-    missingInformation: [
-      ...missingInformation,
-      ...qualityAdjustment.missingInformation,
-    ],
+    missingInformation,
     constraintsApplied,
-    qualityLevel,
+    qualityLevel: effectiveQualityLevel,
     qualityLevelNote: qualityAdjustment.qualityNote,
     ratesSource,
     usedPackageRates,
-    templatesUsed,
+    templatesUsed: uniqueTemplates,
     keyFactsUsed,
     confidenceReason,
+    rangeQuality: rangeQualityResult.level,
+    rangeQualityLabel: rangeQualityResult.label,
+    rangeQualityReason: rangeQualityResult.reason,
+    rangeWidthPercent,
+    tightenSuggestions: rangeDrivers.tightenSuggestions,
+    rangeLowDrivers: rangeDrivers.lowDrivers,
+    rangeHighDrivers: rangeDrivers.highDrivers,
   };
 }

@@ -16,25 +16,21 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import type { ScopeQuestionWithAnswers } from "@/lib/project-assistant-data";
 import {
   resolveQuestionDef,
   resolveWorkAreaTypeKey,
 } from "@/lib/project-assistant-questions";
-import { isTemplateRequiredQuestion } from "@/lib/scope-templates";
+import {
+  isTemplateAffectsEstimateQuestion,
+  isTemplateRequiredQuestion,
+} from "@/lib/scope-templates";
 import type { ProjectAssistantActionState } from "@/actions/project-assistant";
 import {
   isDiscoverySource,
   parseScopeAnswer,
-  readAnswerValue,
 } from "@/lib/scope-answer-format";
+import { answerValueToString, isAnswered } from "@/lib/scope-answer-state";
 import { cn } from "@/lib/utils";
 
 interface ScopeGroup {
@@ -126,72 +122,142 @@ export function ProjectAssistantQuestionsForm({
     );
   }
 
-  const totalQuestions = scopeGroups.reduce(
-    (sum, g) => sum + g.questions.length,
-    0
+  const allQuestions = scopeGroups.flatMap((g) =>
+    g.questions.map((q) => ({
+      question: q,
+      scopeName: g.scopeName,
+      typeKey: resolveWorkAreaTypeKey(g.scopeTypeName, g.scopeName),
+    }))
   );
-  const answeredCount = scopeGroups.reduce(
-    (sum, g) =>
-      sum +
-      g.questions.filter((q) => {
-        const row = q.scope_answers?.[0];
-        return Boolean(readAnswerValue(row?.answer, row?.source).trim());
-      }).length,
-    0
-  );
+
+  const missingQuestions = allQuestions.filter(({ question, typeKey }) => {
+    const row = question.scope_answers?.[0];
+    const def = resolveQuestionDef(question, typeKey);
+    const inputType = question.question_type ?? def?.inputType ?? "text";
+    const options = parseSelectOptions(question, def);
+    const answered = isAnswered(row?.answer, row?.source, {
+      inputType: inputType as "text" | "number" | "select" | "boolean",
+      requiresPositiveNumber: inputType === "number",
+      allowedValues:
+        inputType === "select" && options.length > 0
+          ? options.map((o) => o.value)
+          : undefined,
+    });
+    if (answered) return false;
+    const required = isTemplateRequiredQuestion(typeKey, question.question_key);
+    const affects = isTemplateAffectsEstimateQuestion(
+      typeKey,
+      question.question_key
+    );
+    return required || affects;
+  });
+
+  const answeredQuestions = allQuestions.filter(({ question, typeKey }) => {
+    const row = question.scope_answers?.[0];
+    const def = resolveQuestionDef(question, typeKey);
+    const inputType = question.question_type ?? def?.inputType ?? "text";
+    const options = parseSelectOptions(question, def);
+    return isAnswered(row?.answer, row?.source, {
+      inputType: inputType as "text" | "number" | "select" | "boolean",
+      requiresPositiveNumber: inputType === "number",
+      allowedValues:
+        inputType === "select" && options.length > 0
+          ? options.map((o) => o.value)
+          : undefined,
+    });
+  });
 
   return (
-    <form action={formAction} className="space-y-6">
-      <p className="text-sm text-muted-foreground">
-        {answeredCount} of {totalQuestions} questions answered
-      </p>
-
-      {scopeGroups.map((group) => {
-        if (group.questions.length === 0) return null;
-        const typeKey = resolveWorkAreaTypeKey(
-          group.scopeTypeName,
-          group.scopeName
-        );
-        const sortedQuestions = [...group.questions].sort((a, b) => {
-          const aRow = a.scope_answers?.[0];
-          const bRow = b.scope_answers?.[0];
-          const aAnswered = Boolean(
-            readAnswerValue(aRow?.answer, aRow?.source).trim()
-          );
-          const bAnswered = Boolean(
-            readAnswerValue(bRow?.answer, bRow?.source).trim()
-          );
-          const aRequired = isTemplateRequiredQuestion(
-            typeKey,
-            a.question_key
-          );
-          const bRequired = isTemplateRequiredQuestion(
-            typeKey,
-            b.question_key
-          );
-
-          if (aRequired && !aAnswered && !(bRequired && !bAnswered)) return -1;
-          if (bRequired && !bAnswered && !(aRequired && !aAnswered)) return 1;
-          if (!aAnswered && bAnswered) return -1;
-          if (aAnswered && !bAnswered) return 1;
-          return 0;
-        });
-
-        return (
-          <div key={group.scopeId} className="space-y-4 rounded-xl border p-4">
-            <h4 className="font-medium">{group.scopeName}</h4>
-            <div className="space-y-4">
-              {sortedQuestions.map((q) => (
-                <QuestionField
-                  key={q.id}
-                  question={q}
-                  workAreaTypeKey={typeKey}
-                />
-              ))}
-            </div>
+    <form action={formAction} className="space-y-8">
+      {missingQuestions.length > 0 ? (
+        <section className="space-y-4">
+          <div>
+            <h4 className="text-sm font-semibold">Missing information</h4>
+            <p className="mt-1 text-sm text-muted-foreground">
+              These answers help tighten your draft quick estimate.
+            </p>
           </div>
-        );
-      })}
+          {scopeGroups.map((group) => {
+            const typeKey = resolveWorkAreaTypeKey(
+              group.scopeTypeName,
+              group.scopeName
+            );
+            const groupMissing = group.questions.filter((q) =>
+              missingQuestions.some((m) => m.question.id === q.id)
+            );
+            if (groupMissing.length === 0) return null;
+
+            return (
+              <div
+                key={group.scopeId}
+                className="space-y-4 rounded-xl border p-4"
+              >
+                <h5 className="font-medium">{group.scopeName}</h5>
+                <div className="space-y-4">
+                  {groupMissing.map((q) => (
+                    <QuestionField
+                      key={q.id}
+                      question={q}
+                      workAreaTypeKey={typeKey}
+                      variant="missing"
+                    />
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </section>
+      ) : (
+        <p className="rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-primary">
+          All key information provided — your estimate can use the measurements
+          you have given.
+        </p>
+      )}
+
+      {answeredQuestions.length > 0 && (
+        <section className="space-y-4">
+          <div>
+            <h4 className="text-sm font-semibold">Information used</h4>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Already captured from your notes or answers.
+            </p>
+          </div>
+          <ul className="space-y-2">
+            {answeredQuestions.map(({ question, scopeName, typeKey }) => {
+              const row = question.scope_answers?.[0];
+              const value =
+                answerValueToString(row?.answer, row?.source) ?? "";
+              const parsed = parseScopeAnswer(row?.answer, row?.source);
+              const fromDiscovery = parsed
+                ? isDiscoverySource(parsed.source)
+                : false;
+              const def = resolveQuestionDef(question, typeKey);
+              const selectOptions = parseSelectOptions(question, def);
+              const displayValue =
+                selectOptions.find((o) => o.value === value)?.label ?? value;
+
+              return (
+                <li
+                  key={question.id}
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-lg bg-muted/30 px-3 py-2 text-sm"
+                >
+                  <span className="text-muted-foreground">
+                    {scopeName}: {question.question}
+                  </span>
+                  <span className="inline-flex items-center gap-1 font-medium">
+                    {displayValue}
+                    {fromDiscovery && (
+                      <span className="text-xs font-normal text-primary">
+                        (from notes)
+                      </span>
+                    )}
+                  </span>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
 
       {state.message && (
         <p className="text-sm text-primary">{state.message}</p>
@@ -206,7 +272,7 @@ export function ProjectAssistantQuestionsForm({
           disabled={pending || skipPending}
           className="w-full sm:w-auto"
         >
-          {pending ? "Saving…" : "Save Answers"}
+          {pending ? "Saving…" : "Save answers"}
         </Button>
         <Button
           type="button"
@@ -237,20 +303,29 @@ function parseSelectOptions(
 function QuestionField({
   question,
   workAreaTypeKey,
+  variant,
 }: {
   question: ScopeQuestionWithAnswers;
   workAreaTypeKey: string;
+  variant: "missing" | "answered";
 }) {
   const answerRow = question.scope_answers?.[0];
-  const existing = readAnswerValue(answerRow?.answer, answerRow?.source);
-  const isAnswered = Boolean(existing.trim());
-  const parsed = parseScopeAnswer(answerRow?.answer, answerRow?.source);
-  const fromDiscovery = parsed ? isDiscoverySource(parsed.source) : false;
   const def = resolveQuestionDef(question, workAreaTypeKey);
-  const inputType =
-    question.question_type ?? def?.inputType ?? "text";
+  const inputType = question.question_type ?? def?.inputType ?? "text";
   const unit = question.unit ?? def?.unit;
   const selectOptions = parseSelectOptions(question, def);
+  const existing =
+    answerValueToString(answerRow?.answer, answerRow?.source) ?? "";
+  const questionAnswered = isAnswered(answerRow?.answer, answerRow?.source, {
+    inputType: inputType as "text" | "number" | "select" | "boolean",
+    requiresPositiveNumber: inputType === "number",
+    allowedValues:
+      inputType === "select" && selectOptions.length > 0
+        ? selectOptions.map((o) => o.value)
+        : undefined,
+  });
+  const parsed = parseScopeAnswer(answerRow?.answer, answerRow?.source);
+  const fromDiscovery = parsed ? isDiscoverySource(parsed.source) : false;
   const isRequired = isTemplateRequiredQuestion(
     workAreaTypeKey,
     question.question_key
@@ -259,8 +334,8 @@ function QuestionField({
   return (
     <div
       className={cn(
-        "space-y-2 rounded-lg p-3",
-        isAnswered ? "bg-primary/5 ring-1 ring-primary/20" : "bg-muted/30"
+        "space-y-3 rounded-lg p-3",
+        variant === "missing" ? "bg-muted/30" : "bg-primary/5 ring-1 ring-primary/20"
       )}
     >
       <div className="flex items-start justify-between gap-2">
@@ -268,13 +343,13 @@ function QuestionField({
           <Label htmlFor={`answer_${question.id}`} className="text-sm font-medium">
             {question.question}
           </Label>
-          {isRequired && !isAnswered && (
+          {isRequired && variant === "missing" && (
             <span className="inline-flex rounded bg-amber-500/15 px-1.5 py-0.5 text-xs font-medium text-amber-900 dark:text-amber-100">
               Required
             </span>
           )}
         </div>
-        {isAnswered && (
+        {questionAnswered && (
           <span className="inline-flex shrink-0 items-center gap-1 text-xs text-primary">
             <CheckCircle2 className="h-3.5 w-3.5" />
             {fromDiscovery ? "From notes" : "Answered"}
@@ -283,7 +358,7 @@ function QuestionField({
       </div>
 
       {inputType === "select" && selectOptions.length > 0 ? (
-        <SelectField
+        <AnswerChips
           questionId={question.id}
           defaultValue={existing}
           options={selectOptions}
@@ -298,7 +373,7 @@ function QuestionField({
             step="any"
             defaultValue={existing}
             placeholder={def?.placeholder}
-            className="text-base"
+            className="max-w-[200px] text-base"
           />
           {unit && (
             <span className="text-sm text-muted-foreground">{unit}</span>
@@ -318,7 +393,7 @@ function QuestionField({
   );
 }
 
-function SelectField({
+function AnswerChips({
   questionId,
   defaultValue,
   options,
@@ -332,18 +407,23 @@ function SelectField({
   return (
     <>
       <input type="hidden" name={`answer_${questionId}`} value={value} />
-      <Select value={value} onValueChange={setValue}>
-        <SelectTrigger id={`answer_${questionId}`} className="text-base">
-          <SelectValue placeholder="Choose an option" />
-        </SelectTrigger>
-        <SelectContent>
-          {options.map((opt) => (
-            <SelectItem key={opt.value} value={opt.value}>
-              {opt.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
+      <div className="flex flex-wrap gap-2">
+        {options.map((opt) => (
+          <button
+            key={opt.value}
+            type="button"
+            onClick={() => setValue(opt.value)}
+            className={cn(
+              "rounded-full border px-3 py-1.5 text-sm font-medium transition-colors",
+              value === opt.value
+                ? "border-primary bg-primary text-primary-foreground"
+                : "border-border bg-background text-foreground hover:bg-muted"
+            )}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
     </>
   );
 }

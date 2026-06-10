@@ -4,7 +4,11 @@ import type {
   DiscoveryRunOutcome,
 } from "@/lib/ai/discovery/types";
 
-export interface DiscoveryProvider {
+/** Pluggable discovery provider — OpenAI, Gemini, rule-based, etc. */
+export interface IDiscoveryProvider {
   readonly meta: DiscoveryProviderMeta;
   discoverProject(context: DiscoveryRunContext): Promise<DiscoveryRunOutcome>;
 }
+
+/** @deprecated Use IDiscoveryProvider */
+export type DiscoveryProvider = IDiscoveryProvider;

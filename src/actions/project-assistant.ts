@@ -8,7 +8,10 @@ import { devLog } from "@/lib/dev-log";
 import { persistProjectConstraints } from "@/lib/project-constraints-persist";
 import { persistScopeAnswersBatch } from "@/lib/scope-answers-persist";
 import { getProjectById } from "@/lib/projects-data";
-import { ensureQuickEstimateForProject } from "@/lib/quick-estimate-data";
+import {
+  ensureQuickEstimateForProject,
+  getQuickEstimateForProject,
+} from "@/lib/quick-estimate-data";
 import {
   getLatestScopeBuilderInput,
   listScopeBuilderInputs,
@@ -26,6 +29,7 @@ import {
 } from "@/lib/validations/scope-builder";
 import {
   assistantConstraintsSchema,
+  quickEstimateMarginSchema,
   scopeQuestionAnswersSchema,
 } from "@/lib/validations/project-assistant";
 export type ProjectAssistantActionState = {
@@ -456,6 +460,64 @@ export async function updateQuickEstimate(
   projectId: string
 ): Promise<ProjectAssistantActionState> {
   return recalculateQuickEstimateAction(projectId, { nextStep: 5 });
+}
+
+export async function updateQuickEstimateMargin(
+  projectId: string,
+  _prevState: ProjectAssistantActionState,
+  formData: FormData
+): Promise<ProjectAssistantActionState> {
+  const { organisationId } = await requireOrganisation();
+  const supabase = await createClient();
+
+  const parsed = quickEstimateMarginSchema.safeParse({
+    targetMarginPercent: formData.get("targetMarginPercent"),
+  });
+
+  if (!parsed.success) {
+    return {
+      error:
+        parsed.error.flatten().fieldErrors.targetMarginPercent?.[0] ??
+        "Invalid margin percentage.",
+    };
+  }
+
+  const { data: quickEstimate } = await getQuickEstimateForProject(
+    supabase,
+    organisationId,
+    projectId
+  );
+
+  if (!quickEstimate) {
+    return { error: "Quick estimate not found." };
+  }
+
+  const { error: updateError } = await supabase
+    .from("quick_estimates")
+    .update({ target_margin_percent: parsed.data.targetMarginPercent })
+    .eq("id", quickEstimate.id)
+    .eq("organisation_id", organisationId);
+
+  if (updateError) {
+    logSupabaseError("updateQuickEstimateMargin", updateError);
+    return { error: "Could not save target margin." };
+  }
+
+  const result = await recalculateQuickEstimate(
+    supabase,
+    organisationId,
+    projectId
+  );
+
+  if (!result.success) {
+    return { error: result.error ?? "Could not recalculate sell range." };
+  }
+
+  revalidatePath(`/projects/${projectId}`);
+  return {
+    success: true,
+    message: `Target margin updated to ${parsed.data.targetMarginPercent}%.`,
+  };
 }
 
 async function recalculateQuickEstimateAction(

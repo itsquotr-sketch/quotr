@@ -24,6 +24,26 @@ export const deckTemplate: ScopeTemplate = {
   ],
   optionalFacts: [
     {
+      key: "deck.material_type",
+      label: "Deck material",
+      required: false,
+      extractionPatterns: [
+        /\bcomposite\s+deck/i,
+        /\bcomposite\s+decking/i,
+        /\btimber\s+deck/i,
+        /\bhardwood\s+deck/i,
+        /\bpine\s+deck/i,
+      ],
+      extractValue: (m) => {
+        const text = m[0].toLowerCase();
+        if (text.includes("composite")) return "composite";
+        if (text.includes("timber") || text.includes("hardwood") || text.includes("pine")) {
+          return "timber";
+        }
+        return null;
+      },
+    },
+    {
       key: "deck.level_type",
       label: "Deck level",
       required: false,
@@ -158,8 +178,8 @@ export const deckTemplate: ScopeTemplate = {
   estimateRules: {
     calculationType: "deck_area",
     requiredFactKeys: ["deck.area_m2"],
-    lowMultiplier: 0.85,
-    highMultiplier: 1.25,
+    lowMultiplier: 0.88,
+    highMultiplier: 1.18,
     elevatedModifier: 1.15,
   },
 };

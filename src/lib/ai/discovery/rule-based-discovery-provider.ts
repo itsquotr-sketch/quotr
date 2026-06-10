@@ -1,6 +1,6 @@
 import { extractQualityLevelFromNotes } from "@/lib/discovery/quality-level-rules";
 import { ruleBasedDiscoveryProvider } from "@/lib/discovery/rule-based-provider";
-import type { DiscoveryProvider } from "@/lib/ai/discovery/discovery-provider";
+import type { IDiscoveryProvider } from "@/lib/ai/discovery/discovery-provider";
 import type {
   DiscoveryRunContext,
   DiscoveryRunOutcome,
@@ -26,7 +26,7 @@ function toRunResult(
   };
 }
 
-export class RuleBasedDiscoveryProvider implements DiscoveryProvider {
+export class RuleBasedDiscoveryProvider implements IDiscoveryProvider {
   readonly meta = {
     id: "rule_based",
     label: "Basic rules",
@@ -50,7 +50,8 @@ export const ruleBasedAiDiscoveryProvider = new RuleBasedDiscoveryProvider();
 
 export function buildRuleBasedFallbackOutcome(
   context: DiscoveryRunContext,
-  reason: string
+  reason: string,
+  attemptedProviderId?: string
 ): DiscoveryRunOutcome {
   return {
     result: toRunResult(context.inputText),
@@ -62,5 +63,6 @@ export function buildRuleBasedFallbackOutcome(
     usedFallback: true,
     fallbackReason: reason,
     rawOutput: null,
+    attemptedProviderId,
   };
 }

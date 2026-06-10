@@ -1,4 +1,5 @@
 import { devLog } from "@/lib/dev-log";
+import type { ScopeQuestionForMissing } from "@/lib/cost-engine/build-missing-information";
 import { parseDiscoveryRun, getLatestDiscoveryRun } from "@/lib/discovery-data";
 import { DEFAULT_TARGET_MARGIN_PERCENT } from "@/lib/constants/quick-estimate";
 import { listScopeQuestionsForProject } from "@/lib/project-assistant-data";
@@ -6,7 +7,10 @@ import {
   getConstraintBySlug,
   getRelevantConstraints,
 } from "@/lib/project-assistant-constraints";
-import { resolveWorkAreaTypeKey } from "@/lib/project-assistant-questions";
+import {
+  resolveQuestionDef,
+  resolveWorkAreaTypeKey,
+} from "@/lib/project-assistant-questions";
 import {
   buildAnswersMap,
   type QuickEstimateInput,
@@ -19,10 +23,20 @@ import { getQuickEstimateForProject } from "@/lib/quick-estimate-data";
 import { getProjectById } from "@/lib/projects-data";
 import { normalizeQuestionKey } from "@/lib/question-keys";
 import { factValueToAnswer } from "@/lib/scope-answer-prefill";
+import { isAnswered, type AnswerInputType } from "@/lib/scope-answer-state";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database";
 
 type Supabase = SupabaseClient<Database>;
+
+function parseSelectOptions(
+  options: unknown
+): { value: string; label: string }[] {
+  if (!options || !Array.isArray(options)) return [];
+  return (options as { value: string; label: string }[]).filter(
+    (o) => o.value && o.label
+  );
+}
 
 export async function buildQuickEstimateInput(
   supabase: Supabase,
@@ -74,6 +88,7 @@ export async function buildQuickEstimateInput(
 
   const answeredQuestionKeys = new Set<string>();
   let questionsAnswered = 0;
+  const scopeQuestionsForMissing: ScopeQuestionForMissing[] = [];
 
   const workAreas = (scopes ?? []).map((s) => {
     const workAreaTypeKey = resolveWorkAreaTypeKey(
@@ -85,10 +100,21 @@ export async function buildQuickEstimateInput(
     );
     const { answers, fromNotes } = buildAnswersMap(scopeQuestions);
 
+    // Saved answers win — only fill gaps from discovery facts
     if (discovery?.facts.length) {
       for (const q of scopeQuestions) {
         const key = normalizeQuestionKey(q.question_key);
-        if (!key || answers[key]?.trim()) continue;
+        if (!key) continue;
+
+        const row = q.scope_answers?.[0];
+        if (
+          isAnswered(row?.answer ?? null, row?.source, {
+            inputType: (q.question_type as AnswerInputType) ?? "text",
+            requiresPositiveNumber: q.question_type === "number",
+          })
+        ) {
+          continue;
+        }
 
         const fact = discovery.facts.find((f) => {
           const factKey = normalizeQuestionKey(f.key);
@@ -105,8 +131,36 @@ export async function buildQuickEstimateInput(
 
     for (const q of scopeQuestions) {
       const key = normalizeQuestionKey(q.question_key);
-      const value = key ? answers[key]?.trim() : undefined;
-      if (value) {
+      const row = q.scope_answers?.[0];
+      const def = resolveQuestionDef(q, workAreaTypeKey);
+      const inputType =
+        (q.question_type as AnswerInputType) ?? def?.inputType ?? "text";
+      const options =
+        parseSelectOptions(q.options).length > 0
+          ? parseSelectOptions(q.options)
+          : (def?.options ?? []);
+
+      scopeQuestionsForMissing.push({
+        questionKey: key,
+        questionText: q.question,
+        workAreaTypeKey,
+        workAreaName: s.name,
+        answerRaw: row?.answer ?? null,
+        answerSource: row?.source ?? null,
+        inputType,
+        options,
+      });
+
+      const answered = isAnswered(row?.answer ?? null, row?.source, {
+        inputType,
+        requiresPositiveNumber: inputType === "number",
+        allowedValues:
+          inputType === "select" && options.length > 0
+            ? options.map((o) => o.value)
+            : undefined,
+      });
+
+      if (answered) {
         questionsAnswered++;
         if (key) answeredQuestionKeys.add(key);
       }
@@ -118,6 +172,23 @@ export async function buildQuickEstimateInput(
       workAreaTypeKey,
       answers,
       answeredFromNotes: fromNotes,
+    };
+  });
+
+  // Rebuild scope questions with merged answers reflected for missing calc
+  const scopeQuestions = scopeQuestionsForMissing.map((q) => {
+    const area = workAreas.find((w) => w.name === q.workAreaName);
+    const key = q.questionKey;
+    if (!area || !key) return q;
+    const mergedAnswer = area.answers[key];
+    if (!mergedAnswer) return q;
+    if (isAnswered(q.answerRaw, q.answerSource)) return q;
+    return {
+      ...q,
+      answerRaw: mergedAnswer,
+      answerSource: area.answeredFromNotes.includes(key)
+        ? "discovery"
+        : q.answerSource,
     };
   });
 
@@ -185,6 +256,7 @@ export async function buildQuickEstimateInput(
       questionsAnswered,
       questionsTotal: questions?.length ?? 0,
       answeredQuestionKeys,
+      scopeQuestions,
     },
     error: null,
   };

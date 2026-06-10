@@ -1,4 +1,4 @@
-import { isOpenAiDiscoveryAvailable } from "@/lib/ai/discovery/openai-discovery-provider";
+import { isOpenAiDiscoveryAvailable } from "@/lib/ai/discovery/discover-project";
 import {
   getLatestDiscoveryEngineRun,
   parseDiscoveryEngineRun,

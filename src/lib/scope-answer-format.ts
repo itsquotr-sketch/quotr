@@ -35,8 +35,14 @@ export function parseScopeAnswer(
     try {
       const parsed = scopeAnswerPayloadSchema.safeParse(JSON.parse(trimmed));
       if (parsed.success) {
-        const value = String(parsed.data.value).trim();
-        if (!value) return null;
+        const rawValue = parsed.data.value;
+        const value =
+          typeof rawValue === "boolean"
+            ? rawValue
+              ? "yes"
+              : "no"
+            : String(rawValue).trim();
+        if (value === "") return null;
         return {
           value,
           source: normalizeSource(parsed.data.source ?? rowSource),

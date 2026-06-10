@@ -1,11 +1,14 @@
 import type { QuickEstimateBudgetFit, QuickEstimateConfidenceLevel } from "@/lib/constants/quick-estimate";
 import type { QualityLevel } from "@/lib/constants/quality-level";
+import type { ScopeQuestionForMissing } from "@/lib/cost-engine/build-missing-information";
+import type { RangeQuality } from "@/lib/cost-engine/range-quality";
 import type { DiscoveryResult } from "@/lib/discovery";
 import { getAnswerValue, normalizeQuestionKey } from "@/lib/question-keys";
 import {
   isDiscoverySource,
   parseScopeAnswer,
 } from "@/lib/scope-answer-format";
+import { isAnswered } from "@/lib/scope-answer-state";
 import type { PackageRate, Project, QuickEstimate } from "@/types/database";
 
 export type QuickEstimateWorkAreaInput = {
@@ -38,6 +41,7 @@ export type QuickEstimateInput = {
   questionsAnswered: number;
   questionsTotal: number;
   answeredQuestionKeys: Set<string>;
+  scopeQuestions: ScopeQuestionForMissing[];
 };
 
 export type QuickEstimateOutput = {
@@ -66,12 +70,20 @@ export type QuickEstimateOutput = {
   templatesUsed: string[];
   keyFactsUsed: string[];
   confidenceReason: string | null;
+  rangeQuality: RangeQuality;
+  rangeQualityLabel: string;
+  rangeQualityReason: string | null;
+  rangeWidthPercent: number | null;
+  tightenSuggestions: string[];
+  rangeLowDrivers: string[];
+  rangeHighDrivers: string[];
 };
 
 export function buildAnswersMap(
   questions: {
     question_key: string | null;
     question: string;
+    question_type?: string | null;
     scope_answers: { answer: string | null; source?: string }[];
   }[]
 ): { answers: Record<string, string>; fromNotes: string[] } {
@@ -81,11 +93,22 @@ export function buildAnswersMap(
   for (const q of questions) {
     const row = q.scope_answers[0];
     const parsed = parseScopeAnswer(row?.answer, row?.source);
-    if (!parsed?.value.trim()) continue;
+    if (
+      !isAnswered(row?.answer, row?.source, {
+        inputType:
+          q.question_type === "number" ||
+          q.question_type === "select" ||
+          q.question_type === "boolean"
+            ? q.question_type
+            : "text",
+      })
+    ) {
+      continue;
+    }
 
     const key =
       normalizeQuestionKey(q.question_key) ?? q.question_key ?? q.question;
-    if (!key) continue;
+    if (!key || !parsed) continue;
 
     answers[key] = parsed.value;
     if (isDiscoverySource(parsed.source)) {

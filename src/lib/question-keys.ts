@@ -33,14 +33,20 @@ export function normalizeQuestionKey(
   return LEGACY_QUESTION_KEY_MAP[key] ?? key;
 }
 
+function isNonEmptyAnswer(value: string | undefined): value is string {
+  return value !== undefined && value !== null && value.trim() !== "";
+}
+
 /** Read an answer using canonical or legacy key names. */
 export function getAnswerValue(
   answers: Record<string, string>,
   canonicalKey: string
 ): string | undefined {
-  if (answers[canonicalKey]?.trim()) return answers[canonicalKey].trim();
+  if (isNonEmptyAnswer(answers[canonicalKey])) {
+    return answers[canonicalKey].trim();
+  }
   for (const [legacy, canonical] of Object.entries(LEGACY_QUESTION_KEY_MAP)) {
-    if (canonical === canonicalKey && answers[legacy]?.trim()) {
+    if (canonical === canonicalKey && isNonEmptyAnswer(answers[legacy])) {
       return answers[legacy].trim();
     }
   }

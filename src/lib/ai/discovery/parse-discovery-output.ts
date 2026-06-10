@@ -77,16 +77,10 @@ export type AiDiscoveryOutput = z.infer<typeof aiDiscoveryOutputSchema>;
 const WORK_AREA_TYPE_MAP: Record<string, string> = {
   deck: "Deck",
   bathroom: "Bathroom renovation",
-  kitchen: "Kitchen renovation",
+  bathroom_renovation: "Bathroom renovation",
   retaining_wall: "Retaining Wall",
   retaining: "Retaining Wall",
-  fence: "Fence",
-  fencing: "Fence",
-  painting: "Painting",
-  internal_alteration: "Internal Alteration",
-  flooring: "Flooring",
-  laundry: "Laundry renovation",
-  general_building: "General Building Works",
+  custom_scope: "Custom Scope",
   custom: "Custom Scope",
 };
 

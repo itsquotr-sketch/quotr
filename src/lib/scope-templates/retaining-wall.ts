@@ -189,7 +189,7 @@ export const retainingWallTemplate: ScopeTemplate = {
   estimateRules: {
     calculationType: "wall_area",
     requiredFactKeys: ["retaining_wall.length_m", "retaining_wall.height_m"],
-    lowMultiplier: 0.85,
-    highMultiplier: 1.3,
+    lowMultiplier: 0.88,
+    highMultiplier: 1.22,
   },
 };

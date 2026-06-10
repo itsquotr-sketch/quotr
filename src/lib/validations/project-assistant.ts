@@ -15,6 +15,13 @@ export const assistantConstraintsSchema = z.object({
   qualityLevel: qualityLevelSchema.default("unknown"),
 });
 
+export const quickEstimateMarginSchema = z.object({
+  targetMarginPercent: z.coerce
+    .number()
+    .min(0, "Margin must be at least 0%")
+    .max(100, "Margin cannot exceed 100%"),
+});
+
 export type ScopeQuestionAnswersInput = z.infer<
   typeof scopeQuestionAnswersSchema
 >;
