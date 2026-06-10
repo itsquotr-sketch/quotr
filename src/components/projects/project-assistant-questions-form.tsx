@@ -9,7 +9,6 @@ import {
 } from "react";
 import { CheckCircle2 } from "lucide-react";
 import {
-  continueToAssistantConstraints,
   ensureAssistantQuestions,
   saveScopeQuestionAnswers,
 } from "@/actions/project-assistant";
@@ -43,13 +42,11 @@ interface ScopeGroup {
 interface ProjectAssistantQuestionsFormProps {
   projectId: string;
   scopeGroups: ScopeGroup[];
-  onStepComplete: (step: number) => void;
 }
 
 export function ProjectAssistantQuestionsForm({
   projectId,
   scopeGroups,
-  onStepComplete,
 }: ProjectAssistantQuestionsFormProps) {
   const router = useRouter();
   const boundAction = saveScopeQuestionAnswers.bind(null, projectId);
@@ -57,7 +54,6 @@ export function ProjectAssistantQuestionsForm({
     boundAction,
     {} as ProjectAssistantActionState
   );
-  const [skipPending, startSkip] = useTransition();
   const [ensuring, startEnsure] = useTransition();
   const [ensureError, setEnsureError] = useState<string | null>(null);
 
@@ -78,16 +74,6 @@ export function ProjectAssistantQuestionsForm({
       router.refresh();
     }
   }, [state.success, router]);
-
-  function handleSkip() {
-    startSkip(async () => {
-      const result = await continueToAssistantConstraints(projectId);
-      if (result.nextStep) {
-        onStepComplete(result.nextStep);
-      }
-      router.refresh();
-    });
-  }
 
   if (scopeGroups.length === 0) {
     return (
@@ -168,15 +154,12 @@ export function ProjectAssistantQuestionsForm({
   });
 
   return (
-    <form action={formAction} className="space-y-8">
+    <form action={formAction} className="space-y-4">
       {missingQuestions.length > 0 ? (
-        <section className="space-y-4">
-          <div>
-            <h4 className="text-sm font-semibold">Missing information</h4>
-            <p className="mt-1 text-sm text-muted-foreground">
-              These answers help tighten your draft quick estimate.
-            </p>
-          </div>
+        <section className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Answer what you know — your estimate updates automatically.
+          </p>
           {scopeGroups.map((group) => {
             const typeKey = resolveWorkAreaTypeKey(
               group.scopeTypeName,
@@ -190,10 +173,10 @@ export function ProjectAssistantQuestionsForm({
             return (
               <div
                 key={group.scopeId}
-                className="space-y-4 rounded-xl border p-4"
+                className="space-y-3 rounded-lg border p-3"
               >
-                <h5 className="font-medium">{group.scopeName}</h5>
-                <div className="space-y-4">
+                <h5 className="text-sm font-medium">{group.scopeName}</h5>
+                <div className="space-y-3">
                   {groupMissing.map((q) => (
                     <QuestionField
                       key={q.id}
@@ -208,21 +191,15 @@ export function ProjectAssistantQuestionsForm({
           })}
         </section>
       ) : (
-        <p className="rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-primary">
-          All key information provided — your estimate can use the measurements
-          you have given.
+        <p className="rounded-lg border border-primary/20 bg-primary/5 px-3 py-2 text-xs text-primary">
+          Key information captured — estimate is using your answers.
         </p>
       )}
 
       {answeredQuestions.length > 0 && (
-        <section className="space-y-4">
-          <div>
-            <h4 className="text-sm font-semibold">Information used</h4>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Already captured from your notes or answers.
-            </p>
-          </div>
-          <ul className="space-y-2">
+        <section className="space-y-2">
+          <p className="text-xs font-medium text-muted-foreground">Captured</p>
+          <ul className="space-y-1">
             {answeredQuestions.map(({ question, scopeName, typeKey }) => {
               const row = question.scope_answers?.[0];
               const value =
@@ -266,24 +243,11 @@ export function ProjectAssistantQuestionsForm({
         <p className="text-sm text-destructive">{state.error}</p>
       )}
 
-      <div className="flex flex-col gap-2 sm:flex-row">
-        <Button
-          type="submit"
-          disabled={pending || skipPending}
-          className="w-full sm:w-auto"
-        >
+      {missingQuestions.length > 0 && (
+        <Button type="submit" disabled={pending} size="sm" className="w-full sm:w-auto">
           {pending ? "Saving…" : "Save answers"}
         </Button>
-        <Button
-          type="button"
-          variant="outline"
-          disabled={pending || skipPending}
-          className="w-full sm:w-auto"
-          onClick={handleSkip}
-        >
-          {skipPending ? "Continuing…" : "Continue to constraints"}
-        </Button>
-      </div>
+      )}
     </form>
   );
 }

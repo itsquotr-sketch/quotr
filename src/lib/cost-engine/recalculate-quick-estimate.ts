@@ -48,6 +48,7 @@ export async function recalculateQuickEstimate(
     tightenSuggestions: result.tightenSuggestions,
     rangeLowDrivers: result.rangeLowDrivers,
     rangeHighDrivers: result.rangeHighDrivers,
+    qualityFactors: result.qualityFactors,
   });
 
   const updatePayload = result.canCalculate

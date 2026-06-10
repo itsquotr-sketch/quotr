@@ -1,8 +1,10 @@
 import {
+  CONSTRAINT_SLUGS_HIDDEN_WHEN_ANSWERED,
   getConstraintBySlug,
   getRelevantConstraints,
   type AssistantConstraint,
 } from "@/lib/project-assistant-constraints";
+import { normalizeQuestionKey } from "@/lib/question-keys";
 import { listDriverValuesForQuickEstimate } from "@/lib/project-assistant-data";
 import { listProjectEstimateDrivers } from "@/lib/quick-estimate-data";
 import { devLog } from "@/lib/dev-log";
@@ -59,8 +61,17 @@ function isConstraintSupersededByQuestion(
   answeredQuestionKeys: Set<string>
 ): boolean {
   const def = getConstraintBySlug(slug);
-  const hideKey = def?.hideWhenQuestionAnswered;
-  return Boolean(hideKey && answeredQuestionKeys.has(hideKey));
+  const hideKey =
+    def?.hideWhenQuestionAnswered ??
+    (slug in CONSTRAINT_SLUGS_HIDDEN_WHEN_ANSWERED
+      ? CONSTRAINT_SLUGS_HIDDEN_WHEN_ANSWERED[slug]
+      : undefined);
+  if (!hideKey) return false;
+  const normalizedHide = normalizeQuestionKey(hideKey) ?? hideKey;
+  return (
+    answeredQuestionKeys.has(hideKey) ||
+    answeredQuestionKeys.has(normalizedHide)
+  );
 }
 
 /** Constraints shown in the UI — relevant options plus any already saved. */

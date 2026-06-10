@@ -1,48 +1,58 @@
 "use client";
 
 import type { ReactNode } from "react";
+import { EstimateQualityCard } from "@/components/projects/estimate-quality-card";
 import type { DiscoveryResult } from "@/lib/discovery";
 import type { DiscoverySummaryConstraint } from "@/lib/project-constraints-load";
-import type { ProjectDiscoveryMeta } from "@/lib/discovery-meta";
+import type { EstimateQualityFactor } from "@/lib/cost-engine/estimate-quality";
+import type { QuickEstimateConfidenceLevel } from "@/lib/constants/quick-estimate";
 import { cn } from "@/lib/utils";
 
-interface ProjectAssistantDiscoverySummaryProps {
+interface DiscoverySummaryProps {
   discovery: DiscoveryResult | null;
-  discoveryMeta?: ProjectDiscoveryMeta;
   confirmedWorkAreaNames?: string[];
   savedConstraints?: DiscoverySummaryConstraint[];
+  estimateDrivers?: string[];
+  qualityLevel?: QuickEstimateConfidenceLevel | null;
+  qualityFactors?: EstimateQualityFactor[];
+  missingItems?: string[];
   className?: string;
 }
 
-function Section({
+function NoteBlock({
   title,
   children,
-  emptyMessage,
-  hasItems,
 }: {
   title: string;
   children: ReactNode;
-  emptyMessage: string;
-  hasItems: boolean;
 }) {
   return (
-    <div className="rounded-xl border bg-card p-4">
-      <h4 className="text-xs font-semibold text-muted-foreground">{title}</h4>
-      {hasItems ? (
-        <div className="mt-3">{children}</div>
-      ) : (
-        <p className="mt-2 text-sm text-muted-foreground">{emptyMessage}</p>
-      )}
+    <div>
+      <h4 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+        {title}
+      </h4>
+      <div className="mt-1 text-sm leading-snug">{children}</div>
     </div>
   );
 }
 
-export function ProjectAssistantDiscoverySummary({
+function InlineList({ items }: { items: string[] }) {
+  if (items.length === 0) {
+    return <span className="text-muted-foreground">—</span>;
+  }
+  return <span>{items.join(" · ")}</span>;
+}
+
+export function DiscoverySummary({
   discovery,
   confirmedWorkAreaNames = [],
   savedConstraints = [],
+  estimateDrivers,
+  qualityLevel,
+  qualityFactors = [],
+  missingItems = [],
   className,
-}: ProjectAssistantDiscoverySummaryProps) {
+}: DiscoverySummaryProps) {
   const summaryConstraints: DiscoverySummaryConstraint[] =
     savedConstraints.length > 0
       ? savedConstraints
@@ -52,139 +62,91 @@ export function ProjectAssistantDiscoverySummary({
           source: "notes" as const,
         })) ?? []);
 
-  if (!discovery && summaryConstraints.length === 0) {
-    return (
-      <div
-        className={cn(
-          "rounded-xl border border-dashed bg-muted/10 p-4 text-sm text-muted-foreground",
-          className
-        )}
-      >
-        Run <span className="font-medium text-foreground">Analyse Project</span>{" "}
-        on your notes to see what Quotr found — work areas, facts, constraints,
-        and trades.
-      </div>
+  const driverLabels =
+    estimateDrivers ??
+    summaryConstraints.map((c) =>
+      c.detail ? `${c.label}: ${c.detail}` : c.label
     );
-  }
 
   const workAreaNames =
     confirmedWorkAreaNames.length > 0
       ? confirmedWorkAreaNames
       : (discovery?.workAreas.map((w) => w.name) ?? []);
 
+  const keyFacts = (discovery?.facts ?? []).map((fact) => {
+    const unit = fact.unit ? ` ${fact.unit}` : "";
+    return `${fact.value}${unit}`;
+  });
+
   const uniqueTrades = discovery
     ? [...new Set(discovery.trades.map((t) => t.name))].sort()
     : [];
 
-  const openQuestions =
-    discovery?.questions.filter((q) => q.text).slice(0, 5) ?? [];
+  if (
+    !discovery &&
+    summaryConstraints.length === 0 &&
+    workAreaNames.length === 0 &&
+    !qualityLevel
+  ) {
+    return (
+      <div
+        className={cn(
+          "rounded-lg border border-dashed bg-muted/10 p-3 text-xs text-muted-foreground",
+          className
+        )}
+      >
+        Run <span className="font-medium text-foreground">Analyse Project</span>{" "}
+        on your notes to see what Quotr found.
+      </div>
+    );
+  }
 
   return (
-    <div className={cn("space-y-4", className)}>
-      <div>
-        <h3 className="text-sm font-semibold">What Quotr found</h3>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Review before confirming work areas and generating your draft quick
-          estimate.
-        </p>
+    <div className={cn("space-y-3 rounded-lg border bg-card p-3", className)}>
+      <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        What Quotr found
+      </h3>
+
+      <div className="space-y-3 border-b pb-3">
+        <NoteBlock title="Work areas">
+          <InlineList items={workAreaNames} />
+        </NoteBlock>
+
+        <NoteBlock title="Key facts">
+          <InlineList items={keyFacts} />
+        </NoteBlock>
+
+        <NoteBlock title="Trades">
+          <InlineList items={uniqueTrades} />
+        </NoteBlock>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <Section
-          title="Work areas"
-          hasItems={workAreaNames.length > 0}
-          emptyMessage="No work areas identified yet."
-        >
-          <ul className="space-y-1 text-sm">
-            {workAreaNames.map((name) => (
-              <li key={name} className="font-medium">
-                {name}
-              </li>
-            ))}
-          </ul>
-        </Section>
+      <NoteBlock title="Estimate drivers">
+        <InlineList items={driverLabels} />
+      </NoteBlock>
 
-        <Section
-          title="Key facts"
-          hasItems={(discovery?.facts.length ?? 0) > 0}
-          emptyMessage="No measurements or scope facts found in notes yet."
-        >
-          <ul className="space-y-2 text-sm">
-            {(discovery?.facts ?? []).map((fact) => (
-              <li key={`${fact.key}-${fact.value}`}>
-                <span className="text-muted-foreground">{fact.label}: </span>
-                <span className="font-medium">{fact.value}</span>
-              </li>
-            ))}
-          </ul>
-        </Section>
-
-        <Section
-          title="Constraints"
-          hasItems={summaryConstraints.length > 0}
-          emptyMessage="No constraints detected in notes."
-        >
-          <ul className="space-y-1 text-sm">
-            {summaryConstraints.map((constraint) => (
-              <li key={constraint.slug}>
-                {constraint.detail
-                  ? `${constraint.label}: ${constraint.detail}`
-                  : constraint.label}
-              </li>
-            ))}
-          </ul>
-        </Section>
-
-        <Section
-          title="Likely trades"
-          hasItems={uniqueTrades.length > 0}
-          emptyMessage="Confirm work areas to see likely trades."
-        >
-          <ul className="space-y-1 text-sm">
-            {uniqueTrades.map((trade) => (
-              <li key={trade}>{trade}</li>
-            ))}
-          </ul>
-        </Section>
-      </div>
-
-      {openQuestions.length > 0 && (
-        <Section
-          title="Missing information"
-          hasItems
-          emptyMessage=""
-        >
-          <ul className="space-y-2 text-sm">
-            {openQuestions.map((q) => (
-              <li key={q.key} className="text-muted-foreground">
-                {q.workAreaName ? `${q.workAreaName}: ` : ""}
-                {q.text}
-              </li>
-            ))}
-          </ul>
-        </Section>
+      {qualityLevel && qualityFactors.length > 0 && (
+        <EstimateQualityCard
+          level={qualityLevel}
+          factors={qualityFactors}
+          compact
+          className="border-0 bg-muted/20 p-2"
+        />
       )}
 
-      {discovery?.qualityLevel &&
-        discovery.qualityLevel.value !== "unknown" && (
-          <div className="rounded-xl border bg-card p-4">
-            <h4 className="text-xs font-semibold text-muted-foreground">
-              Finish level detected
-            </h4>
-            <p className="mt-2 text-sm">
-              <span className="font-medium">
-                {discovery.qualityLevel.value === "budget"
-                  ? "Budget / basic"
-                  : discovery.qualityLevel.value === "standard"
-                    ? "Standard / mid-range"
-                    : "Premium / high-end"}
-              </span>
-              {discovery.qualityLevel.reason
-                ? ` — ${discovery.qualityLevel.reason}`
-                : ""}
-            </p>
-          </div>
-        )}
+      {missingItems.length > 0 && (
+        <div>
+          <h4 className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            Missing
+          </h4>
+          <p className="mt-1 text-xs leading-snug text-muted-foreground">
+            {missingItems.slice(0, 4).join(" · ")}
+          </p>
+        </div>
+      )}
     </div>
   );
 }
+
+/** @deprecated Use DiscoverySummary */
+export const ProjectAssistantDiscoverySummary = DiscoverySummary;

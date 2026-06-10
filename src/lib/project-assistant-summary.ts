@@ -1,3 +1,4 @@
+import type { EstimateQualityFactor } from "@/lib/cost-engine/estimate-quality";
 import type { RangeQuality } from "@/lib/cost-engine/range-quality";
 
 export function parseQuickEstimateSummary(notes: string | null): {
@@ -25,6 +26,7 @@ export function parseQuickEstimateSummary(notes: string | null): {
   tightenSuggestions?: string[];
   rangeLowDrivers?: string[];
   rangeHighDrivers?: string[];
+  qualityFactors?: EstimateQualityFactor[];
 } | null {
   if (!notes) return null;
   try {
@@ -53,6 +55,7 @@ export function parseQuickEstimateSummary(notes: string | null): {
       tightenSuggestions?: string[];
       rangeLowDrivers?: string[];
       rangeHighDrivers?: string[];
+      qualityFactors?: EstimateQualityFactor[];
     };
     if (Array.isArray(parsed.includedTrades) || Array.isArray(parsed.workAreasIncluded)) {
       return {
@@ -82,6 +85,7 @@ export function parseQuickEstimateSummary(notes: string | null): {
         tightenSuggestions: parsed.tightenSuggestions ?? [],
         rangeLowDrivers: parsed.rangeLowDrivers ?? [],
         rangeHighDrivers: parsed.rangeHighDrivers ?? [],
+        qualityFactors: parsed.qualityFactors ?? [],
       };
     }
   } catch {

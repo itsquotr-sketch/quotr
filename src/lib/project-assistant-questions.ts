@@ -179,7 +179,7 @@ const WORK_AREA_QUESTION_DEFS: Record<string, ScopeQuestionDef[]> = {
 const GENERIC_QUESTION_DEFS: ScopeQuestionDef[] = [
   {
     key: "access_restrictions",
-    text: "Are there access restrictions?",
+    text: "Is access tight?",
     inputType: "select",
     options: [...YES_NO_UNSURE],
   },
@@ -191,13 +191,13 @@ const GENERIC_QUESTION_DEFS: ScopeQuestionDef[] = [
   },
   {
     key: "rubbish_removal",
-    text: "Is rubbish removal included?",
+    text: "Is rubbish removal required?",
     inputType: "select",
     options: [...YES_NO_UNSURE],
   },
   {
     key: "time_constraints",
-    text: "Are there time constraints?",
+    text: "Are working hours restricted?",
     inputType: "select",
     options: [...YES_NO_UNSURE],
   },

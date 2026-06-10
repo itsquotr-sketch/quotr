@@ -1,6 +1,7 @@
 import type { QuickEstimateBudgetFit, QuickEstimateConfidenceLevel } from "@/lib/constants/quick-estimate";
 import type { QualityLevel } from "@/lib/constants/quality-level";
 import type { ScopeQuestionForMissing } from "@/lib/cost-engine/build-missing-information";
+import type { EstimateQualityFactor } from "@/lib/cost-engine/estimate-quality";
 import type { RangeQuality } from "@/lib/cost-engine/range-quality";
 import type { DiscoveryResult } from "@/lib/discovery";
 import { getAnswerValue, normalizeQuestionKey } from "@/lib/question-keys";
@@ -77,6 +78,7 @@ export type QuickEstimateOutput = {
   tightenSuggestions: string[];
   rangeLowDrivers: string[];
   rangeHighDrivers: string[];
+  qualityFactors: EstimateQualityFactor[];
 };
 
 export function buildAnswersMap(

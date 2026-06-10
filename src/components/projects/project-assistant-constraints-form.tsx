@@ -25,7 +25,6 @@ interface ProjectAssistantConstraintsFormProps {
   qualityLevel: string;
   detectedQualityLevel?: QualityLevel | null;
   detectedQualityReason?: string | null;
-  onStepComplete: (step: number) => void;
 }
 
 export function ProjectAssistantConstraintsForm({
@@ -37,7 +36,6 @@ export function ProjectAssistantConstraintsForm({
   qualityLevel,
   detectedQualityLevel,
   detectedQualityReason,
-  onStepComplete,
 }: ProjectAssistantConstraintsFormProps) {
   const router = useRouter();
   const [selected, setSelected] = useState<Set<string>>(
@@ -88,19 +86,19 @@ export function ProjectAssistantConstraintsForm({
   }
 
   return (
-    <form action={formAction} className="space-y-8">
+    <form action={formAction} className="space-y-4">
       {Array.from(selected).map((slug) => (
         <input key={slug} type="hidden" name="constraintSlugs" value={slug} />
       ))}
       <input type="hidden" name="qualityLevel" value={finishLevel} />
 
-      <div className="space-y-3 rounded-xl border bg-muted/20 p-4">
+      <div className="space-y-2 rounded-lg border bg-muted/20 p-3">
         <div>
-          <Label htmlFor="qualityLevel" className="text-base font-medium">
-            Client budget / finish level
+          <Label htmlFor="qualityLevel" className="text-sm font-medium">
+            Finish level
           </Label>
-          <p className="mt-1 text-sm text-muted-foreground">
-            This helps Quotr adjust the estimate range. You can change it later.
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            Affects material and labour allowances in your estimate.
           </p>
         </div>
 
@@ -120,7 +118,7 @@ export function ProjectAssistantConstraintsForm({
             </p>
           )}
 
-        <div className="grid gap-2 sm:grid-cols-2">
+        <div className="flex flex-wrap gap-1.5">
           {QUALITY_LEVEL_OPTIONS.map((option) => {
             const isSelected = finishLevel === option.value;
             return (
@@ -129,51 +127,40 @@ export function ProjectAssistantConstraintsForm({
                 type="button"
                 onClick={() => setFinishLevel(option.value)}
                 className={cn(
-                  "rounded-xl border p-4 text-left transition-colors",
+                  "rounded-full border px-3 py-1.5 text-xs font-medium transition-colors",
                   isSelected
-                    ? "border-primary bg-primary/5 ring-1 ring-primary"
-                    : "hover:bg-accent/50"
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-border bg-background hover:bg-muted"
                 )}
               >
-                <p className="font-medium">{option.label}</p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  {option.description}
-                </p>
+                {option.label}
               </button>
             );
           })}
         </div>
       </div>
 
-      <div className="space-y-3">
-        <div>
-          <h4 className="text-base font-medium">Site and programme constraints</h4>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Select anything that may make this job harder or more expensive.
+      {constraints.length > 0 && (
+        <div className="space-y-2">
+          <p className="text-xs text-muted-foreground">
+            Site conditions — only shown when not already answered above.
           </p>
-        </div>
-
-        {constraints.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            Confirm work areas first to see relevant constraints.
-          </p>
-        ) : (
           <div className="grid gap-2 sm:grid-cols-2">
             {constraints.map((constraint) => {
               const isSelected = selected.has(constraint.slug);
               return (
-                <div key={constraint.slug} className="space-y-2">
+                <div key={constraint.slug} className="space-y-1.5">
                   <button
                     type="button"
                     onClick={() => toggle(constraint.slug)}
                     className={cn(
-                      "w-full rounded-xl border p-4 text-left transition-colors",
+                      "w-full rounded-lg border p-2.5 text-left text-sm transition-colors",
                       isSelected
                         ? "border-primary bg-primary/5 ring-1 ring-primary"
                         : "hover:bg-accent/50"
                     )}
                   >
-                    <p className="font-medium">{constraint.label}</p>
+                    <p className="font-medium leading-snug">{constraint.label}</p>
                   </button>
 
                   {isSelected && constraint.followUp && (
@@ -246,30 +233,19 @@ export function ProjectAssistantConstraintsForm({
               );
             })}
           </div>
-        )}
-      </div>
+        </div>
+      )}
 
       {state.message && (
-        <p className="text-sm text-primary">{state.message}</p>
+        <p className="text-xs text-primary">{state.message}</p>
       )}
       {state.error && (
-        <p className="text-sm text-destructive">{state.error}</p>
+        <p className="text-xs text-destructive">{state.error}</p>
       )}
 
-      <div className="flex flex-col gap-2 sm:flex-row">
-        <Button type="submit" disabled={pending} className="w-full sm:w-auto">
-          {pending ? "Saving…" : "Save budget, finish and constraints"}
-        </Button>
-        <Button
-          type="button"
-          variant="outline"
-          disabled={pending}
-          className="w-full sm:w-auto"
-          onClick={() => onStepComplete(5)}
-        >
-          View draft quick estimate
-        </Button>
-      </div>
+      <Button type="submit" disabled={pending} size="sm" className="w-full sm:w-auto">
+        {pending ? "Saving…" : "Save finish & site conditions"}
+      </Button>
     </form>
   );
 }

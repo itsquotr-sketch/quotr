@@ -65,22 +65,35 @@ export default async function ProjectDetailPage({
     notFound();
   }
 
-  await ensureQuickEstimateForProject(
-    supabase,
-    organisationId,
-    id,
-    user.id
-  );
-  await ensureQuestionsForProjectScopes(supabase, organisationId, id);
+  const [, , { data: scopes }] = await Promise.all([
+    ensureQuickEstimateForProject(supabase, organisationId, id, user.id),
+    ensureQuestionsForProjectScopes(supabase, organisationId, id),
+    supabase
+      .from("project_scopes")
+      .select("*, scope_types(name)")
+      .eq("project_id", id)
+      .order("sort_order", { ascending: true }),
+  ]);
 
-  const { data: scopes } = await supabase
-    .from("project_scopes")
-    .select("*, scope_types(name)")
-    .eq("project_id", id)
-    .order("sort_order", { ascending: true });
+  const scopeIds = (scopes ?? []).map((scope) => scope.id);
 
-  const { data: scopeBuilderInputs, error: scopeBuilderError } =
-    await listScopeBuilderInputs(supabase, organisationId, id);
+  const [
+    { data: scopeBuilderInputs, error: scopeBuilderError },
+    { data: scopeSuggestions, error: scopeSuggestionsError },
+    { data: quickEstimate, error: quickEstimateError },
+    { data: latestEngineRun },
+    { data: latestDiscoveryRun },
+    discoveryMeta,
+    { data: scopeQuestions, error: scopeQuestionsError },
+  ] = await Promise.all([
+    listScopeBuilderInputs(supabase, organisationId, id),
+    listScopeSuggestions(supabase, organisationId, id),
+    getQuickEstimateForProject(supabase, organisationId, id),
+    getLatestDiscoveryEngineRun(supabase, organisationId, id),
+    getLatestDiscoveryRun(supabase, organisationId, id),
+    getProjectDiscoveryMeta(supabase, organisationId, id),
+    listScopeQuestionsForProject(supabase, scopeIds),
+  ]);
 
   if (scopeBuilderError) {
     console.error(
@@ -89,18 +102,12 @@ export default async function ProjectDetailPage({
     );
   }
 
-  const { data: scopeSuggestions, error: scopeSuggestionsError } =
-    await listScopeSuggestions(supabase, organisationId, id);
-
   if (scopeSuggestionsError) {
     console.error(
       "[ProjectDetailPage] Failed to load scope suggestions:",
       scopeSuggestionsError
     );
   }
-
-  const { data: quickEstimate, error: quickEstimateError } =
-    await getQuickEstimateForProject(supabase, organisationId, id);
 
   if (quickEstimateError) {
     console.error(
@@ -109,20 +116,9 @@ export default async function ProjectDetailPage({
     );
   }
 
-  const [{ data: latestEngineRun }, { data: latestDiscoveryRun }, discoveryMeta] =
-    await Promise.all([
-      getLatestDiscoveryEngineRun(supabase, organisationId, id),
-      getLatestDiscoveryRun(supabase, organisationId, id),
-      getProjectDiscoveryMeta(supabase, organisationId, id),
-    ]);
-
   const discovery =
     parseDiscoveryEngineRun(latestEngineRun ?? null) ??
     parseDiscoveryRun(latestDiscoveryRun ?? null);
-
-  const scopeIds = (scopes ?? []).map((scope) => scope.id);
-  const { data: scopeQuestions, error: scopeQuestionsError } =
-    await listScopeQuestionsForProject(supabase, scopeIds);
 
   if (scopeQuestionsError) {
     console.error(
@@ -142,7 +138,6 @@ export default async function ProjectDetailPage({
     );
     selectedConstraintSlugs = saved.slugs;
     followUpValues = saved.followUpValues;
-
     if (saved.error) {
       console.error(
         "[ProjectDetailPage] Failed to load saved constraints:",

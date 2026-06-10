@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useState, useTransition } from "react";
 import { saveScopeBuilderInput } from "@/actions/scope-builder";
 import { analyseProject, saveAndAnalyseProject } from "@/actions/project-assistant";
@@ -16,7 +17,6 @@ const analyseInitialState: ProjectAssistantActionState = {};
 interface ProjectAssistantNotesFormProps {
   projectId: string;
   discoveryMeta: ProjectDiscoveryMeta;
-  onStepComplete?: (step: number) => void;
 }
 
 function formatAnalysedAt(value: string | null): string | null {
@@ -41,8 +41,8 @@ function analysingLabel(aiAvailable: boolean, pending: boolean): string {
 export function ProjectAssistantNotesForm({
   projectId,
   discoveryMeta,
-  onStepComplete,
 }: ProjectAssistantNotesFormProps) {
+  const router = useRouter();
   const saveAction = saveScopeBuilderInput.bind(null, projectId);
   const [saveState, saveFormAction, savePending] = useActionState(
     saveAction,
@@ -65,11 +65,11 @@ export function ProjectAssistantNotesForm({
   const analysedAt = formatAnalysedAt(discoveryMeta.analysedAt);
 
   useEffect(() => {
-    if (analyseState.success && analyseState.nextStep) {
+    if (analyseState.success) {
       setFormKey((k) => k + 1);
-      onStepComplete?.(analyseState.nextStep);
+      router.refresh();
     }
-  }, [analyseState.success, analyseState.nextStep, onStepComplete]);
+  }, [analyseState.success, router]);
 
   useEffect(() => {
     if (saveState.success) {
@@ -88,9 +88,7 @@ export function ProjectAssistantNotesForm({
       setAnalyseOnlyFeedback(
         result.message ?? "Work areas updated from your saved notes."
       );
-      if (result.nextStep) {
-        onStepComplete?.(result.nextStep);
-      }
+      router.refresh();
     });
   }
 
@@ -109,9 +107,9 @@ export function ProjectAssistantNotesForm({
           id="project-assistant-notes"
           name="content"
           placeholder={PROJECT_ASSISTANT_NOTES_PLACEHOLDER}
-          rows={8}
+          rows={5}
           required
-          className="min-h-[180px] resize-y text-base"
+          className="min-h-[100px] resize-y text-sm"
         />
         {(saveState.fieldErrors?.content ||
           analyseState.fieldErrors?.content) && (

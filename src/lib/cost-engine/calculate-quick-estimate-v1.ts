@@ -14,6 +14,10 @@ import {
   resolveConfidenceLevel,
 } from "@/lib/cost-engine/build-confidence";
 import {
+  buildEstimateQualityFactors,
+  isSiteConstraintsAssessed,
+} from "@/lib/cost-engine/estimate-quality";
+import {
   computeRangeWidthPercent,
   resolveRangeQuality,
 } from "@/lib/cost-engine/range-quality";
@@ -127,6 +131,12 @@ export function calculateQuickEstimateV1(
       tightenSuggestions: [],
       rangeLowDrivers: [],
       rangeHighDrivers: [],
+      qualityFactors: buildEstimateQualityFactors({
+        hasKeyMeasurements: false,
+        workAreasConfirmed: false,
+        qualityLevel: "unknown",
+        siteConstraintsAssessed: false,
+      }),
     };
   }
 
@@ -283,6 +293,18 @@ export function calculateQuickEstimateV1(
     qualityLevelNote: qualityAdjustment.qualityNote,
   });
 
+  const siteConstraintsAssessed = isSiteConstraintsAssessed({
+    constraintCount: input.constraints.length,
+    answeredQuestionKeys: input.answeredQuestionKeys,
+  });
+
+  const qualityFactors = buildEstimateQualityFactors({
+    hasKeyMeasurements,
+    workAreasConfirmed: input.workAreas.length > 0,
+    qualityLevel: effectiveQualityLevel,
+    siteConstraintsAssessed,
+  });
+
   return {
     canCalculate: true,
     estimatedCostLow: adjustedBand.low,
@@ -324,5 +346,6 @@ export function calculateQuickEstimateV1(
     tightenSuggestions: rangeDrivers.tightenSuggestions,
     rangeLowDrivers: rangeDrivers.lowDrivers,
     rangeHighDrivers: rangeDrivers.highDrivers,
+    qualityFactors,
   };
 }

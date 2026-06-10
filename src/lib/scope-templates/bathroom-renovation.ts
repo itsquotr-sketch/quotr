@@ -125,7 +125,7 @@ export const bathroomRenovationTemplate: ScopeTemplate = {
   constraints: [
     {
       key: "live_house",
-      label: "Live/occupied house",
+      label: "Is the home occupied?",
       slug: "bathroom-live-house",
     },
     {

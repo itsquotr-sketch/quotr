@@ -1,5 +1,5 @@
 import { Sparkles } from "lucide-react";
-import { ProjectAssistantWizard } from "@/components/projects/project-assistant-wizard";
+import { ProjectAssistantWorkspace } from "@/components/projects/project-assistant-workspace";
 import {
   Card,
   CardContent,
@@ -32,28 +32,26 @@ interface ProjectAssistantSectionProps {
 
 export function ProjectAssistantSection(props: ProjectAssistantSectionProps) {
   return (
-    <section className="mb-8" id="project-assistant">
+    <section className="mb-6" id="project-assistant">
       <Card className="rounded-xl border-primary/20 shadow-sm">
-        <CardHeader className="border-b bg-muted/30 pb-6">
-          <div className="flex items-start gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/10">
-              <Sparkles className="h-5 w-5 text-primary" />
+        <CardHeader className="border-b bg-muted/30 px-4 py-3">
+          <div className="flex items-center gap-2.5">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+              <Sparkles className="h-4 w-4 text-primary" />
             </div>
             <div>
-              <CardTitle className="normal-case tracking-normal text-2xl font-semibold">
+              <CardTitle className="normal-case tracking-normal text-lg font-semibold">
                 Project Assistant
               </CardTitle>
-              <CardDescription className="mt-1 text-base">
-                Write your notes once, confirm the work areas, answer a few
-                questions, select what makes the job harder — and get a quick
-                estimate.
+              <CardDescription className="text-sm">
+                Scope the job naturally — your estimate updates as you go.
               </CardDescription>
             </div>
           </div>
         </CardHeader>
 
-        <CardContent className="pt-8">
-          <ProjectAssistantWizard {...props} />
+        <CardContent className="p-3 sm:p-4">
+          <ProjectAssistantWorkspace {...props} />
         </CardContent>
       </Card>
     </section>

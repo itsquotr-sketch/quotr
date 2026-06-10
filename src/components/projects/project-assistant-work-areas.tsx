@@ -1,5 +1,6 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useState, useTransition } from "react";
 import { CheckCircle2 } from "lucide-react";
 import {
@@ -49,10 +50,9 @@ export function ProjectAssistantWorkAreas({
   }
 
   return (
-    <div className="space-y-4">
-      <p className="text-sm text-muted-foreground">
-        Review each work area Quotr found in your notes. Accept to confirm, or
-        edit the details first.
+    <div className="space-y-3">
+      <p className="text-xs text-muted-foreground">
+        Accept work areas Quotr found, or edit before confirming.
       </p>
 
       {hasConfirmed && (
@@ -94,7 +94,7 @@ function ConfirmedWorkAreaCard({
     "Confirmed work area";
 
   return (
-    <div className="rounded-xl border border-primary/20 bg-primary/5 p-4">
+    <div className="rounded-lg border border-primary/20 bg-primary/5 p-3">
       <div className="flex flex-wrap items-start justify-between gap-2">
         <div className="space-y-1">
           <div className="flex flex-wrap items-center gap-2">
@@ -129,6 +129,7 @@ function DetectedWorkAreaCard({
   projectId: string;
   suggestion: ProjectScopeSuggestion;
 }) {
+  const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [activeAction, setActiveAction] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
@@ -151,6 +152,7 @@ function DetectedWorkAreaCard({
       setFeedback(
         action === "accept" ? "Work area confirmed." : "Work area dismissed."
       );
+      router.refresh();
     });
   }
 
@@ -161,7 +163,7 @@ function DetectedWorkAreaCard({
 
   return (
     <>
-      <div className="rounded-xl border bg-card p-4">
+      <div className="rounded-lg border bg-card p-3">
         <div className="flex flex-wrap items-center gap-2">
           <p className="font-semibold">{suggestion.suggested_name}</p>
           <StatusBadge label={suggestion.suggested_scope_type} />
@@ -257,11 +259,14 @@ function EditWorkAreaDialog({
     {} as ScopeSuggestionActionState
   );
 
+  const router = useRouter();
+
   useEffect(() => {
     if (state.success) {
       onOpenChange(false);
+      router.refresh();
     }
-  }, [state.success, onOpenChange]);
+  }, [state.success, onOpenChange, router]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>

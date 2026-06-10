@@ -1,3 +1,4 @@
+import { normalizeQuestionKey } from "@/lib/question-keys";
 import {
   getTemplateConstraintsForWorkAreas,
   getAllScopeTemplates,
@@ -44,7 +45,8 @@ function templateConstraintToAssistant(
 const EXTRA_UNIVERSAL_CONSTRAINTS: AssistantConstraint[] = [
   {
     slug: "rubbish-removal-required",
-    label: "Rubbish removal required",
+    label: "Is rubbish removal required?",
+    hideWhenQuestionAnswered: "rubbish_removal",
     universal: true,
     followUp: {
       label: "Rubbish removal level",
@@ -83,8 +85,12 @@ const LEGACY_CONSTRAINT_SLUGS: Record<string, AssistantConstraint> = {
   },
 };
 
-const CONSTRAINT_SLUGS_HIDDEN_WHEN_ANSWERED: Record<string, string> = {
+export const CONSTRAINT_SLUGS_HIDDEN_WHEN_ANSWERED: Record<string, string> = {
   "retaining-carting-distance": "retaining_wall.carting_distance_m",
+  "tight-access": "access_restrictions",
+  "restricted-hours": "time_constraints",
+  "urgent-turnaround": "time_constraints",
+  "rubbish-removal-required": "rubbish_removal",
 };
 
 function buildAllConstraintCatalog(): AssistantConstraint[] {
@@ -130,7 +136,7 @@ export function getRelevantConstraints(
   );
   const seen = new Set<string>();
 
-  return [
+  const filtered = [
     ...templateConstraints,
     ...EXTRA_UNIVERSAL_CONSTRAINTS,
     ...specific,
@@ -141,12 +147,24 @@ export function getRelevantConstraints(
     const hideKey =
       c.hideWhenQuestionAnswered ??
       CONSTRAINT_SLUGS_HIDDEN_WHEN_ANSWERED[c.slug];
-    if (hideKey && answeredQuestionKeys.has(hideKey)) {
-      return false;
+    if (hideKey) {
+      const normalizedHide = normalizeQuestionKey(hideKey) ?? hideKey;
+      if (
+        answeredQuestionKeys.has(hideKey) ||
+        answeredQuestionKeys.has(normalizedHide)
+      ) {
+        return false;
+      }
     }
 
     return true;
   });
+
+  if (types.has("Bathroom renovation")) {
+    return filtered.filter((c) => c.slug !== "occupied-house");
+  }
+
+  return filtered;
 }
 
 /** Map work area type key to calculation slug */

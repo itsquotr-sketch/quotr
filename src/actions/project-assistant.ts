@@ -388,12 +388,12 @@ export async function continueToAssistantConstraints(
     return { error: ensureResult.error };
   }
   await syncNotesToQuickEstimate(supabase, organisationId, projectId, user.id);
+  await recalculateQuickEstimateAction(projectId, { silent: true });
   revalidatePath(`/projects/${projectId}`);
 
   return {
     success: true,
-    message: "Continue to constraints.",
-    nextStep: 4,
+    message: "Estimate updated.",
   };
 }
 
