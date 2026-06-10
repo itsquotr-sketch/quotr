@@ -10,31 +10,49 @@ Read this document before writing any code. If a task conflicts with these rules
 
 Before every coding session:
 
-1. Read `docs/05-build-roadmap.md` and identify the **current phase**.
-2. Confirm the requested work belongs in the current phase.
+1. Read `docs/05-build-roadmap.md` and identify the **current sprint**.
+2. Confirm the requested work belongs in the current sprint.
 3. Read relevant docs: `01-product-vision.md`, `02-system-architecture.md`, `03-data-model.md`, `04-ux-ui-rules.md`.
-4. If the task spans multiple phases, implement only what the current phase allows.
+4. If the task spans multiple sprints, implement only what the current sprint allows.
 
 **Never assume.** If scope is unclear, ask before building.
 
 ---
 
-## 2. Phase gating — hard stops
+## 2. Sprint gating — hard stops
 
-Do not build these until their phase is active and the prior phase definition of done is met:
+Do not build these until their sprint is active and the prior sprint definition of done is met:
 
-| Feature area | Earliest phase |
+| Feature area | Earliest sprint |
 |---|---|
-| AI scope assistant, AI questions, OpenAI calls | Phase 4 |
-| Subcontractor RFQ sending/workflow | Phase 6 |
-| Quote PDF generation/export | Phase 5 |
-| Payments, invoicing, accounting | Phase 8 |
-| Native mobile app | Phase 7 |
-| Rates library (full CRUD) | Phase 2 |
-| Assemblies library (full CRUD) | Phase 2 |
-| Estimate engine (calculations, roll-ups) | Phase 3 |
+| Quick Estimate Foundation (drivers, constraints schema) | Sprint 2 |
+| Quick Estimate Engine (calculation + UI) | Sprint 3 |
+| Rates library (full CRUD) | Sprint 4 |
+| Assemblies library (full CRUD) | Sprint 5 |
+| Detailed Estimate Engine (line items, roll-ups) | Sprint 6 |
+| AI Question Engine, OpenAI calls | After Sprint 3 (not during stabilisation) |
+| Subcontractor RFQ sending/workflow | Sprint 7 |
+| Quote PDF generation/export | Sprint 8 |
+| Payments, invoicing, accounting | Sprint 10 |
+| Native mobile app | Sprint 9 |
 
-**If the user asks for a gated feature during an earlier phase:** explain the phase constraint and offer foundation work that unblocks it instead.
+**During Sprint 2A (Product Hardening):** platform fixes only — edit flows, file deletion, metrics, migrations. No Quick Estimate or new product features.
+
+**If the user asks for a gated feature during an earlier sprint:** explain the sprint constraint and offer foundation work that unblocks it instead.
+
+### Quick Estimate vs Detailed Estimate
+
+These are **separate modules** — never merge them:
+
+| | Quick Estimate | Detailed Estimate |
+|---|---|---|
+| Sprint | 2–3 | 6 |
+| Purpose | Ballpark in minutes | Line-item build-up for quoting |
+| UI | Summary inside **Project Assistant** (mobile-first) | Full workspace with sections and line items (desktop) |
+
+**Project Assistant** is the unified user-facing experience on project detail. It replaces separate Scope Builder and Quick Estimate cards. Internal tables (`project_scope_builder_inputs`, `quick_estimates`, etc.) remain unchanged.
+
+Do not show line-item tables in Quick Estimate. Do not use Quick Estimate output as a quote-ready number.
 
 ---
 
@@ -163,7 +181,7 @@ Use consistent product language in code and UI:
 | Project | Job (except legacy route redirects) |
 | Scope of work / Scope | Trade package (for scope level) |
 | Enquiry | Lead (in UI) |
-| Estimate | Quote (until Phase 5) |
+| Estimate (Quick) | Detailed Estimate (Sprint 6) |
 | Organisation | Company (in code) |
 
 Legacy routes `/jobs` and `/site-visits` redirect to `/projects`. Do not build new features on these routes.
@@ -172,19 +190,19 @@ Legacy routes `/jobs` and `/site-visits` redirect to `/projects`. Do not build n
 
 ## 12. What to do when stuck
 
-1. Re-read the current phase in `05-build-roadmap.md`.
+1. Re-read the current sprint in `05-build-roadmap.md`.
 2. Check `03-data-model.md` for table relationships.
 3. Check existing patterns in `src/actions/` and `src/components/`.
 4. Prefer extending existing code over creating parallel implementations.
-5. Ask the user if the task requires a phase change.
+5. Ask the user if the task requires a sprint change.
 
 ---
 
 ## 13. Document maintenance
 
-When a phase is completed or architecture changes:
+When a sprint is completed or architecture changes:
 
-1. Update `05-build-roadmap.md` phase status.
+1. Update `05-build-roadmap.md` sprint status.
 2. Update `03-data-model.md` if tables change.
 3. Update `06-qa-checklist.md` if new checks are needed.
 

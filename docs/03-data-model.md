@@ -88,7 +88,7 @@ Projects may link via `client_id` or store `client_name` / `client_phone` / `cli
 
 **This is the primary entity.** UI label: "Project". Code table name: `projects`.
 
-> **Note on naming:** Early prototypes used "jobs" and "site visits" as top-level concepts. The canonical table is `projects`. Legacy routes `/jobs` and `/site-visits` redirect to `/projects`. There is no `jobs` table. Do not create one.
+> **Naming:** The legacy `jobs` table has been renamed to `projects` (migration 009). All foreign keys use `project_id`. Do not reference `jobs` or `job_id` in new code.
 
 | Column | Notes |
 |---|---|
@@ -138,6 +138,8 @@ Seeded types: bathroom, kitchen, deck, internal alteration, roofing, landscaping
 ### `project_scopes`
 
 A scope of work within a project. **The unit of capture and estimation.**
+
+**UI label:** Confirmed Work Area (or "work area"). Code table name remains `project_scopes`.
 
 | Column | Notes |
 |---|---|
@@ -206,8 +208,16 @@ Foundation for AI-generated clarifying questions (Phase 4).
 
 | Table | Purpose |
 |---|---|
-| `scope_questions` | Questions posed about a scope |
-| `scope_answers` | Builder's answers to questions |
+| `scope_questions` | Questions posed about a scope (`question`, `question_key`, `question_type`, `options`, `unit`) |
+| `scope_answers` | Builder's answers (`organisation_id`, `answer` JSON text, `source`: `user` \| `discovery`) |
+
+**Answer JSON format** (stored in `answer` text column):
+
+```json
+{ "value": "10", "unit": "m", "source": "discovery", "updatedAt": "2026-06-09T12:00:00.000Z" }
+```
+
+Unique on `(project_scope_id, scope_question_id)`. Discovery facts sync into `scope_answers` via `syncDiscoveryFactsToScopeAnswers()` — user edits overwrite discovery values.
 
 ---
 
@@ -223,7 +233,27 @@ projects
     └── estimate_items (estimate_section_id, optional project_scope_id)
 ```
 
-**Phase 3** will build the estimate engine on these tables.
+**Sprint 6** will build the Detailed Estimate engine on these tables.
+
+### Quick Estimate vs Detailed Estimate (data model)
+
+| | Quick Estimate | Detailed Estimate |
+|---|---|---|
+| Sprint | 2–3 | 6 |
+| UI | Project Assistant summary card | Dedicated estimate workspace |
+| Storage | `quick_estimates`, drivers, answers | `estimate_sections` → `estimate_items` |
+| Pricing source | Drivers + constraints + rates/assemblies | Line items from rates, assemblies, allowances |
+
+### Project Assistant (UI vs schema)
+
+| User-facing | Internal table |
+|---|---|
+| Project notes | `project_scope_builder_inputs` |
+| Identified work areas | `project_scope_suggestions` |
+| Confirmed work areas | `project_scopes` |
+| Targeted questions | `scope_questions`, `scope_answers` |
+| Discovery runs | `project_discovery_runs` (work areas, facts, constraints, questions, trades as JSONB) |
+| Quick estimate | `quick_estimates`, `project_estimate_drivers`, `project_estimate_driver_values` |
 
 ### `rfq_packages`
 
@@ -249,6 +279,134 @@ AI processing run log per scope.
 | `confidence` | AI confidence score |
 
 **Phase 4** will populate this table.
+
+### `project_discovery_runs` (legacy snapshot)
+
+Discovery Engine output persisted per analyse run (Sprint 2D). Still written for backward compatibility.
+
+| Column | Notes |
+|---|---|
+| `organisation_id` | FK — RLS scoped |
+| `project_id` | FK to `projects` |
+| `source_notes` | Combined notes analysed |
+| `provider` | e.g. `rule-based`, `openai` |
+| `provider_version` | Provider semver |
+| `work_areas`, `facts`, `questions`, `constraints`, `trades` | JSONB arrays |
+
+### `discovery_runs` (canonical — Sprint 3F)
+
+Full discovery run log. Prepares for AI provider swap.
+
+| Column | Notes |
+|---|---|
+| `organisation_id` | FK — RLS scoped |
+| `project_id` | FK to `projects` |
+| `input_text` | Combined notes analysed |
+| `input_hash` | SHA-256 of `input_text` (dedup / audit) |
+| `provider` | Default `rule_based`; future `openai` |
+| `model` | AI model name when applicable |
+| `prompt_version` | Default `rule_based_v1` |
+| `raw_output` | Provider JSON (unmodified) |
+| `parsed_output` | Normalised `DiscoveryResult` JSON |
+| `status` | `pending`, `running`, `completed`, `failed` |
+| `error_message` | Failure detail |
+| `created_by` | FK to `profiles` |
+
+### `discovery_outputs` (structured — Sprint 3F)
+
+One row per discovered item. Linked to `discovery_runs`.
+
+| Column | Notes |
+|---|---|
+| `discovery_run_id` | FK to `discovery_runs` |
+| `output_type` | `work_area`, `fact`, `question`, `constraint`, `trade`, `risk`, `assumption` |
+| `output_key` | Stable key (e.g. constraint slug, fact key) |
+| `title` | Human label |
+| `content` | Full item JSONB |
+| `confidence` | `numeric(5,2)` — required for AI runs |
+| `status` | `pending`, `accepted`, `rejected`, `converted` |
+
+### Constraint persistence (Sprint 3F)
+
+User-selected constraints in Project Assistant:
+
+| Table | Role |
+|---|---|
+| `project_estimate_drivers` | Links selected `estimate_drivers` rows (when constraint maps to a system driver) |
+| `project_estimate_driver_values` | Stores `constraint_key` + JSON `value` (`selected`, `metres`, `severity`, `description`) |
+
+Loaded by `loadSavedProjectConstraints()`; fed into Quick Estimate via `buildQuickEstimateInput()`.
+
+#### Quick estimate finish level (Sprint 4A.1)
+
+`quick_estimates.quality_level` stores the builder-confirmed client budget / finish level:
+
+| Value | Meaning |
+|---|---|
+| `budget` | Budget / basic specification |
+| `standard` | Standard / mid-range (default assumptions) |
+| `premium` | Premium / high-end specification |
+| `unknown` | Not confirmed — wider estimate range |
+
+AI Discovery may detect finish level from notes (`qualityLevel` in discovery output), but the builder confirms or overrides in Project Assistant Step 4. Pricing remains grounded in rates/fallback benchmarks — AI does not invent final pricing.
+
+### Rate library (Sprint 3A)
+
+Organisation-scoped pricing — each contractor defines their own rates.
+
+#### `labour_rates`
+
+| Column | Notes |
+|---|---|
+| `organisation_id` | FK — RLS scoped |
+| `name` | e.g. Carpenter, Leading Hand |
+| `category` | Optional grouping |
+| `cost_rate`, `charge_rate` | numeric(12,2) |
+| `unit` | Default `hour` |
+| `is_active` | Soft disable |
+
+#### `subcontractor_rates`
+
+| Column | Notes |
+|---|---|
+| `trade` | e.g. Plumber, Electrician |
+| `description` | Optional |
+| `cost_rate`, `charge_rate` | Legacy typical values |
+| `low_cost_rate`, `typical_cost_rate`, `high_cost_rate` | Cost range |
+| `low_charge_rate`, `typical_charge_rate`, `high_charge_rate` | Charge range |
+| `default_confidence` | `low`, `medium`, `high` |
+| `unit` | Default `hour` |
+
+#### `material_rates`
+
+| Column | Notes |
+|---|---|
+| `material_name` | e.g. 90x45 Timber |
+| `category`, `supplier` | Optional |
+| `cost_rate`, `charge_rate` | numeric(12,2) |
+| `unit` | Default `each` |
+
+#### `package_rates`
+
+| Column | Notes |
+|---|---|
+| `package_name` | e.g. Timber Deck, Bathroom Standard |
+| `work_area_type` | Links to discovery work area types |
+| `base_cost`, `base_sell` | Legacy typical values |
+| `low_base_cost`, `typical_base_cost`, `high_base_cost` | Cost range |
+| `low_base_sell`, `typical_base_sell`, `high_base_sell` | Sell range |
+| `default_margin` | Optional percent |
+
+#### `organisation_pricing_settings`
+
+One row per organisation (PK = `organisation_id`).
+
+| Column | Default |
+|---|---|
+| `default_margin_percent` | 20 |
+| `contingency_percent` | 5 |
+| `gst_percent` | 15 |
+| `currency` | NZD |
 
 ---
 
@@ -286,6 +444,14 @@ Do not create these tables until their phase is active.
 - New capture flows must use `projects` → `project_scopes`.
 - Do not build new features on `site_visits`.
 - A future migration may archive or remove these tables.
+
+---
+
+## RLS helper function
+
+All policies use **`public.get_user_organisation_id()`** — defined in `001_initial_schema.sql` and re-asserted in `012_repair_live_schema.sql` for live databases.
+
+`public.current_org_id()` is a deprecated alias that delegates to `get_user_organisation_id()`. Do not use it in new policies.
 
 ---
 

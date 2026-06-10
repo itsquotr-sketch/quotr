@@ -110,7 +110,8 @@ create trigger site_visits_updated_at
   before update on public.site_visits
   for each row execute function public.set_updated_at();
 
--- Helper: get current user's organisation_id
+-- Helper: get current user's organisation_id (canonical RLS helper — use everywhere)
+-- All RLS policies must call get_user_organisation_id(), not current_org_id().
 create or replace function public.get_user_organisation_id()
 returns uuid
 language sql

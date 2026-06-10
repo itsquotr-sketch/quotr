@@ -40,6 +40,12 @@ export const projectSchema = z.object({
   initialNotes: z.string().optional(),
 });
 
+export const updateProjectSchema = projectSchema.extend({
+  status: projectStatusSchema,
+});
+
+export type UpdateProjectInput = z.infer<typeof updateProjectSchema>;
+
 export type ProjectInput = z.infer<typeof projectSchema>;
 
 export { DEFAULT_PROJECT_STATUS };

@@ -1,9 +1,10 @@
 "use client";
 
 import { useActionState, useState } from "react";
-import { Camera, FileUp, Plus, Trash2 } from "lucide-react";
+import { Camera, FileUp, Loader2, Plus, Trash2 } from "lucide-react";
 import { createScope } from "@/actions/scopes";
 import type { ScopeActionState } from "@/lib/validations/scope";
+import { PHOTO_ACCEPT, DOCUMENT_ACCEPT } from "@/lib/upload-validation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -38,6 +39,8 @@ export function AddScopeForm({ projectId, scopeTypes }: AddScopeFormProps) {
     { label: "", value: "", unit: "" },
   ]);
   const [photoPreview, setPhotoPreview] = useState<string[]>([]);
+  const [photoCount, setPhotoCount] = useState(0);
+  const [documentCount, setDocumentCount] = useState(0);
 
   function addMeasurement() {
     setMeasurements([...measurements, { label: "", value: "", unit: "" }]);
@@ -59,8 +62,27 @@ export function AddScopeForm({ projectId, scopeTypes }: AddScopeFormProps) {
 
   function handlePhotoChange(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files ?? []);
+    setPhotoCount(files.length);
     setPhotoPreview(files.map((f) => URL.createObjectURL(f)));
   }
+
+  function handleDocumentChange(e: React.ChangeEvent<HTMLInputElement>) {
+    setDocumentCount(Array.from(e.target.files ?? []).length);
+  }
+
+  const uploadParts: string[] = [];
+  if (photoCount > 0) {
+    uploadParts.push(`${photoCount} photo${photoCount === 1 ? "" : "s"}`);
+  }
+  if (documentCount > 0) {
+    uploadParts.push(
+      `${documentCount} document${documentCount === 1 ? "" : "s"}`
+    );
+  }
+  const pendingLabel =
+    uploadParts.length > 0
+      ? `Saving scope and uploading ${uploadParts.join(" and ")}…`
+      : "Saving scope…";
 
   const validMeasurements = measurements.filter(
     (m) => m.label.trim() && m.value.trim()
@@ -237,11 +259,12 @@ export function AddScopeForm({ projectId, scopeTypes }: AddScopeFormProps) {
           <input
             type="file"
             name="photos"
-            accept="image/*"
+            accept={PHOTO_ACCEPT}
             capture="environment"
             multiple
             className="hidden"
             onChange={handlePhotoChange}
+            disabled={pending}
           />
         </label>
         {photoPreview.length > 0 && (
@@ -269,9 +292,11 @@ export function AddScopeForm({ projectId, scopeTypes }: AddScopeFormProps) {
           <input
             type="file"
             name="documents"
-            accept=".pdf,.doc,.docx,image/*"
+            accept={DOCUMENT_ACCEPT}
             multiple
             className="hidden"
+            onChange={handleDocumentChange}
+            disabled={pending}
           />
         </label>
       </section>
@@ -283,7 +308,14 @@ export function AddScopeForm({ projectId, scopeTypes }: AddScopeFormProps) {
       )}
 
       <Button type="submit" className="w-full" size="lg" disabled={pending}>
-        {pending ? "Saving scope…" : "Add scope of work"}
+        {pending ? (
+          <>
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            {pendingLabel}
+          </>
+        ) : (
+          "Add scope of work"
+        )}
       </Button>
     </form>
   );

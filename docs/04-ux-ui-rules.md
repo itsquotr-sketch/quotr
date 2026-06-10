@@ -4,6 +4,142 @@
 
 ---
 
+## Product UX model
+
+Quotr is a **Rapid Estimating platform**. The primary user outcome is:
+
+> Help a contractor turn site notes into a profitable estimate in minutes.
+
+Every screen should support this workflow stage:
+
+```
+Project → Project Assistant → Work Areas → Targeted Questions → Quick Estimate → Client Qualification → Detailed Estimate → RFQs → Quote
+```
+
+UX priority: **speed on mobile (Project Assistant + Quick Estimate)**, **depth on desktop (Detailed Estimate, RFQs, quote)**.
+
+---
+
+## Project Assistant (primary project detail experience)
+
+Project Assistant is the unified user-facing module on the project detail page. It replaces separate Scope Builder and Quick Estimate data-entry flows. The user writes notes once here — they are not asked to re-enter them on a separate Quick Estimate page.
+
+| Step | User sees | Internal storage |
+|---|---|---|
+| 1. Tell Quotr what you know | Large textarea, Save Notes, Analyse Project | `project_scope_builder_inputs`, `quick_estimates.source_notes` |
+| 2. Confirm work areas | Identified work areas (accept / reject / edit) | `project_scope_suggestions` → `project_scopes` |
+| 3. Answer key questions | Targeted questions per confirmed work area | `scope_questions` / `scope_answers` |
+| 4. Things that make this job harder | Relevant constraints/drivers with optional follow-ups | `project_estimate_drivers`, `project_estimate_driver_values` |
+| 5. Quick estimate | Range, margin, trades, allowances, risks | `quick_estimates` |
+
+Use plain language in UI: **Work areas**, **Questions**, **Things that make this job harder**, **Quick estimate**, **Confirmed work areas** — not "scopes", "requirements matrix", or "scope objects".
+
+The `/projects/[id]/quick-estimate` route redirects to Project Assistant step 5 — it is review-only, not a second data-entry wizard.
+
+---
+
+## Estimating UX rules
+
+### New project form
+
+Do not ask for client brief or initial notes on project creation. Job notes belong in Project Assistant only.
+
+Fields: project title, client name, phone, email, site address, enquiry source, priority.
+
+Quick Estimate is the primary speed outcome. It appears on the project detail page immediately after capture.
+
+| Rule | Detail |
+|---|---|
+| Placement | Prominent on project detail — above the fold on mobile |
+| Speed | One tap to run or refresh after capture changes |
+| Output | Ballpark figure or range; never a blank form |
+| Confidence | Show confidence indicator and flagged gaps — not just a number |
+| Drivers | Show key drivers used (editable inline or via sheet) |
+| Constraints | Surface margin/rounding applied — builder must trust the number |
+| No AI prices | Never display "AI suggested price" — show "Calculated from your rates" |
+
+Mobile Quick Estimate flow:
+
+```
+Capture notes/photos → Tap "Quick Estimate" → See ballpark + gaps → Edit drivers if needed → Recalculate
+```
+
+Target: builder leaves site with a ballpark in under two minutes.
+
+### Quick Estimate vs Detailed Estimate (UI separation)
+
+These are distinct UI surfaces — do not merge them into one estimate view.
+
+| | Quick Estimate | Detailed Estimate |
+|---|---|---|
+| **Location** | Project detail (mobile + desktop) | Dedicated estimate workspace (desktop-primary) |
+| **Layout** | Summary card with range, drivers, confidence | Sections, line items, tables |
+| **Interaction** | Tap to recalculate; edit drivers | Add/edit line items; drag sections |
+| **Visual weight** | Large number, minimal chrome | Full workspace with subtotals |
+| **Mobile** | Primary surface | Read-only summary on mobile; full edit on desktop |
+
+Do not show line-item tables in the Quick Estimate card. Do not show a single ballpark as the only output of Detailed Estimate.
+
+### Estimate Drivers (UI)
+
+Drivers are structured inputs — not free text used for pricing.
+
+| Rule | Detail |
+|---|---|
+| Display | Label + value + unit; grouped by scope |
+| Edit | Inline edit or bottom sheet on mobile; form panel on desktop |
+| Source indicator | Badge: manual, measurement, AI-suggested (pending approval) |
+| AI suggestions | Show as "Suggested" with accept/dismiss — never auto-applied |
+| Validation | Required drivers flagged before Quick Estimate runs |
+| Recalculation | Driver change triggers visible "Recalculate" prompt or auto-refresh |
+
+### Constraints (UI)
+
+Constraints are organisation rules — not per-project settings (except exclusions noted in capture).
+
+| Rule | Detail |
+|---|---|
+| Visibility | Show applied constraints on estimate summary ("15% min margin applied") |
+| Violations | Warning badge — never silent |
+| Configuration | Settings / organisation area — not on every estimate screen |
+| Exclusions | Capture notes may reference exclusions; show in estimate as zero-cost line with note |
+
+### AI Question Engine (UI)
+
+AI improves inputs — it never shows prices.
+
+| Rule | Detail |
+|---|---|
+| Placement | Scope or project detail — "Questions" panel or card |
+| Questions | One question at a time on mobile; list on desktop |
+| Answers | Tap/select answers; free text only when necessary |
+| Suggestions | Scope items and drivers shown as cards with accept/dismiss |
+| No pricing | AI panels never contain dollar amounts |
+| Confidence | Per-question and per-driver confidence indicators |
+| Status | Show AI run status: idle, running, complete, needs review |
+
+### Client Qualification (UI)
+
+Lightweight go/no-go step between Quick Estimate and Detailed Estimate.
+
+| Rule | Detail |
+|---|---|
+| Trigger | After Quick Estimate completes — optional prompt |
+| Content | Budget fit indicator, scope clarity score, flagged gaps |
+| Actions | Proceed to Detailed Estimate, request more capture, mark on hold |
+| Mobile | Simple card with two or three actions — not a full form |
+
+### Pricing trust patterns
+
+Builders must trust every number. Apply these patterns everywhere estimates appear:
+
+1. **Traceability** — Tap a total to see drivers, rates, or line items behind it.
+2. **Builder ownership** — Copy reads "Your estimate" not "AI estimate".
+3. **Library source** — Show which rates/assemblies were used.
+4. **No black boxes** — Every dollar explainable in one tap.
+
+---
+
 ## Design system
 
 | Item | Value |
@@ -105,10 +241,10 @@ Two experiences, one codebase:
 | Label | Route | Purpose |
 |---|---|---|
 | Home | `/dashboard` | Dashboard |
-| Projects | `/projects` | Project list |
+| Projects | `/projects` | Project list + Quick Estimate access |
 | Capture | `/projects/new` | New project / enquiry |
-| Estimates | `/estimates` | Estimates |
-| More | `/settings` + sub-pages | Settings, rates, etc. |
+| Estimates | `/estimates` | Detailed Estimates (desktop-primary) |
+| More | `/settings` + sub-pages | Settings, rates, constraints, etc. |
 
 ### Main content (mobile)
 - Bottom padding: `pb-24` to prevent content sitting under nav
@@ -255,12 +391,22 @@ className="grid grid-cols-2 gap-3 md:grid-cols-4 md:gap-4"
 
 ## Placeholder pages
 
-Pages for unbuilt features (estimates, quotes, rates, assemblies, subcontractors, RFQs) use `PlaceholderPage` with:
+Pages for unbuilt features (Quick Estimate, Detailed Estimate, quotes, rates, assemblies, subcontractors, RFQs) use `PlaceholderPage` with:
 - PageHeader (title + description)
 - Dashed border empty state with icon
 - "Coming soon" message
 
 Do not build partial implementations on placeholder pages. Wait for the correct phase.
+
+| Feature | Phase |
+|---|---|
+| Quick Estimate Engine | Phase 2 |
+| Rates library | Phase 3 |
+| Assemblies library | Phase 4 |
+| Detailed Estimate Engine | Phase 5 |
+| AI Question Engine | Phase 6 |
+| RFQs | Phase 7 |
+| Quote Builder | Phase 8 |
 
 ---
 

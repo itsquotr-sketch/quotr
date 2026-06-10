@@ -4,7 +4,7 @@ import type { Database } from "@/types/database";
 
 export function createClient() {
   return createBrowserClient<Database>(
-    env.supabaseUrl,
-    env.supabaseAnonKey
+    env.NEXT_PUBLIC_SUPABASE_URL,
+    env.NEXT_PUBLIC_SUPABASE_ANON_KEY
   );
 }

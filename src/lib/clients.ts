@@ -1,6 +1,16 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database";
 
+function normalizeWhitespace(value: string): string {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+function normalizeOptional(value?: string | null): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  return trimmed || null;
+}
+
 export async function findOrCreateClient(
   supabase: SupabaseClient<Database>,
   organisationId: string,
@@ -8,7 +18,9 @@ export async function findOrCreateClient(
   phone?: string | null,
   email?: string | null
 ): Promise<string> {
-  const trimmedName = name.trim();
+  const trimmedName = normalizeWhitespace(name);
+  const normalizedPhone = normalizeOptional(phone);
+  const normalizedEmail = normalizeOptional(email)?.toLowerCase() ?? null;
 
   const { data: existing } = await supabase
     .from("clients")
@@ -19,8 +31,8 @@ export async function findOrCreateClient(
 
   if (existing) {
     const updates: { phone?: string; email?: string } = {};
-    if (phone && !existing.phone) updates.phone = phone;
-    if (email && !existing.email) updates.email = email;
+    if (normalizedPhone && !existing.phone) updates.phone = normalizedPhone;
+    if (normalizedEmail && !existing.email) updates.email = normalizedEmail;
 
     if (Object.keys(updates).length > 0) {
       await supabase.from("clients").update(updates).eq("id", existing.id);
@@ -33,8 +45,8 @@ export async function findOrCreateClient(
     .insert({
       organisation_id: organisationId,
       name: trimmedName,
-      phone: phone ?? null,
-      email: email ?? null,
+      phone: normalizedPhone,
+      email: normalizedEmail,
     })
     .select("id")
     .single();

@@ -1,6 +1,7 @@
 import { DesktopSidebar } from "@/components/layout/desktop-sidebar";
 import { MobileBottomNav } from "@/components/layout/mobile-bottom-nav";
 import { PageContainer } from "@/components/layout/page-container";
+import { Toaster } from "@/components/ui/sonner";
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -16,6 +17,7 @@ export function AppShell({ children }: AppShellProps) {
       </div>
 
       <MobileBottomNav />
+      <Toaster richColors position="top-center" />
     </div>
   );
 }

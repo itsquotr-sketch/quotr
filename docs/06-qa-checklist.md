@@ -146,10 +146,69 @@ Test at viewport width < 768px (or device emulation):
 
 ### Project detail
 - [ ] `/projects/[id]` shows project metadata
-- [ ] Scopes list shown
-- [ ] "Add scope" action available
+- [ ] **Project Assistant** card is visually dominant (single unified card)
+- [ ] No separate Quick Estimate or Scope Builder cards on project page
+- [ ] Save Notes and Analyse Project work from Project Assistant
+- [ ] Saved notes list supports edit and delete
+- [ ] Identified work areas show after analyse (accept / reject / edit before accepting)
+- [ ] Accepting work area creates confirmed work area and seeds questions
+- [ ] Targeted questions section shows draft or stored questions
+- [ ] Quick estimate summary inside Project Assistant (stored values or placeholder)
+- [ ] Confirmed Work Areas section below Project Assistant
+- [ ] "Add work area" action available
 - [ ] Invalid project ID shows not-found page
 - [ ] Project from another organisation returns not-found or redirect
+
+### Project Assistant (5-step inline flow)
+- [ ] Step 1: Tell Quotr what you know — textarea, Save Notes, Analyse Project
+- [ ] Step 2: Confirm work areas — accept / reject / edit identified work areas
+- [ ] Step 3: Answer key questions — scope-specific questions for confirmed work areas only
+- [ ] Step 4: Things that make this job harder — relevant constraints with follow-ups (e.g. carting metres)
+- [ ] Step 5: Quick estimate result — range, margin, trades, allowances, risks
+- [ ] `/projects/[id]/quick-estimate` redirects to Project Assistant (no duplicate notes entry)
+- [ ] Plain language: Work areas, Questions, Things that make this job harder, Quick estimate
+- [ ] Mobile: step nav, large textarea, clear buttons
+- [ ] No separate Quick Estimate data-entry wizard on project page
+
+### Discovery Engine (Sprint 2D)
+- [ ] Analyse Project runs discovery and persists to `project_discovery_runs`
+- [ ] Discovery summary shows work areas, facts, constraints, questions, trades
+- [ ] Facts and constraints are separate (facts = measurements; constraints = site difficulty)
+- [ ] Questions grouped by work area in discovery summary
+- [ ] Accepting work area seeds `scope_questions` automatically
+- [ ] Likely trades shown per work area (rule-based)
+- [ ] Discovery summary visible before Quick Estimate (steps 2–5)
+- [ ] No OpenAI calls in discovery flow
+
+### Rate library (Sprint 3A)
+- [ ] Migration `016_rate_library_foundation.sql` applied
+- [ ] `/rates` shows Labour, Subcontractors, Materials, Packages tabs
+- [ ] Create, edit, delete works for each rate type
+- [ ] Search filters rates within each tab
+- [ ] Pricing settings: margin 20%, contingency 5%, GST 15%, NZD defaults
+- [ ] Pricing settings save and persist
+- [ ] All rate tables org-scoped via RLS
+- [ ] Cost engine placeholder exists (`src/lib/cost-engine/`) — no real pricing yet
+- [ ] Subcontractor rates support low / typical / high cost and charge columns
+- [ ] Package rates support low / typical / high cost and sell columns
+- [ ] Legacy `cost_rate` / `base_cost` sync to typical values on save
+
+### Work area deletion (Sprint 3A update)
+- [ ] Delete button on each confirmed work area card (subtle, with confirmation dialog)
+- [ ] Deleting removes scope_questions, answers, measurements (cascade)
+- [ ] Storage files deleted before DB scope row; abort if storage fails
+- [ ] Linked estimate_items deleted explicitly
+- [ ] Converted scope suggestion set to `rejected` when work area deleted
+- [ ] Success toast shown after deletion
+
+### Project Assistant (Sprint 2C — superseded by 2D)
+- [ ] Plain language: Work Areas, Questions, Quick Estimate, Confirmed Work Areas
+- [ ] Primary CTA: Analyse Project
+- [ ] Mobile: large textarea, clear buttons, no clutter
+- [ ] Desktop: full-width assistant card above confirmed work areas
+- [ ] Included trades shown (rule-based) when work areas identified
+- [ ] Allowances and risks show placeholders until calculation ready
+- [ ] ~~Quick estimate wizard still accessible via link inside assistant~~ (removed — inline flow only)
 
 ### Edit project (when built)
 - [ ] Can update project fields
@@ -262,6 +321,23 @@ npm run lint
 - [ ] No unintended files staged (`.env`, `node_modules`, `.next`)
 - [ ] Migration files included if schema changed
 - [ ] `src/types/database.ts` updated if schema changed
+
+---
+
+## Sprint 2A completion gate
+
+Sprint 2A is complete when all of the following pass:
+
+- [ ] All **Global checks** pass
+- [ ] Migrations 009–011 applied to remote Supabase (see `docs/MIGRATION_STEPS.md`)
+- [ ] Edit project saves all fields and persists after refresh
+- [ ] Edit scope saves all fields and persists after refresh
+- [ ] Delete photo removes from storage and UI (with confirmation)
+- [ ] Delete document removes from storage and UI (with confirmation)
+- [ ] Dashboard metrics show count() values (not zero when data exists)
+- [ ] Signed URLs work for 24 hours
+- [ ] No `jobs` / `job_id` in database or code
+- [ ] All **Build checks** pass
 
 ---
 

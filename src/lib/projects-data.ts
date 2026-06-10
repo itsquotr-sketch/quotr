@@ -1,8 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import type { Database, Job } from "@/types/database";
-
-/** Supabase table name — UI label is "Project". */
-export const PROJECTS_TABLE = "jobs" as const;
+import type { Database, Project } from "@/types/database";
 
 export type ProjectClient = {
   name: string;
@@ -29,7 +26,7 @@ export type ProjectListRow = {
   project_scopes: { count: number }[];
 };
 
-export type ProjectDetailRow = Job & {
+export type ProjectDetailRow = Project & {
   clients: ProjectClient | null;
 };
 
@@ -74,7 +71,7 @@ export async function listProjects(
   organisationId: string
 ) {
   return supabase
-    .from(PROJECTS_TABLE)
+    .from("projects")
     .select(PROJECT_LIST_SELECT)
     .eq("organisation_id", organisationId)
     .order("created_at", { ascending: false });
@@ -86,7 +83,7 @@ export async function getProjectById(
   organisationId: string
 ) {
   return supabase
-    .from(PROJECTS_TABLE)
+    .from("projects")
     .select(PROJECT_DETAIL_SELECT)
     .eq("id", projectId)
     .eq("organisation_id", organisationId)

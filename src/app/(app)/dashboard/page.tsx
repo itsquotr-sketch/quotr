@@ -20,12 +20,12 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  PROJECT_STATUSES,
-  isActiveProjectStatus,
-  labelFor,
-} from "@/lib/constants/projects";
+import { PROJECT_STATUSES, labelFor } from "@/lib/constants/projects";
 import { requireOrganisation } from "@/lib/auth";
+import {
+  DASHBOARD_METRIC_LABELS,
+  getDashboardMetrics,
+} from "@/lib/dashboard-metrics";
 import { clientName, listProjects } from "@/lib/projects-data";
 import { createClient } from "@/lib/supabase/server";
 import { formatDate } from "@/lib/utils";
@@ -33,30 +33,18 @@ import { formatDate } from "@/lib/utils";
 export default async function DashboardPage() {
   const { profile } = await requireOrganisation();
   const supabase = await createClient();
+  const organisationId = profile.organisation_id!;
 
-  const { data: projects, error } = await listProjects(
-    supabase,
-    profile.organisation_id!
-  );
+  const [{ data: projects, error }, metrics] = await Promise.all([
+    listProjects(supabase, organisationId),
+    getDashboardMetrics(supabase, organisationId),
+  ]);
 
   if (error) {
     console.error("[DashboardPage] Failed to load projects:", error);
   }
 
-  const allProjects = projects ?? [];
-  const recentProjects = allProjects.slice(0, 5);
-  const activeCount = allProjects.filter((p) =>
-    isActiveProjectStatus(p.status)
-  ).length;
-  const estimatesInProgress = allProjects.filter(
-    (p) => p.status === "estimating"
-  ).length;
-  const waitingOnSubbies = allProjects.filter(
-    (p) => p.status === "waiting_on_subbies"
-  ).length;
-  const quotesReady = allProjects.filter(
-    (p) => p.status === "ready_to_quote"
-  ).length;
+  const recentProjects = (projects ?? []).slice(0, 5);
 
   const displayName =
     profile.full_name ||
@@ -64,26 +52,26 @@ export default async function DashboardPage() {
 
   const metricCards = [
     {
-      label: "Active Projects",
-      value: activeCount,
+      label: DASHBOARD_METRIC_LABELS.activeProjects,
+      value: metrics.activeProjects,
       href: "/projects",
       icon: Briefcase,
     },
     {
-      label: "Estimates in Progress",
-      value: estimatesInProgress,
-      href: "/estimates",
+      label: DASHBOARD_METRIC_LABELS.quickEstimates,
+      value: metrics.quickEstimates,
+      href: "/projects",
       icon: Calculator,
     },
     {
-      label: "Waiting on Subbies",
-      value: waitingOnSubbies,
-      href: "/projects",
-      icon: Users,
+      label: DASHBOARD_METRIC_LABELS.detailedEstimates,
+      value: metrics.detailedEstimates,
+      href: "/estimates",
+      icon: ClipboardList,
     },
     {
-      label: "Quotes Ready",
-      value: quotesReady,
+      label: DASHBOARD_METRIC_LABELS.quotesReady,
+      value: metrics.quotesReady,
       href: "/quotes",
       icon: FileText,
     },
