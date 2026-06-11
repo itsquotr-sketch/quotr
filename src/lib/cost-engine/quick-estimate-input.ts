@@ -2,6 +2,7 @@ import type { QuickEstimateBudgetFit, QuickEstimateConfidenceLevel } from "@/lib
 import type { QualityLevel } from "@/lib/constants/quality-level";
 import type { ScopeQuestionForMissing } from "@/lib/cost-engine/build-missing-information";
 import type { EstimateQualityFactor } from "@/lib/cost-engine/estimate-quality";
+import type { EstimateTrace } from "@/lib/cost-engine/estimate-trace";
 import type { RangeQuality } from "@/lib/cost-engine/range-quality";
 import type { DiscoveryResult } from "@/lib/discovery";
 import { getAnswerValue, normalizeQuestionKey } from "@/lib/question-keys";
@@ -10,7 +11,14 @@ import {
   parseScopeAnswer,
 } from "@/lib/scope-answer-format";
 import { isAnswered } from "@/lib/scope-answer-state";
-import type { PackageRate, Project, QuickEstimate } from "@/types/database";
+import type {
+  LabourRate,
+  MaterialRate,
+  PackageRate,
+  Project,
+  QuickEstimate,
+  SubcontractorRate,
+} from "@/types/database";
 
 export type QuickEstimateWorkAreaInput = {
   scopeId: string;
@@ -37,7 +45,12 @@ export type QuickEstimateInput = {
   workAreas: QuickEstimateWorkAreaInput[];
   constraints: QuickEstimateConstraintInput[];
   packageRates: PackageRate[];
+  labourRates: LabourRate[];
+  materialRates: MaterialRate[];
+  subcontractorRates: SubcontractorRate[];
   targetMarginPercent: number;
+  contingencyPercent: number;
+  sourceNotesLength?: number;
   discovery: DiscoveryResult | null;
   questionsAnswered: number;
   questionsTotal: number;
@@ -51,11 +64,17 @@ export type QuickEstimateOutput = {
   estimatedCostLow: number | null;
   estimatedCostHigh: number | null;
   estimatedCostTypical: number | null;
+  centralEstimate: number | null;
   recommendedSellLow: number | null;
   recommendedSellHigh: number | null;
   targetMarginPercent: number;
+  contingencyPercent: number;
   expectedMarginPercent: number | null;
   confidenceLevel: QuickEstimateConfidenceLevel;
+  confidenceScore: number;
+  confidenceLevelLabel: string;
+  confidenceReasons: string[];
+  questionsToHigh: number;
   budgetFit: QuickEstimateBudgetFit;
   includedTrades: string[];
   inputsUsed: string[];
@@ -67,6 +86,7 @@ export type QuickEstimateOutput = {
   qualityLevel: QualityLevel;
   qualityLevelNote: string | null;
   ratesSource: "saved" | "fallback";
+  rateSourceDetail: string;
   usedPackageRates: boolean;
   templatesUsed: string[];
   keyFactsUsed: string[];
@@ -75,10 +95,13 @@ export type QuickEstimateOutput = {
   rangeQualityLabel: string;
   rangeQualityReason: string | null;
   rangeWidthPercent: number | null;
+  rangeFactor: number | null;
   tightenSuggestions: string[];
   rangeLowDrivers: string[];
   rangeHighDrivers: string[];
   qualityFactors: EstimateQualityFactor[];
+  estimateTrace: EstimateTrace;
+  rangeChangedMessage: string | null;
 };
 
 export function buildAnswersMap(

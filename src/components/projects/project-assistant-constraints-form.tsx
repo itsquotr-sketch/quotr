@@ -1,19 +1,19 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useActionState, useEffect, useState } from "react";
-import { saveAssistantConstraints } from "@/actions/project-assistant";
-import { Button } from "@/components/ui/button";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { autoSaveAssistantConstraints } from "@/actions/project-assistant";
+import { useEstimateUpdate } from "@/components/projects/estimate-update-context";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { useDebounce } from "@/hooks/use-debounce";
 import {
   QUALITY_LEVEL_OPTIONS,
   normaliseQualityLevel,
   type QualityLevel,
 } from "@/lib/constants/quality-level";
 import type { AssistantConstraint } from "@/lib/project-assistant-constraints";
-import type { ProjectAssistantActionState } from "@/actions/project-assistant";
 import { cn } from "@/lib/utils";
 
 interface ProjectAssistantConstraintsFormProps {
@@ -38,6 +38,7 @@ export function ProjectAssistantConstraintsForm({
   detectedQualityReason,
 }: ProjectAssistantConstraintsFormProps) {
   const router = useRouter();
+  const { markSaving, markUpdating, markSaved } = useEstimateUpdate();
   const [selected, setSelected] = useState<Set<string>>(
     new Set(selectedSlugs)
   );
@@ -49,6 +50,8 @@ export function ProjectAssistantConstraintsForm({
   const [finishLevel, setFinishLevel] = useState<QualityLevel>(
     normaliseQualityLevel(qualityLevel)
   );
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const skipAutoSaveRef = useRef(true);
 
   useEffect(() => {
     setSelected(new Set(selectedSlugs));
@@ -60,21 +63,54 @@ export function ProjectAssistantConstraintsForm({
     setFinishLevel(normaliseQualityLevel(qualityLevel));
   }, [selectedSlugs, followUpValues, qualityLevel]);
 
-  const boundAction = saveAssistantConstraints.bind(
-    null,
-    projectId,
-    quickEstimateId
-  );
-  const [state, formAction, pending] = useActionState(
-    boundAction,
-    {} as ProjectAssistantActionState
+  const savePayload = useDebounce(
+    {
+      slugs: Array.from(selected),
+      finishLevel,
+      followUps,
+    },
+    500
   );
 
-  useEffect(() => {
-    if (state.success) {
-      router.refresh();
+  const persist = useCallback(async () => {
+    setSaveError(null);
+    markSaving();
+    const result = await autoSaveAssistantConstraints(
+      projectId,
+      quickEstimateId,
+      {
+        constraintSlugs: savePayload.slugs,
+        qualityLevel: savePayload.finishLevel,
+        followUps: savePayload.followUps,
+      }
+    );
+    if (result.error) {
+      setSaveError(result.error);
+      return;
     }
-  }, [state.success, router]);
+    markUpdating();
+    router.refresh();
+    markSaved();
+  }, [
+    projectId,
+    quickEstimateId,
+    savePayload,
+    router,
+    markSaving,
+    markUpdating,
+    markSaved,
+  ]);
+
+  const persistRef = useRef(persist);
+  persistRef.current = persist;
+
+  useEffect(() => {
+    if (skipAutoSaveRef.current) {
+      skipAutoSaveRef.current = false;
+      return;
+    }
+    void persistRef.current();
+  }, [savePayload]);
 
   function toggle(slug: string) {
     setSelected((prev) => {
@@ -86,65 +122,51 @@ export function ProjectAssistantConstraintsForm({
   }
 
   return (
-    <form action={formAction} className="space-y-4">
-      {Array.from(selected).map((slug) => (
-        <input key={slug} type="hidden" name="constraintSlugs" value={slug} />
-      ))}
-      <input type="hidden" name="qualityLevel" value={finishLevel} />
-
+    <div className="space-y-4">
       <div className="space-y-2 rounded-lg border bg-muted/20 p-3">
         <div>
-          <Label htmlFor="qualityLevel" className="text-sm font-medium">
-            Finish level
-          </Label>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            Affects material and labour allowances in your estimate.
+          <Label className="text-sm font-medium">Finish level</Label>
+          <p className="text-xs text-muted-foreground">
+            Saves automatically — adjusts material and labour allowances.
           </p>
         </div>
 
         {detectedQualityLevel &&
           detectedQualityLevel !== "unknown" &&
           finishLevel === "unknown" && (
-            <p className="text-sm text-muted-foreground">
-              Detected from notes:{" "}
-              <span className="font-medium text-foreground">
-                {
-                  QUALITY_LEVEL_OPTIONS.find(
-                    (option) => option.value === detectedQualityLevel
-                  )?.label
-                }
-              </span>
+            <p className="text-xs text-muted-foreground">
+              From notes:{" "}
+              {
+                QUALITY_LEVEL_OPTIONS.find(
+                  (o) => o.value === detectedQualityLevel
+                )?.label
+              }
               {detectedQualityReason ? ` — ${detectedQualityReason}` : ""}
             </p>
           )}
 
         <div className="flex flex-wrap gap-1.5">
-          {QUALITY_LEVEL_OPTIONS.map((option) => {
-            const isSelected = finishLevel === option.value;
-            return (
-              <button
-                key={option.value}
-                type="button"
-                onClick={() => setFinishLevel(option.value)}
-                className={cn(
-                  "rounded-full border px-3 py-1.5 text-xs font-medium transition-colors",
-                  isSelected
-                    ? "border-primary bg-primary text-primary-foreground"
-                    : "border-border bg-background hover:bg-muted"
-                )}
-              >
-                {option.label}
-              </button>
-            );
-          })}
+          {QUALITY_LEVEL_OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              onClick={() => setFinishLevel(option.value)}
+              className={cn(
+                "rounded-full border px-3 py-1.5 text-xs font-medium transition-colors",
+                finishLevel === option.value
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-border hover:bg-muted"
+              )}
+            >
+              {option.label}
+            </button>
+          ))}
         </div>
       </div>
 
       {constraints.length > 0 && (
         <div className="space-y-2">
-          <p className="text-xs text-muted-foreground">
-            Site conditions — only shown when not already answered above.
-          </p>
+          <p className="text-xs text-muted-foreground">Site conditions</p>
           <div className="grid gap-2 sm:grid-cols-2">
             {constraints.map((constraint) => {
               const isSelected = selected.has(constraint.slug);
@@ -165,14 +187,12 @@ export function ProjectAssistantConstraintsForm({
 
                   {isSelected && constraint.followUp && (
                     <div className="px-1">
-                      <Label htmlFor={`followUp_${constraint.slug}`}>
+                      <Label className="text-xs">
                         {constraint.followUp.label}
                       </Label>
-                      <div className="mt-1 flex items-center gap-2">
+                      <div className="mt-1">
                         {constraint.followUp.inputType === "select" ? (
                           <select
-                            id={`followUp_${constraint.slug}`}
-                            name={`followUp_${constraint.slug}`}
                             value={followUps[constraint.slug] ?? "typical"}
                             onChange={(e) =>
                               setFollowUps((prev) => ({
@@ -180,18 +200,16 @@ export function ProjectAssistantConstraintsForm({
                                 [constraint.slug]: e.target.value,
                               }))
                             }
-                            className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-base"
+                            className="flex h-8 w-full rounded-md border bg-background px-2 text-sm"
                           >
-                            {(constraint.followUp.options ?? []).map((option) => (
-                              <option key={option.value} value={option.value}>
-                                {option.label}
+                            {(constraint.followUp.options ?? []).map((o) => (
+                              <option key={o.value} value={o.value}>
+                                {o.label}
                               </option>
                             ))}
                           </select>
                         ) : constraint.followUp.inputType === "text" ? (
                           <Textarea
-                            id={`followUp_${constraint.slug}`}
-                            name={`followUp_${constraint.slug}`}
                             value={followUps[constraint.slug] ?? ""}
                             onChange={(e) =>
                               setFollowUps((prev) => ({
@@ -200,16 +218,13 @@ export function ProjectAssistantConstraintsForm({
                               }))
                             }
                             rows={2}
-                            className="text-base"
+                            className="text-sm"
                           />
                         ) : (
-                          <>
+                          <div className="flex items-center gap-2">
                             <Input
-                              id={`followUp_${constraint.slug}`}
-                              name={`followUp_${constraint.slug}`}
                               type="number"
                               min={0}
-                              step="any"
                               value={followUps[constraint.slug] ?? ""}
                               onChange={(e) =>
                                 setFollowUps((prev) => ({
@@ -217,14 +232,14 @@ export function ProjectAssistantConstraintsForm({
                                   [constraint.slug]: e.target.value,
                                 }))
                               }
-                              className="text-base"
+                              className="h-8 text-sm"
                             />
                             {constraint.followUp.unit && (
-                              <span className="shrink-0 text-sm text-muted-foreground">
+                              <span className="text-xs text-muted-foreground">
                                 {constraint.followUp.unit}
                               </span>
                             )}
-                          </>
+                          </div>
                         )}
                       </div>
                     </div>
@@ -236,16 +251,9 @@ export function ProjectAssistantConstraintsForm({
         </div>
       )}
 
-      {state.message && (
-        <p className="text-xs text-primary">{state.message}</p>
+      {saveError && (
+        <p className="text-xs text-destructive">{saveError}</p>
       )}
-      {state.error && (
-        <p className="text-xs text-destructive">{state.error}</p>
-      )}
-
-      <Button type="submit" disabled={pending} size="sm" className="w-full sm:w-auto">
-        {pending ? "Saving…" : "Save finish & site conditions"}
-      </Button>
-    </form>
+    </div>
   );
 }

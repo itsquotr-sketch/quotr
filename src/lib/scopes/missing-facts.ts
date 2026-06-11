@@ -1,0 +1,169 @@
+import { getAnswerValue, normalizeQuestionKey } from "@/lib/question-keys";
+import {
+  getAllFactsForScope,
+  getScopeByWorkAreaType,
+} from "@/lib/scopes/index";
+import type { ScopeFactDefinition } from "@/lib/scopes/types";
+import {
+  isAnswered,
+  isAnsweredSelect,
+  type AnswerInputType,
+} from "@/lib/scope-answer-state";
+
+export type FactAnswerContext = {
+  answerRaw: string | null;
+  answerSource: string | null;
+};
+
+export function factIsAnswered(
+  fact: ScopeFactDefinition,
+  context: FactAnswerContext
+): boolean {
+  const inputType: AnswerInputType =
+    fact.type === "number"
+      ? "number"
+      : fact.type === "select"
+        ? "select"
+        : "text";
+
+  if (inputType === "select" && fact.options?.length) {
+    return isAnsweredSelect(
+      context.answerRaw,
+      context.answerSource,
+      fact.options
+    );
+  }
+
+  return isAnswered(context.answerRaw, context.answerSource, {
+    inputType,
+    requiresPositiveNumber: inputType === "number",
+    allowedValues:
+      inputType === "select" && fact.options?.length
+        ? fact.options.map((o) => o.value)
+        : undefined,
+  });
+}
+
+export function factIsAnsweredFromMap(
+  fact: ScopeFactDefinition,
+  answers: Record<string, string>
+): boolean {
+  const value = getAnswerValue(answers, fact.key);
+  if (!value || value === "unknown") return false;
+  if (fact.type === "number") {
+    const num = Number(value);
+    return Number.isFinite(num) && num > 0;
+  }
+  if (fact.type === "select" && fact.options?.length) {
+    return fact.options.some((o) => o.value === value);
+  }
+  return value.trim().length > 0;
+}
+
+export function getKnownFactsForScope(
+  workAreaTypeKey: string,
+  answers: Record<string, string>
+): ScopeFactDefinition[] {
+  const scope = getScopeByWorkAreaType(workAreaTypeKey);
+  if (!scope) return [];
+  return getAllFactsForScope(scope).filter((fact) =>
+    factIsAnsweredFromMap(fact, answers)
+  );
+}
+
+export function getMissingRequiredFacts(
+  workAreaTypeKey: string,
+  answers: Record<string, string>
+): ScopeFactDefinition[] {
+  const scope = getScopeByWorkAreaType(workAreaTypeKey);
+  if (!scope) return [];
+
+  return scope.requiredFacts.filter(
+    (fact) => !factIsAnsweredFromMap(fact, answers)
+  );
+}
+
+export function getMissingOptionalHighImpact(
+  workAreaTypeKey: string,
+  answers: Record<string, string>
+): ScopeFactDefinition[] {
+  const scope = getScopeByWorkAreaType(workAreaTypeKey);
+  if (!scope) return [];
+
+  const highImpact = new Set(scope.confidenceRules.highImpactOptionalKeys);
+  return scope.optionalFacts.filter(
+    (fact) =>
+      highImpact.has(fact.key) &&
+      (fact.affectsEstimate || fact.affectsConfidence) &&
+      !factIsAnsweredFromMap(fact, answers)
+  );
+}
+
+/** Single source: required facts minus known facts (labels only). */
+export function buildScopeMissingLabels(
+  workAreas: { name: string; workAreaTypeKey: string; answers: Record<string, string> }[]
+): string[] {
+  const missing: string[] = [];
+
+  for (const area of workAreas) {
+    if (!getScopeByWorkAreaType(area.workAreaTypeKey)) continue;
+
+    for (const fact of getMissingRequiredFacts(
+      area.workAreaTypeKey,
+      area.answers
+    )) {
+      missing.push(fact.questionText || fact.label);
+    }
+  }
+
+  return [...new Set(missing)];
+}
+
+/** Optional high-impact gaps for "what would tighten" only. */
+export function buildScopeTightenLabels(
+  workAreas: { name: string; workAreaTypeKey: string; answers: Record<string, string> }[]
+): string[] {
+  const items: string[] = [];
+
+  for (const area of workAreas) {
+    if (!getScopeByWorkAreaType(area.workAreaTypeKey)) continue;
+
+    for (const fact of getMissingOptionalHighImpact(
+      area.workAreaTypeKey,
+      area.answers
+    )) {
+      items.push(fact.questionText || fact.label);
+    }
+  }
+
+  return [...new Set(items)];
+}
+
+export function questionKeyMatchesScopeFact(
+  questionKey: string | null | undefined,
+  workAreaTypeKey: string
+): boolean {
+  const key = normalizeQuestionKey(questionKey);
+  if (!key) return false;
+  const scope = getScopeByWorkAreaType(workAreaTypeKey);
+  if (!scope) return false;
+  return getAllFactsForScope(scope).some((f) => f.key === key);
+}
+
+export function isScopeSupportedWorkArea(workAreaTypeKey: string): boolean {
+  return Boolean(getScopeByWorkAreaType(workAreaTypeKey));
+}
+
+export function isFactKnownForScope(
+  workAreaTypeKey: string,
+  questionKey: string | null | undefined,
+  answers: Record<string, string>
+): boolean {
+  const key = normalizeQuestionKey(questionKey);
+  if (!key) return false;
+  const scope = getScopeByWorkAreaType(workAreaTypeKey);
+  if (!scope) return false;
+  const fact = getAllFactsForScope(scope).find((f) => f.key === key);
+  if (!fact) return false;
+  return factIsAnsweredFromMap(fact, answers);
+}

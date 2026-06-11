@@ -5,8 +5,6 @@ import {
   type SavedProjectConstraint,
 } from "@/lib/project-constraints-load";
 
-type CostBand = { low: number; typical: number; high: number };
-
 const CONSTRAINT_PERCENT: Record<string, number> = {
   "tight-access": 0.1,
   "poor-parking": 0.05,
@@ -47,11 +45,11 @@ function formatPercentModifier(percent: number): string {
 }
 
 function applyCartingDistance(
-  band: CostBand,
+  central: number,
   constraint: QuickEstimateConstraintInput,
   answers: Record<string, string>,
   constraintsApplied: string[]
-): CostBand {
+): number {
   const metres =
     constraint.metres ??
     parseNumber(getAnswerValue(answers, "retaining_wall.carting_distance_m")) ??
@@ -66,9 +64,7 @@ function applyCartingDistance(
     percent = 0.05;
   }
 
-  if (percent <= 0) {
-    return band;
-  }
+  if (percent <= 0) return central;
 
   const modifier = formatPercentModifier(percent);
   const label =
@@ -77,32 +73,22 @@ function applyCartingDistance(
       : `${constraint.label} ${modifier}`;
 
   constraintsApplied.push(label);
-
-  const multiplier = 1 + percent;
-  return {
-    low: Math.round(band.low * multiplier),
-    typical: Math.round(band.typical * multiplier),
-    high: Math.round(band.high * multiplier),
-  };
+  return Math.round(central * (1 + percent));
 }
 
-export function applyConstraintsToBand(
-  band: CostBand,
+/** Applies constraint adjustments to a single central estimate (not a range). */
+export function applyConstraintsToCentral(
+  centralEstimate: number,
   constraints: QuickEstimateConstraintInput[],
   answers: Record<string, string>
-): { band: CostBand; constraintsApplied: string[] } {
-  let current = { ...band };
+): { centralEstimate: number; constraintsApplied: string[] } {
+  let current = centralEstimate;
   const constraintsApplied: string[] = [];
 
   for (const constraint of constraints) {
     const percent = CONSTRAINT_PERCENT[constraint.slug];
     if (percent) {
-      const multiplier = 1 + percent;
-      current = {
-        low: Math.round(current.low * multiplier),
-        typical: Math.round(current.typical * multiplier),
-        high: Math.round(current.high * multiplier),
-      };
+      current = Math.round(current * (1 + percent));
       constraintsApplied.push(
         formatConstraintSummaryLine(
           constraint as SavedProjectConstraint,
@@ -128,11 +114,7 @@ export function applyConstraintsToBand(
     if (constraint.slug === "retaining-engineering-risk") {
       const severity = resolveSeverity(constraint);
       const allowance = ENGINEERING_ALLOWANCE[severity];
-      current = {
-        low: current.low + allowance,
-        typical: current.typical + allowance,
-        high: current.high + allowance,
-      };
+      current += allowance;
       constraintsApplied.push(
         formatConstraintSummaryLine(
           { ...constraint, severity },
@@ -145,11 +127,7 @@ export function applyConstraintsToBand(
     if (constraint.slug === "rubbish-removal-required") {
       const severity = resolveSeverity(constraint);
       const allowance = RUBBISH_ALLOWANCE[severity];
-      current = {
-        low: current.low + allowance,
-        typical: current.typical + allowance,
-        high: current.high + allowance,
-      };
+      current += allowance;
       constraintsApplied.push(
         formatConstraintSummaryLine(
           { ...constraint, severity },
@@ -159,7 +137,24 @@ export function applyConstraintsToBand(
     }
   }
 
-  return { band: current, constraintsApplied };
+  return { centralEstimate: current, constraintsApplied };
+}
+
+/** @deprecated Use applyConstraintsToCentral — kept for legacy imports */
+export function applyConstraintsToBand(
+  band: { low: number; typical: number; high: number },
+  constraints: QuickEstimateConstraintInput[],
+  answers: Record<string, string>
+): { band: { low: number; typical: number; high: number }; constraintsApplied: string[] } {
+  const { centralEstimate, constraintsApplied } = applyConstraintsToCentral(
+    band.typical,
+    constraints,
+    answers
+  );
+  return {
+    band: { low: centralEstimate, typical: centralEstimate, high: centralEstimate },
+    constraintsApplied,
+  };
 }
 
 function formatCurrency(amount: number): string {

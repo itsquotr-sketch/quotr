@@ -1,8 +1,9 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { revalidateProjectAssistant } from "@/lib/assistant-v2/revalidate";
 import { requireOrganisation } from "@/lib/auth";
 import { runProjectDiscovery } from "@/lib/ai/discovery";
+import { resetAssistantState } from "@/lib/assistant-v2/reset-assistant";
 import { recalculateQuickEstimate } from "@/lib/cost-engine/recalculate-quick-estimate";
 import { devLog } from "@/lib/dev-log";
 import { persistProjectConstraints } from "@/lib/project-constraints-persist";
@@ -30,6 +31,7 @@ import {
 import {
   assistantConstraintsSchema,
   quickEstimateMarginSchema,
+  scopeQuestionAnswerSchema,
   scopeQuestionAnswersSchema,
 } from "@/lib/validations/project-assistant";
 export type ProjectAssistantActionState = {
@@ -147,7 +149,7 @@ async function executeProjectDiscovery(
   }
 
   await recalculateQuickEstimateAction(projectId, { silent: true });
-  revalidatePath(`/projects/${projectId}`);
+  revalidateProjectAssistant(projectId);
 
   const { outcome } = discoveryResult;
   const analysingMode =
@@ -272,8 +274,46 @@ export async function ensureAssistantQuestions(
   if (result.error) {
     return { error: result.error };
   }
-  revalidatePath(`/projects/${projectId}`);
+  revalidateProjectAssistant(projectId);
   return { success: true };
+}
+
+export async function autoSaveScopeQuestionAnswer(
+  projectId: string,
+  questionId: string,
+  answer: string
+): Promise<ProjectAssistantActionState> {
+  const parsed = scopeQuestionAnswerSchema.safeParse({ questionId, answer });
+  if (!parsed.success) {
+    return { error: "Invalid answer." };
+  }
+
+  const formData = new FormData();
+  formData.set(`answer_${parsed.data.questionId}`, parsed.data.answer);
+
+  return saveScopeQuestionAnswers(projectId, {}, formData);
+}
+
+export async function autoSaveAssistantConstraints(
+  projectId: string,
+  quickEstimateId: string,
+  payload: {
+    constraintSlugs: string[];
+    qualityLevel: string;
+    followUps?: Record<string, string>;
+  }
+): Promise<ProjectAssistantActionState> {
+  const formData = new FormData();
+  for (const slug of payload.constraintSlugs) {
+    formData.append("constraintSlugs", slug);
+  }
+  formData.set("qualityLevel", payload.qualityLevel);
+  if (payload.followUps) {
+    for (const [slug, value] of Object.entries(payload.followUps)) {
+      formData.set(`followUp_${slug}`, value);
+    }
+  }
+  return saveAssistantConstraints(projectId, quickEstimateId, {}, formData);
 }
 
 export async function saveScopeQuestionAnswers(
@@ -364,9 +404,12 @@ export async function saveScopeQuestionAnswers(
   }
 
   await syncNotesToQuickEstimate(supabase, organisationId, projectId, user.id);
-  await recalculateQuickEstimateAction(projectId, { silent: true });
+  await recalculateQuickEstimateAction(projectId, {
+    silent: true,
+    triggerEvent: "answer_saved",
+  });
 
-  revalidatePath(`/projects/${projectId}`);
+  revalidateProjectAssistant(projectId);
   return {
     success: true,
     message: "Answers saved.",
@@ -389,7 +432,7 @@ export async function continueToAssistantConstraints(
   }
   await syncNotesToQuickEstimate(supabase, organisationId, projectId, user.id);
   await recalculateQuickEstimateAction(projectId, { silent: true });
-  revalidatePath(`/projects/${projectId}`);
+  revalidateProjectAssistant(projectId);
 
   return {
     success: true,
@@ -448,7 +491,7 @@ export async function saveAssistantConstraints(
 
   await recalculateQuickEstimateAction(projectId, { silent: true });
 
-  revalidatePath(`/projects/${projectId}`);
+  revalidateProjectAssistant(projectId);
 
   return {
     success: true,
@@ -506,14 +549,15 @@ export async function updateQuickEstimateMargin(
   const result = await recalculateQuickEstimate(
     supabase,
     organisationId,
-    projectId
+    projectId,
+    { triggerEvent: "margin_updated" }
   );
 
   if (!result.success) {
     return { error: result.error ?? "Could not recalculate sell range." };
   }
 
-  revalidatePath(`/projects/${projectId}`);
+  revalidateProjectAssistant(projectId);
   return {
     success: true,
     message: `Target margin updated to ${parsed.data.targetMarginPercent}%.`,
@@ -522,7 +566,7 @@ export async function updateQuickEstimateMargin(
 
 async function recalculateQuickEstimateAction(
   projectId: string,
-  options?: { silent?: boolean; nextStep?: number }
+  options?: { silent?: boolean; nextStep?: number; triggerEvent?: string }
 ): Promise<ProjectAssistantActionState> {
   const { organisationId } = await requireOrganisation();
   const supabase = await createClient();
@@ -530,18 +574,60 @@ async function recalculateQuickEstimateAction(
   const result = await recalculateQuickEstimate(
     supabase,
     organisationId,
-    projectId
+    projectId,
+    { triggerEvent: options?.triggerEvent ?? "recalculate" }
   );
 
   if (!result.success) {
     return { error: result.error ?? "Could not update quick estimate." };
   }
 
-  revalidatePath(`/projects/${projectId}`);
+  if (!options?.silent) {
+    revalidateProjectAssistant(projectId);
+  }
+
   return {
     success: true,
     message: result.message,
     ...(options?.silent ? {} : { nextStep: options?.nextStep ?? 5 }),
+  };
+}
+
+export async function resetAssistant(
+  projectId: string
+): Promise<ProjectAssistantActionState> {
+  const { organisationId } = await requireOrganisation();
+  const supabase = await createClient();
+
+  const { data: quickEstimate } = await getQuickEstimateForProject(
+    supabase,
+    organisationId,
+    projectId
+  );
+
+  if (quickEstimate?.id) {
+    await supabase
+      .from("quick_estimate_snapshots")
+      .delete()
+      .eq("quick_estimate_id", quickEstimate.id)
+      .eq("organisation_id", organisationId);
+  }
+
+  const { error } = await resetAssistantState(
+    supabase,
+    organisationId,
+    projectId
+  );
+
+  if (error) {
+    return { error };
+  }
+
+  revalidateProjectAssistant(projectId);
+  return {
+    success: true,
+    message:
+      "Assistant reset. Project, client, and saved notes are unchanged.",
   };
 }
 

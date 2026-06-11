@@ -1,4 +1,5 @@
 import type { EstimateQualityFactor } from "@/lib/cost-engine/estimate-quality";
+import type { EstimateTrace } from "@/lib/cost-engine/estimate-trace";
 import type { RangeQuality } from "@/lib/cost-engine/range-quality";
 
 export function parseQuickEstimateSummary(notes: string | null): {
@@ -27,6 +28,16 @@ export function parseQuickEstimateSummary(notes: string | null): {
   rangeLowDrivers?: string[];
   rangeHighDrivers?: string[];
   qualityFactors?: EstimateQualityFactor[];
+  estimateTrace?: EstimateTrace;
+  confidenceScore?: number;
+  confidenceLevelLabel?: string;
+  confidenceReasons?: string[];
+  questionsToHigh?: number;
+  centralEstimate?: number | null;
+  contingencyPercent?: number;
+  rateSourceDetail?: string;
+  rangeFactor?: number | null;
+  rangeChangedMessage?: string | null;
 } | null {
   if (!notes) return null;
   try {
@@ -56,6 +67,16 @@ export function parseQuickEstimateSummary(notes: string | null): {
       rangeLowDrivers?: string[];
       rangeHighDrivers?: string[];
       qualityFactors?: EstimateQualityFactor[];
+      estimateTrace?: EstimateTrace;
+      confidenceScore?: number;
+      confidenceLevelLabel?: string;
+      confidenceReasons?: string[];
+      questionsToHigh?: number;
+      centralEstimate?: number | null;
+      contingencyPercent?: number;
+      rateSourceDetail?: string;
+      rangeFactor?: number | null;
+      rangeChangedMessage?: string | null;
     };
     if (Array.isArray(parsed.includedTrades) || Array.isArray(parsed.workAreasIncluded)) {
       return {
@@ -86,6 +107,16 @@ export function parseQuickEstimateSummary(notes: string | null): {
         rangeLowDrivers: parsed.rangeLowDrivers ?? [],
         rangeHighDrivers: parsed.rangeHighDrivers ?? [],
         qualityFactors: parsed.qualityFactors ?? [],
+        estimateTrace: parsed.estimateTrace,
+        confidenceScore: parsed.confidenceScore,
+        confidenceLevelLabel: parsed.confidenceLevelLabel,
+        confidenceReasons: parsed.confidenceReasons ?? [],
+        questionsToHigh: parsed.questionsToHigh,
+        centralEstimate: parsed.centralEstimate ?? null,
+        contingencyPercent: parsed.contingencyPercent,
+        rateSourceDetail: parsed.rateSourceDetail,
+        rangeFactor: parsed.rangeFactor ?? null,
+        rangeChangedMessage: parsed.rangeChangedMessage ?? null,
       };
     }
   } catch {

@@ -10,6 +10,11 @@ export const scopeQuestionAnswersSchema = z.object({
   ),
 });
 
+export const scopeQuestionAnswerSchema = z.object({
+  questionId: z.string().uuid(),
+  answer: z.string().min(1),
+});
+
 export const assistantConstraintsSchema = z.object({
   constraintSlugs: z.array(z.string()).default([]),
   qualityLevel: qualityLevelSchema.default("unknown"),

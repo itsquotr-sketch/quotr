@@ -1,7 +1,11 @@
-import { bathroomRenovationTemplate } from "@/lib/scope-templates/bathroom-renovation";
-import { deckTemplate } from "@/lib/scope-templates/deck";
-import { retainingWallTemplate } from "@/lib/scope-templates/retaining-wall";
-import { UNIVERSAL_TEMPLATE_CONSTRAINTS } from "@/lib/scope-templates/shared";
+import {
+  getAllScopeTemplates as getScopesAsTemplates,
+  getScopeByAlias,
+  getScopeTemplate as getScopeTemplateFromScopes,
+  getScopeTemplateByWorkAreaType as getScopeTemplateByWorkAreaTypeFromScopes,
+  matchScopesFromNotes,
+} from "@/lib/scopes";
+import { UNIVERSAL_SCOPE_CONSTRAINTS } from "@/lib/scopes/shared";
 import type {
   MatchedScopeTemplate,
   ScopeTemplate,
@@ -22,87 +26,44 @@ export type {
   MatchedScopeTemplate,
 } from "@/lib/scope-templates/types";
 
-export { deckTemplate, retainingWallTemplate, bathroomRenovationTemplate };
+import { bathroomRenovationScope } from "@/lib/scopes/bathroom-renovation";
+import { deckScope } from "@/lib/scopes/deck";
+import { retainingWallScope } from "@/lib/scopes/retaining-wall";
+import { scopeToTemplate } from "@/lib/scopes/to-template";
 
-const ALL_TEMPLATES: ScopeTemplate[] = [
-  bathroomRenovationTemplate,
-  deckTemplate,
-  retainingWallTemplate,
-];
-
-const templateByKey = new Map(ALL_TEMPLATES.map((t) => [t.key, t]));
-const templateByWorkAreaType = new Map(
-  ALL_TEMPLATES.map((t) => [t.workAreaTypeKey, t])
-);
+export const deckTemplate = scopeToTemplate(deckScope);
+export const retainingWallTemplate = scopeToTemplate(retainingWallScope);
+export const bathroomRenovationTemplate = scopeToTemplate(bathroomRenovationScope);
 
 export function getAllScopeTemplates(): ScopeTemplate[] {
-  return ALL_TEMPLATES;
+  return getScopesAsTemplates();
 }
 
 export function getScopeTemplate(key: string): ScopeTemplate | undefined {
-  return templateByKey.get(key);
+  return getScopeTemplateFromScopes(key);
 }
 
 export function getScopeTemplateByWorkAreaType(
   workAreaTypeKey: string
 ): ScopeTemplate | undefined {
-  return templateByWorkAreaType.get(workAreaTypeKey);
+  return getScopeTemplateByWorkAreaTypeFromScopes(workAreaTypeKey);
 }
 
 export function getScopeTemplateByAlias(text: string): ScopeTemplate | undefined {
-  const normalised = text.toLowerCase().replace(/\s+/g, " ").trim();
-  for (const template of ALL_TEMPLATES) {
-    if (template.aliases.some((alias) => normalised.includes(alias))) {
-      return template;
-    }
-  }
-  return undefined;
-}
-
-function findMatchedKeywords(content: string, aliases: string[]): string[] {
-  const normalised = content.toLowerCase().replace(/\s+/g, " ").trim();
-  return aliases.filter((alias) => normalised.includes(alias));
-}
-
-function computeMatchConfidence(
-  matchCount: number,
-  aliasCount: number
-): number {
-  if (matchCount === 0) return 0.35;
-  const ratio = matchCount / aliasCount;
-  return Math.min(0.95, Math.round((0.45 + ratio * 0.5) * 100) / 100);
+  const scope = getScopeByAlias(text);
+  return scope ? getScopeTemplateFromScopes(scope.id) : undefined;
 }
 
 export function matchTemplatesFromNotes(
   content: string
 ): MatchedScopeTemplate[] {
-  const trimmed = content.trim();
-  if (!trimmed) return [];
-
-  const matches: MatchedScopeTemplate[] = [];
-
-  for (const template of ALL_TEMPLATES) {
-    const matchedKeywords = findMatchedKeywords(trimmed, template.aliases);
-    if (matchedKeywords.length === 0) continue;
-
-    matches.push({
-      template,
-      confidence: computeMatchConfidence(
-        matchedKeywords.length,
-        template.aliases.length
-      ),
-      matchedKeywords,
-      suggestedName: template.name,
-      locationArea:
-        template.category === "Outdoor"
-          ? "Outdoor"
-          : template.category === "Interior"
-            ? template.name
-            : null,
-    });
-  }
-
-  return matches.sort((a, b) => b.confidence - a.confidence);
+  return matchScopesFromNotes(content).map((match) => ({
+    template: getScopeTemplateFromScopes(match.scope.id)!,
+    confidence: match.confidence,
+    matchedKeywords: match.matchedKeywords,
+    suggestedName: match.suggestedName,
+    locationArea: match.locationArea,
+  }));
 }
 
 export function templateQuestionToDef(
@@ -176,13 +137,13 @@ export function getTemplateConstraintsForWorkAreas(
   const constraints: AssistantConstraint[] = [];
   const seen = new Set<string>();
 
-  for (const universal of UNIVERSAL_TEMPLATE_CONSTRAINTS) {
+  for (const universal of UNIVERSAL_SCOPE_CONSTRAINTS) {
     if (seen.has(universal.slug)) continue;
     seen.add(universal.slug);
     constraints.push(templateConstraintToAssistant(universal));
   }
 
-  for (const template of ALL_TEMPLATES) {
+  for (const template of getAllScopeTemplates()) {
     if (!types.has(template.workAreaTypeKey)) continue;
     for (const constraint of template.constraints) {
       if (seen.has(constraint.slug)) continue;

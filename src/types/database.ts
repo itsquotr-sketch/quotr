@@ -723,6 +723,77 @@ export interface Database {
           },
         ];
       };
+      quick_estimate_snapshots: {
+        Row: {
+          id: string;
+          organisation_id: string;
+          project_id: string;
+          quick_estimate_id: string | null;
+          snapshot_at: string;
+          confidence_score: number | null;
+          confidence_level: string | null;
+          estimated_cost_low: number | null;
+          estimated_cost_high: number | null;
+          sell_low: number | null;
+          sell_high: number | null;
+          central_estimate: number | null;
+          target_margin_percent: number | null;
+          contingency_percent: number | null;
+          rate_source: string | null;
+          trigger_event: string | null;
+          calculation_trace: Json | null;
+          created_at: string;
+        };
+        Insert: {
+          id?: string;
+          organisation_id: string;
+          project_id: string;
+          quick_estimate_id?: string | null;
+          snapshot_at?: string;
+          confidence_score?: number | null;
+          confidence_level?: string | null;
+          estimated_cost_low?: number | null;
+          estimated_cost_high?: number | null;
+          sell_low?: number | null;
+          sell_high?: number | null;
+          central_estimate?: number | null;
+          target_margin_percent?: number | null;
+          contingency_percent?: number | null;
+          rate_source?: string | null;
+          trigger_event?: string | null;
+          calculation_trace?: Json | null;
+          created_at?: string;
+        };
+        Update: {
+          id?: string;
+          organisation_id?: string;
+          project_id?: string;
+          quick_estimate_id?: string | null;
+          snapshot_at?: string;
+          confidence_score?: number | null;
+          confidence_level?: string | null;
+          estimated_cost_low?: number | null;
+          estimated_cost_high?: number | null;
+          sell_low?: number | null;
+          sell_high?: number | null;
+          central_estimate?: number | null;
+          target_margin_percent?: number | null;
+          contingency_percent?: number | null;
+          rate_source?: string | null;
+          trigger_event?: string | null;
+          calculation_trace?: Json | null;
+          created_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "quick_estimate_snapshots_quick_estimate_id_fkey";
+            columns: ["quick_estimate_id"];
+            isOneToOne: false;
+            referencedRelation: "quick_estimates";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
       quick_estimate_answers: {
         Row: {
           id: string;

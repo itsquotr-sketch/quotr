@@ -1,10 +1,10 @@
-import type { ScopeQuestionForMissing } from "@/lib/cost-engine/build-missing-information";
+import { buildScopeTightenLabels } from "@/lib/scopes/missing-facts";
 import {
   answerValueToString,
   isAnswered,
   isAnsweredSelect,
 } from "@/lib/scope-answer-state";
-import { isTemplateAffectsEstimateQuestion } from "@/lib/scope-templates";
+import type { ScopeQuestionForMissing } from "@/lib/cost-engine/build-missing-information";
 
 export type RangeDrivers = {
   lowDrivers: string[];
@@ -35,16 +35,29 @@ export function buildRangeDrivers(input: {
   scopeQuestions: ScopeQuestionForMissing[];
   constraintsApplied: string[];
   qualityLevelNote: string | null;
+  workAreaAnswers?: {
+    workAreaTypeKey: string;
+    workAreaName: string;
+    answers: Record<string, string>;
+  }[];
 }): RangeDrivers {
   const lowDrivers: string[] = [];
   const highDrivers: string[] = [];
-  const tightenSuggestions: string[] = [];
+
+  const tightenSuggestions =
+    input.workAreaAnswers && input.workAreaAnswers.length > 0
+      ? buildScopeTightenLabels(
+          input.workAreaAnswers.map((a) => ({
+            name: a.workAreaName,
+            workAreaTypeKey: a.workAreaTypeKey,
+            answers: a.answers,
+          }))
+        )
+      : [];
 
   for (const q of input.scopeQuestions) {
     const key = q.questionKey;
-    if (!key || !isTemplateAffectsEstimateQuestion(q.workAreaTypeKey, key)) {
-      continue;
-    }
+    if (!key) continue;
 
     const answered =
       q.inputType === "select" && q.options.length > 0
@@ -54,15 +67,7 @@ export function buildRangeDrivers(input: {
             requiresPositiveNumber: q.inputType === "number",
           });
 
-    if (!answered) {
-      const text = q.questionText.trim();
-      if (text) {
-        tightenSuggestions.push(
-          `Confirm ${text.charAt(0).toLowerCase()}${text.slice(1)}`
-        );
-      }
-      continue;
-    }
+    if (!answered) continue;
 
     const answerValue =
       answerValueToString(q.answerRaw, q.answerSource) ?? "";
@@ -90,12 +95,12 @@ export function buildRangeDrivers(input: {
   }
 
   if (input.qualityLevelNote?.toLowerCase().includes("unknown")) {
-    tightenSuggestions.push("Confirm the expected finish level");
+    tightenSuggestions.push("Finish level");
   }
 
   return {
     lowDrivers: [...new Set(lowDrivers)].slice(0, 4),
     highDrivers: [...new Set(highDrivers)].slice(0, 5),
-    tightenSuggestions: [...new Set(tightenSuggestions)].slice(0, 4),
+    tightenSuggestions: [...new Set(tightenSuggestions)].slice(0, 6),
   };
 }

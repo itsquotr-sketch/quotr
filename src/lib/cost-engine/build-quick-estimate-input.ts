@@ -11,14 +11,19 @@ import {
   resolveQuestionDef,
   resolveWorkAreaTypeKey,
 } from "@/lib/project-assistant-questions";
+import { deriveConstraintsFromAnswers } from "@/lib/cost-engine/derive-constraints-from-answers";
 import {
   buildAnswersMap,
   type QuickEstimateInput,
 } from "@/lib/cost-engine/quick-estimate-input";
 import {
   getOrganisationPricingSettings,
+  listLabourRates,
+  listMaterialRates,
   listPackageRates,
+  listSubcontractorRates,
 } from "@/lib/rates-data";
+import { listScopeBuilderInputs } from "@/lib/scope-builder-data";
 import { getQuickEstimateForProject } from "@/lib/quick-estimate-data";
 import { getProjectById } from "@/lib/projects-data";
 import { normalizeQuestionKey } from "@/lib/question-keys";
@@ -77,12 +82,27 @@ export async function buildQuickEstimateInput(
     return { input: null, error: "Could not load scope questions." };
   }
 
-  const [{ data: packageRates }, { data: pricingSettings }, { data: discoveryRun }] =
-    await Promise.all([
-      listPackageRates(supabase, organisationId),
-      getOrganisationPricingSettings(supabase, organisationId),
-      getLatestDiscoveryRun(supabase, organisationId, projectId),
-    ]);
+  const [
+    { data: packageRates },
+    { data: labourRates },
+    { data: materialRates },
+    { data: subcontractorRates },
+    { data: pricingSettings },
+    { data: discoveryRun },
+    { data: scopeBuilderInputs },
+  ] = await Promise.all([
+    listPackageRates(supabase, organisationId),
+    listLabourRates(supabase, organisationId),
+    listMaterialRates(supabase, organisationId),
+    listSubcontractorRates(supabase, organisationId),
+    getOrganisationPricingSettings(supabase, organisationId),
+    getLatestDiscoveryRun(supabase, organisationId, projectId),
+    listScopeBuilderInputs(supabase, organisationId, projectId),
+  ]);
+
+  const sourceNotesLength = (scopeBuilderInputs ?? [])
+    .map((i) => i.content.trim())
+    .join(" ").length;
 
   const discovery = parseDiscoveryRun(discoveryRun ?? null);
 
@@ -204,7 +224,7 @@ export async function buildQuickEstimateInput(
     .eq("quick_estimate_id", quickEstimate.id)
     .eq("organisation_id", organisationId);
 
-  const constraints = (driverValues ?? [])
+  const savedConstraints = (driverValues ?? [])
     .filter((v) => v.constraint_key)
     .map((v) => {
       const slug = v.constraint_key as string;
@@ -224,6 +244,16 @@ export async function buildQuickEstimateInput(
       };
     });
 
+  const mergedAnswers: Record<string, string> = {};
+  for (const area of workAreas) {
+    Object.assign(mergedAnswers, area.answers);
+  }
+
+  const constraints = deriveConstraintsFromAnswers(
+    mergedAnswers,
+    savedConstraints
+  );
+
   devLog("constraints.cost-engine.input", {
     projectId,
     quickEstimateId: quickEstimate.id,
@@ -234,6 +264,10 @@ export async function buildQuickEstimateInput(
     quickEstimate.target_margin_percent ??
       pricingSettings?.default_margin_percent ??
       DEFAULT_TARGET_MARGIN_PERCENT
+  );
+
+  const contingencyPercent = Number(
+    pricingSettings?.contingency_percent ?? 5
   );
 
   return {
@@ -251,7 +285,12 @@ export async function buildQuickEstimateInput(
       workAreas,
       constraints,
       packageRates: packageRates ?? [],
+      labourRates: labourRates ?? [],
+      materialRates: materialRates ?? [],
+      subcontractorRates: subcontractorRates ?? [],
       targetMarginPercent,
+      contingencyPercent,
+      sourceNotesLength,
       discovery,
       questionsAnswered,
       questionsTotal: questions?.length ?? 0,

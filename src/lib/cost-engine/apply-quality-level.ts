@@ -1,28 +1,25 @@
 import type { QualityLevel } from "@/lib/constants/quality-level";
 
-type CostBand = { low: number; typical: number; high: number };
-
 export type QualityLevelAdjustment = {
-  band: CostBand;
+  centralEstimate: number;
   assumptions: string[];
   missingInformation: string[];
   qualityNote: string | null;
 };
 
-export function applyQualityLevelToBand(
-  band: CostBand,
+/** Adjusts central estimate for finish level — does not widen range. */
+export function applyQualityLevelToCentral(
+  centralEstimate: number,
   qualityLevel: QualityLevel
 ): QualityLevelAdjustment {
   const assumptions: string[] = [];
   const missingInformation: string[] = [];
   let qualityNote: string | null = null;
-
-  let { low, typical, high } = band;
+  let central = centralEstimate;
 
   switch (qualityLevel) {
     case "budget": {
-      typical = Math.round(typical * 0.85);
-      high = Math.round(Math.min(high, typical * 1.1));
+      central = Math.round(central * 0.85);
       assumptions.push(
         "Budget / basic finish — lower specification materials and allowances assumed."
       );
@@ -35,33 +32,43 @@ export function applyQualityLevelToBand(
       break;
     }
     case "premium": {
-      typical = Math.round(typical * 1.2);
-      high = Math.round(high * 1.3);
+      central = Math.round(central * 1.2);
       assumptions.push(
-        "Premium / high-end finish — higher specification materials and subcontractor allowances assumed."
+        "Premium / high-end finish — higher specification materials assumed."
       );
-      qualityNote =
-        "Premium finish selected — range increased for higher specification materials.";
+      qualityNote = "Premium finish selected.";
       break;
     }
     case "unknown":
     default: {
-      low = Math.round(low * 0.9);
-      high = Math.round(high * 1.25);
-      qualityNote = "Finish level unknown — estimate range kept wider.";
+      qualityNote = "Finish level unknown — answer finish to tighten range.";
       break;
     }
   }
 
   return {
-    band: {
-      low: Math.max(0, low),
-      typical: Math.max(0, typical),
-      high: Math.max(typical, high),
-    },
+    centralEstimate: Math.max(0, central),
     assumptions,
     missingInformation,
     qualityNote,
+  };
+}
+
+/** @deprecated Use applyQualityLevelToCentral */
+export function applyQualityLevelToBand(
+  band: { low: number; typical: number; high: number },
+  qualityLevel: QualityLevel
+): QualityLevelAdjustment & {
+  band: { low: number; typical: number; high: number };
+} {
+  const result = applyQualityLevelToCentral(band.typical, qualityLevel);
+  return {
+    ...result,
+    band: {
+      low: result.centralEstimate,
+      typical: result.centralEstimate,
+      high: result.centralEstimate,
+    },
   };
 }
 

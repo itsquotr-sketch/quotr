@@ -1,4 +1,6 @@
+import Link from "next/link";
 import { Sparkles } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { ProjectAssistantWorkspace } from "@/components/projects/project-assistant-workspace";
 import {
   Card,
@@ -35,18 +37,25 @@ export function ProjectAssistantSection(props: ProjectAssistantSectionProps) {
     <section className="mb-6" id="project-assistant">
       <Card className="rounded-xl border-primary/20 shadow-sm">
         <CardHeader className="border-b bg-muted/30 px-4 py-3">
-          <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10">
-              <Sparkles className="h-4 w-4 text-primary" />
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+                <Sparkles className="h-4 w-4 text-primary" />
+              </div>
+              <div>
+                <CardTitle className="normal-case tracking-normal text-lg font-semibold">
+                  Project Assistant
+                </CardTitle>
+                <CardDescription className="text-sm">
+                  Scope the job naturally — your estimate updates as you go.
+                </CardDescription>
+              </div>
             </div>
-            <div>
-              <CardTitle className="normal-case tracking-normal text-lg font-semibold">
-                Project Assistant
-              </CardTitle>
-              <CardDescription className="text-sm">
-                Scope the job naturally — your estimate updates as you go.
-              </CardDescription>
-            </div>
+            <Button asChild variant="outline" size="sm" className="shrink-0 text-xs">
+              <Link href={`/projects/${props.projectId}/assistant-v2`}>
+                Try v2
+              </Link>
+            </Button>
           </div>
         </CardHeader>
 

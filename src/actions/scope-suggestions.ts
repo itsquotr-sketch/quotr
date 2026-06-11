@@ -1,6 +1,6 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { revalidateProjectAssistant } from "@/lib/assistant-v2/revalidate";
 import { requireOrganisation } from "@/lib/auth";
 import { getProjectById } from "@/lib/projects-data";
 import {
@@ -303,7 +303,7 @@ export async function suggestScopesFromNotes(
     };
   }
 
-  revalidatePath(`/projects/${projectId}`);
+  revalidateProjectAssistant(projectId);
   return { success: true };
 }
 
@@ -345,7 +345,7 @@ export async function acceptScopeSuggestion(
   );
   await generateAssistantQuickEstimate(projectId, { silent: true });
 
-  revalidatePath(`/projects/${projectId}`);
+  revalidateProjectAssistant(projectId);
   return { success: true, message: "Work area confirmed." };
 }
 
@@ -409,7 +409,7 @@ export async function acceptScopeSuggestionWithEdits(
   );
   await generateAssistantQuickEstimate(projectId, { silent: true });
 
-  revalidatePath(`/projects/${projectId}`);
+  revalidateProjectAssistant(projectId);
   return { success: true, message: "Work area confirmed." };
 }
 
@@ -447,6 +447,6 @@ export async function rejectScopeSuggestion(
     return { error: updateError.message ?? "Could not reject suggestion." };
   }
 
-  revalidatePath(`/projects/${projectId}`);
+  revalidateProjectAssistant(projectId);
   return { success: true };
 }
