@@ -9,5 +9,5 @@ export default async function QuickEstimatePage({
   params,
 }: QuickEstimatePageProps) {
   const { id: projectId } = await params;
-  redirect(`/projects/${projectId}#project-assistant`);
+  redirect(`/projects/${projectId}`);
 }

@@ -6,6 +6,7 @@ import { calculateQuickEstimateV1 } from "../src/lib/cost-engine/calculate-quick
 import type { QuickEstimateInput } from "../src/lib/cost-engine/quick-estimate-input";
 
 const emptyRates = {
+  scopeRates: [],
   packageRates: [],
   labourRates: [],
   materialRates: [],

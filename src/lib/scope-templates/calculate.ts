@@ -1,12 +1,20 @@
 import type { ScopeTemplate } from "@/lib/scope-templates/types";
+import { getScopeRateDefinitionByKey } from "@/lib/constants/scope-rates";
 import { getAnswerValue } from "@/lib/question-keys";
 import {
   getBaseRateForScope,
   type OrgRatesInput,
   type RateSource,
 } from "@/lib/cost-engine/rates/get-base-rate-for-scope";
+import {
+  rateUnitsMatch,
+  scopeRateAllocation,
+} from "@/lib/cost-engine/rates/scope-rate-utils";
+import { templateAllocationPercents } from "@/lib/cost-engine/build-cost-breakdown";
+import type { WorkAreaAllocationBreakdown } from "@/lib/cost-engine/estimate-trace";
 import { PLACEHOLDER_BASE_RANGES } from "@/lib/constants/quick-estimate";
 import type { QualityLevel } from "@/lib/constants/quality-level";
+import type { ScopeRateAllocation } from "@/lib/cost-engine/rates/scope-rate-utils";
 
 export type TemplateCalculationResult = {
   centralEstimate: number;
@@ -14,13 +22,21 @@ export type TemplateCalculationResult = {
   unit: string;
   baseRate: number;
   rateSource: RateSource;
+  /** True when low/typical/high rate was chosen from finish level in getBaseRateForScope. */
+  finishEncodedInRate: boolean;
   confidenceBonus: number;
   usedPackage: boolean;
   usedTemplate: boolean;
   templateKey: string;
+  scopeTypeKey: string;
+  scopeRateId?: string;
+  usesDefaultRateOnly?: boolean;
+  scopeAllocation?: ScopeRateAllocation | null;
+  allocationBreakdown?: WorkAreaAllocationBreakdown;
   missing: string[];
   inputs: string[];
   allowances: string[];
+  assumptions: string[];
   confidenceReason: string | null;
 };
 
@@ -80,6 +96,35 @@ function applyMaterialRateAdjustment(
   return baseRate;
 }
 
+function resolveAllocationBreakdown(
+  scopeAllocation: ScopeRateAllocation | null | undefined,
+  workAreaTypeKey: string
+): WorkAreaAllocationBreakdown {
+  if (scopeAllocation) {
+    return {
+      labourPercent: Math.round(scopeAllocation.labour * 100),
+      materialsPercent: Math.round(scopeAllocation.materials * 100),
+      subcontractorsPercent: Math.round(scopeAllocation.subcontractors * 100),
+      allowancesPercent: Math.round(scopeAllocation.allowances * 100),
+      source: "scope_rate",
+    };
+  }
+  return templateAllocationPercents(workAreaTypeKey);
+}
+
+function findActiveScopeRate(
+  orgRates: OrgRatesInput,
+  scopeTypeKey: string,
+  unit: string
+) {
+  return orgRates.scopeRates.find(
+    (rate) =>
+      rate.is_active &&
+      rate.scope_type_key === scopeTypeKey &&
+      rateUnitsMatch(rate.unit, unit)
+  );
+}
+
 export function calculateFromTemplate(
   template: ScopeTemplate,
   answers: Record<string, string>,
@@ -89,10 +134,13 @@ export function calculateFromTemplate(
   const hasAll = checkRequiredFacts(template, answers);
   const inputs: string[] = [];
   const allowances: string[] = [];
+  const assumptions: string[] = [];
   let centralEstimate = 0;
   let quantity = 0;
   const unit = template.benchmarkRates.unit;
   let usedPackage = false;
+  const scopeDef = getScopeRateDefinitionByKey(template.key);
+  const scopeTypeKey = scopeDef?.scopeTypeKey ?? template.key;
 
   const finishLevel = resolveFinishLevel(
     answers,
@@ -102,14 +150,32 @@ export function calculateFromTemplate(
       : "deck.finish_level"
   );
 
-  const { rate: baseRate, source: rateSource, confidenceBonus } =
-    getBaseRateForScope(
-      template.key,
-      template.workAreaTypeKey,
-      unit,
-      orgRates,
-      finishLevel
-    );
+  const {
+    rate: baseRate,
+    source: rateSource,
+    confidenceBonus,
+    scopeRateId,
+    usesDefaultRateOnly,
+  } = getBaseRateForScope(
+    template.key,
+    template.workAreaTypeKey,
+    unit,
+    orgRates,
+    finishLevel
+  );
+
+  const matchedScopeRate = findActiveScopeRate(orgRates, scopeTypeKey, unit);
+  const scopeAllocation = matchedScopeRate
+    ? scopeRateAllocation(matchedScopeRate)
+    : null;
+  const allocationBreakdown = resolveAllocationBreakdown(
+    scopeAllocation,
+    template.workAreaTypeKey
+  );
+
+  const finishEncodedInRate =
+    finishLevel !== "unknown" &&
+    (rateSource === "template_benchmark" || rateSource === "scope_rate");
 
   usedPackage = rateSource === "package_rate";
 
@@ -135,6 +201,7 @@ export function calculateFromTemplate(
           const mod = template.estimateRules.elevatedModifier ?? 1.15;
           centralEstimate = Math.round(centralEstimate * mod);
           inputs.push("Elevated deck (+15%)");
+          assumptions.push("Elevated deck access assumed (+15%)");
         }
         if (isYes(getAnswerValue(answers, "deck.has_stairs"))) {
           centralEstimate += 2500;
@@ -206,6 +273,7 @@ export function calculateFromTemplate(
           const mod = template.estimateRules.layoutChangeModifier ?? 1.2;
           centralEstimate = Math.round(centralEstimate * mod);
           inputs.push("Layout changing (+20%)");
+          assumptions.push("Bathroom layout change assumed (+20%)");
         }
         const tileExtent =
           getAnswerValue(answers, "bathroom.tile_extent") ??
@@ -231,9 +299,11 @@ export function calculateFromTemplate(
   }
 
   const confidenceReason = hasAll
-    ? rateSource === "org_rate" || rateSource === "package_rate"
-      ? `${template.name}: measurements provided using ${rateSource === "org_rate" ? "your saved rates" : "package rates"}.`
-      : `${template.name}: measurements provided using benchmark template rates.`
+    ? rateSource === "scope_rate"
+      ? `${template.name}: measurements provided using your saved ${template.name.toLowerCase()} rate.`
+      : rateSource === "org_rate" || rateSource === "package_rate"
+        ? `${template.name}: measurements provided using ${rateSource === "org_rate" ? "your trade/material rates" : "your package rate"}.`
+        : `${template.name}: measurements provided using Quotr benchmark rates.`
     : `${template.name}: missing key facts — placeholder range used.`;
 
   return {
@@ -242,13 +312,20 @@ export function calculateFromTemplate(
     unit,
     baseRate,
     rateSource,
+    finishEncodedInRate,
     confidenceBonus,
     usedPackage,
     usedTemplate: true,
     templateKey: template.key,
+    scopeTypeKey,
+    scopeRateId,
+    usesDefaultRateOnly,
+    scopeAllocation,
+    allocationBreakdown,
     missing: [],
     inputs,
     allowances,
+    assumptions,
     confidenceReason,
   };
 }

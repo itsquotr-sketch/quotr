@@ -1,17 +1,20 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useTransition } from "react";
-import { acceptScopeSuggestion } from "@/actions/scope-suggestions";
+import { persistAssistantQuestionBatch } from "@/actions/assistant-v2";
+import type { WorkAreaSelection } from "@/lib/assistant-v2/confirm-work-areas";
 import { AnswerChips } from "@/components/assistant-v2/answer-chips";
 import { AssistantConversationPanel } from "@/components/assistant-v2/assistant-conversation-panel";
 import { useAssistantChat } from "@/components/assistant-v2/assistant-chat-context";
 import { AssistantV2UnderstoodCard } from "@/components/assistant-v2/assistant-v2-understood-card";
-import { useEstimateUpdate } from "@/components/projects/estimate-update-context";
 import { contextualQuestionText } from "@/lib/assistant-v2/build-assistant-messages";
-import { computeProjectCompleteness } from "@/lib/assistant-v2/compute-information-completeness";
+import {
+  formatConstraintBatchContent,
+  formatScopeBatchContent,
+  questionBatchFingerprint,
+} from "@/lib/assistant-v2/format-question-batch";
+import { parseNaturalLanguageBatchAnswers } from "@/lib/assistant-v2/parse-batch-answers";
 import {
   collectAnsweredQuestionKeys,
   getNextAssistantTurn,
@@ -21,6 +24,7 @@ import type { ScopeGroupInput } from "@/lib/assistant-v2/get-next-pricing-questi
 import type { PricingQuestion } from "@/lib/assistant-v2/get-next-pricing-question";
 import { normaliseQualityLevel } from "@/lib/constants/quality-level";
 import { resolveWorkAreaTypeKey } from "@/lib/project-assistant-questions";
+import type { ConstraintQuestion } from "@/lib/assistant-v2/get-next-constraint-question";
 import type { ScopeQuestionWithAnswers } from "@/lib/project-assistant-data";
 import type { DiscoveryResult } from "@/lib/ai/discovery/types";
 import type { ProjectScope, ProjectScopeSuggestion } from "@/types/database";
@@ -48,6 +52,16 @@ function AssistantBubble({ children }: { children: ReactNode }) {
   );
 }
 
+function LoadingDots() {
+  return (
+    <span className="ml-1 inline-flex gap-0.5">
+      <span className="h-1 w-1 animate-bounce rounded-full bg-muted-foreground [animation-delay:0ms]" />
+      <span className="h-1 w-1 animate-bounce rounded-full bg-muted-foreground [animation-delay:150ms]" />
+      <span className="h-1 w-1 animate-bounce rounded-full bg-muted-foreground [animation-delay:300ms]" />
+    </span>
+  );
+}
+
 interface AssistantV2ChatProps {
   projectId: string;
   confirmedScopes: (ProjectScope & { scope_types: { name: string } | null })[];
@@ -55,7 +69,6 @@ interface AssistantV2ChatProps {
   discovery: DiscoveryResult | null;
   scopeGroups: ScopeGroupInput[];
   scopeQuestions: ScopeQuestionWithAnswers[];
-  declinedConstraintSlugs: string[];
   qualityLevel: string;
   showGreeting: boolean;
 }
@@ -67,24 +80,23 @@ export function AssistantV2Chat({
   discovery,
   scopeGroups,
   scopeQuestions,
-  declinedConstraintSlugs,
   qualityLevel,
   showGreeting,
 }: AssistantV2ChatProps) {
-  const router = useRouter();
-  const { markUpdating, markSaved } = useEstimateUpdate();
-  const [acceptPending, startAccept] = useTransition();
   const {
     allMessages,
+    persistedMessages,
     submitScopeAnswer,
     flushScopeBatch,
     submitConstraintBatch,
+    submitWorkAreaConfirmation,
     submitQualityLevel,
     optimisticAnswers,
-    workAreas,
     optimisticConstraintSlugs,
+    effectiveDeclinedConstraintSlugs,
     optimisticQualityLevel,
     flushInFlight,
+    syncAssistant,
   } = useAssistantChat();
 
   const workAreaTypeKeys = useMemo(
@@ -115,7 +127,7 @@ export function AssistantV2Chat({
         discovery,
         scopeQuestions,
         selectedConstraintSlugs: optimisticConstraintSlugs,
-        declinedConstraintSlugs: new Set(declinedConstraintSlugs),
+        declinedConstraintSlugs: new Set(effectiveDeclinedConstraintSlugs),
         qualityLevel: activeQuality,
         answeredQuestionKeys: mergedAnswers,
       }),
@@ -125,27 +137,45 @@ export function AssistantV2Chat({
       discovery,
       scopeQuestions,
       optimisticConstraintSlugs,
-      declinedConstraintSlugs,
+      effectiveDeclinedConstraintSlugs,
       activeQuality,
       mergedAnswers,
     ]
   );
 
-  const completenessPercent = useMemo(
-    () => computeProjectCompleteness(workAreas),
-    [workAreas]
+  const pendingSuggestions = suggestions.filter((s) => s.status === "pending");
+  const showWorkAreaConfirmation =
+    pendingSuggestions.length > 0 && !flushInFlight;
+
+  const activeTurnFingerprint =
+    nextTurn?.kind === "scope_batch"
+      ? questionBatchFingerprint(
+          "scope",
+          nextTurn.questions.map((q) => q.questionId)
+        )
+      : nextTurn?.kind === "constraint_batch"
+        ? questionBatchFingerprint(
+            "constraint",
+            nextTurn.constraints.map((c) => c.slug)
+          )
+        : null;
+
+  const showActiveTurn = Boolean(
+    nextTurn &&
+      confirmedScopes.length > 0 &&
+      !flushInFlight &&
+      !showWorkAreaConfirmation
   );
 
-  const pendingSuggestions = suggestions.filter((s) => s.status === "pending");
-
-  function acceptSuggestion(suggestionId: string) {
-    startAccept(async () => {
-      markUpdating();
-      await acceptScopeSuggestion(projectId, suggestionId);
-      router.refresh();
-      markSaved();
+  const visibleMessages = useMemo(() => {
+    if (!activeTurnFingerprint) return allMessages;
+    return allMessages.filter((message) => {
+      const persisted = persistedMessages.find((m) => m.id === message.id);
+      if (!persisted) return true;
+      const meta = persisted.metadata as Record<string, unknown> | null;
+      return meta?.batchFingerprint !== activeTurnFingerprint;
     });
-  }
+  }, [allMessages, persistedMessages, activeTurnFingerprint]);
 
   return (
     <AssistantConversationPanel>
@@ -159,7 +189,7 @@ export function AssistantV2Chat({
         </AssistantBubble>
       )}
 
-      {allMessages.map((message) => (
+      {visibleMessages.map((message) => (
         <div key={message.id}>
           {message.role === "user" ? (
             <UserBubble>
@@ -172,10 +202,17 @@ export function AssistantV2Chat({
             </UserBubble>
           ) : (
             <AssistantBubble>
-              {message.content}
+              <span className="whitespace-pre-wrap">{message.content}</span>
               {message.pending && (
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Recalculating…
+                <p className="mt-1 flex items-center text-xs text-muted-foreground">
+                  {message.content.includes("Analysing")
+                    ? "Analysing project"
+                    : message.content.includes("Saving site")
+                      ? "Saving site conditions"
+                      : message.content.includes("Updating")
+                        ? "Updating estimate"
+                        : "Working"}
+                  <LoadingDots />
                 </p>
               )}
             </AssistantBubble>
@@ -191,48 +228,32 @@ export function AssistantV2Chat({
         />
       )}
 
-      {pendingSuggestions.length > 0 && confirmedScopes.length === 0 && (
-        <AssistantBubble>
-          <p className="font-medium">I found possible work areas</p>
-          <p className="mt-1 text-xs text-muted-foreground">
-            Tap to confirm what applies
-          </p>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {pendingSuggestions.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                disabled={acceptPending}
-                onClick={() => acceptSuggestion(s.id)}
-                className={cn(
-                  "rounded-full border px-3 py-1.5 text-sm font-medium transition-colors hover:bg-muted",
-                  acceptPending && "opacity-60"
-                )}
-              >
-                {s.suggested_name}
-              </button>
-            ))}
-          </div>
-        </AssistantBubble>
+      {showWorkAreaConfirmation && (
+        <WorkAreaConfirmationBubble
+          suggestions={pendingSuggestions}
+          onConfirm={submitWorkAreaConfirmation}
+        />
       )}
 
-      {nextTurn && confirmedScopes.length > 0 && !flushInFlight && (
+      {showActiveTurn && nextTurn && (
         <ActiveTurnBubble
+          projectId={projectId}
           turn={nextTurn}
           optimisticAnswers={optimisticAnswers}
           onScopeAnswer={submitScopeAnswer}
           onScopeBatchComplete={flushScopeBatch}
           onConstraintBatch={submitConstraintBatch}
           onQualityAnswer={(level, label) => submitQualityLevel(level, label)}
+          onPersisted={syncAssistant}
         />
       )}
 
       {!nextTurn && confirmedScopes.length > 0 && discovery && (
         <AssistantBubble>
-          <p className="font-medium">Ready to estimate</p>
+          <p className="font-medium">That&apos;s enough to work with</p>
           <p className="mt-1 text-muted-foreground">
-            I have enough to price this at {completenessPercent}% confidence.
-            Check the live estimate — add more notes anytime to refine.
+            Check the live estimate on the right — add more notes anytime to
+            refine.
           </p>
         </AssistantBubble>
       )}
@@ -241,13 +262,16 @@ export function AssistantV2Chat({
 }
 
 function ActiveTurnBubble({
+  projectId,
   turn,
   optimisticAnswers,
   onScopeAnswer,
   onScopeBatchComplete,
   onConstraintBatch,
   onQualityAnswer,
+  onPersisted,
 }: {
+  projectId: string;
   turn: AssistantTurn;
   optimisticAnswers: Record<string, string>;
   onScopeAnswer: (
@@ -268,7 +292,41 @@ function ActiveTurnBubble({
     selections: { slug: string; label: string; apply: boolean }[]
   ) => void;
   onQualityAnswer: (level: string, label: string) => void;
+  onPersisted: () => Promise<void>;
 }) {
+  useEffect(() => {
+    async function persistTurn() {
+      if (turn.kind === "scope_batch") {
+        const content = formatScopeBatchContent(turn.intro, turn.questions);
+        const fingerprint = questionBatchFingerprint(
+          "scope",
+          turn.questions.map((q) => q.questionId)
+        );
+        await persistAssistantQuestionBatch(projectId, content, fingerprint, {
+          kind: "scope_batch",
+          questionIds: turn.questions.map((q) => q.questionId),
+        });
+        await onPersisted();
+        return;
+      }
+
+      if (turn.kind === "constraint_batch") {
+        const content = formatConstraintBatchContent(turn.constraints);
+        const fingerprint = questionBatchFingerprint(
+          "constraint",
+          turn.constraints.map((c) => c.slug)
+        );
+        await persistAssistantQuestionBatch(projectId, content, fingerprint, {
+          kind: "constraint_batch",
+          constraintSlugs: turn.constraints.map((c) => c.slug),
+        });
+        await onPersisted();
+      }
+    }
+
+    void persistTurn();
+  }, [projectId, turn, onPersisted]);
+
   if (turn.kind === "scope_batch") {
     return (
       <ScopeBatchBubble
@@ -402,9 +460,40 @@ function ScopeBatchBubble({
     onScopeAnswer(q.questionId, q.questionKey, answer, label);
   }
 
+  const [naturalAnswer, setNaturalAnswer] = useState("");
+
+  function handleNaturalSubmit() {
+    const parsed = parseNaturalLanguageBatchAnswers(naturalAnswer, questions);
+    if (parsed.length === 0) return;
+
+    for (const item of parsed) {
+      onScopeAnswer(
+        item.questionId,
+        item.questionKey,
+        item.answer,
+        item.label
+      );
+    }
+
+    if (parsed.length === questions.length) {
+      onBatchComplete(parsed);
+    }
+    setNaturalAnswer("");
+  }
+
   return (
     <AssistantBubble>
-      <p className="font-medium">{intro}</p>
+      <p className="font-medium whitespace-pre-wrap">
+        {intro}
+        {questions.length > 1 && (
+          <>
+            {"\n"}
+            {questions
+              .map((q, i) => `${i + 1}. ${contextualQuestionText(q)}`)
+              .join("\n")}
+          </>
+        )}
+      </p>
       <div className="mt-4 space-y-4">
         {questions.map((q) => (
           <ScopeQuestionRow
@@ -415,6 +504,34 @@ function ScopeBatchBubble({
           />
         ))}
       </div>
+      {questions.length > 1 && (
+        <div className="mt-4 space-y-2 border-t pt-3">
+          <p className="text-xs text-muted-foreground">
+            Or answer in one line — e.g. 40sqm, elevated, timber
+          </p>
+          <div className="flex gap-2">
+            <Input
+              value={naturalAnswer}
+              onChange={(e) => setNaturalAnswer(e.target.value)}
+              placeholder="Type your answers…"
+              className="h-9"
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleNaturalSubmit();
+              }}
+            />
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              onClick={handleNaturalSubmit}
+              disabled={!naturalAnswer.trim()}
+            >
+              Send
+            </Button>
+          </div>
+        </div>
+      )}
+
       {questions.some((q) => q.inputType === "number") && allAnswered && (
         <Button
           type="button"
@@ -496,19 +613,156 @@ function ScopeQuestionRow({
   );
 }
 
+type WorkAreaSuggestionState = "suggested" | "confirmed" | "excluded";
+
+function WorkAreaConfirmationBubble({
+  suggestions,
+  onConfirm,
+}: {
+  suggestions: ProjectScopeSuggestion[];
+  onConfirm: (selections: WorkAreaSelection[]) => void;
+}) {
+  const { flushInFlight } = useAssistantChat();
+  const [states, setStates] = useState<Record<string, WorkAreaSuggestionState>>(
+    () =>
+      Object.fromEntries(
+        suggestions.map((s) => [s.id, "suggested" as WorkAreaSuggestionState])
+      )
+  );
+  const [submitted, setSubmitted] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const suggestionIds = suggestions.map((s) => s.id).join(",");
+
+  useEffect(() => {
+    setStates(
+      Object.fromEntries(
+        suggestions.map((s) => [s.id, "suggested" as WorkAreaSuggestionState])
+      )
+    );
+    setSubmitted(false);
+    setError(null);
+  }, [suggestionIds, suggestions]);
+
+  useEffect(() => {
+    if (!flushInFlight) {
+      setSubmitted(false);
+    }
+  }, [flushInFlight]);
+
+  function setState(id: string, state: WorkAreaSuggestionState) {
+    setStates((prev) => ({ ...prev, [id]: state }));
+  }
+
+  function handleConfirm() {
+    if (submitted) return;
+
+    const unresolved = suggestions.some(
+      (s) => states[s.id] === "suggested"
+    );
+    if (unresolved) {
+      setError("Choose include or exclude for each work area.");
+      return;
+    }
+
+    setSubmitted(true);
+    setError(null);
+    onConfirm(
+      suggestions.map((s) => ({
+        suggestionId: s.id,
+        included: states[s.id] === "confirmed",
+      }))
+    );
+  }
+
+  return (
+    <AssistantBubble>
+      <p className="font-medium">
+        I found these work areas. Confirm what should be included in this
+        estimate.
+      </p>
+      <div className="mt-3 space-y-2">
+        {suggestions.map((s) => {
+          const state = states[s.id] ?? "suggested";
+          return (
+            <div
+              key={s.id}
+              className={cn(
+                "rounded-lg border px-3 py-2",
+                state === "confirmed" && "border-primary bg-primary/5",
+                state === "excluded" && "opacity-70"
+              )}
+            >
+              <p className="text-sm font-medium">{s.suggested_name}</p>
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={state === "confirmed" ? "default" : "outline"}
+                  disabled={submitted}
+                  onClick={() => setState(s.id, "confirmed")}
+                >
+                  Include
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={state === "excluded" ? "secondary" : "outline"}
+                  disabled={submitted}
+                  onClick={() => setState(s.id, "excluded")}
+                >
+                  Exclude
+                </Button>
+              </div>
+              <p className="mt-1.5 text-[10px] text-muted-foreground">
+                {state === "confirmed"
+                  ? "Included in estimate"
+                  : state === "excluded"
+                    ? "Excluded for now"
+                    : "Choose include or exclude"}
+              </p>
+            </div>
+          );
+        })}
+      </div>
+      {error && <p className="mt-2 text-xs text-destructive">{error}</p>}
+      <Button
+        type="button"
+        size="sm"
+        className="mt-4"
+        disabled={submitted}
+        onClick={handleConfirm}
+      >
+        {submitted ? "Saving…" : "Confirm work areas"}
+      </Button>
+    </AssistantBubble>
+  );
+}
+
 function ConstraintBatchBubble({
   constraints,
   onSubmit,
 }: {
-  constraints: { slug: string; label: string; prompt: string }[];
+  constraints: ConstraintQuestion[];
   onSubmit: (
     selections: { slug: string; label: string; apply: boolean }[]
   ) => void;
 }) {
+  const { flushInFlight } = useAssistantChat();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [submitted, setSubmitted] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const saving = submitted && flushInFlight;
+
+  useEffect(() => {
+    if (!flushInFlight) {
+      setSubmitted(false);
+    }
+  }, [flushInFlight]);
 
   function toggle(slug: string) {
+    if (submitted) return;
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(slug)) next.delete(slug);
@@ -517,33 +771,54 @@ function ConstraintBatchBubble({
     });
   }
 
+  function buildSelections(applyAll: boolean) {
+    return constraints.map((c) => ({
+      slug: c.slug,
+      label: c.label.replace(/\?$/, ""),
+      apply: applyAll ? false : selected.has(c.slug),
+    }));
+  }
+
   function handleSubmit() {
     if (submitted) return;
     setSubmitted(true);
-    const selections = constraints.map((c) => ({
-      slug: c.slug,
-      label: c.label.replace(/\?$/, ""),
-      apply: selected.has(c.slug),
-    }));
-    onSubmit(selections);
+    setError(null);
+    onSubmit(buildSelections(false));
+  }
+
+  function handleNoneApply() {
+    if (submitted) return;
+    setSubmitted(true);
+    setError(null);
+    onSubmit(buildSelections(true));
   }
 
   return (
     <AssistantBubble>
-      <p className="font-medium">Any of these apply?</p>
+      <p className="font-medium whitespace-pre-wrap">
+        {formatConstraintBatchContent(constraints)}
+      </p>
+      {saving && (
+        <p className="mt-2 flex items-center text-xs text-muted-foreground">
+          Saving site conditions…
+          <LoadingDots />
+        </p>
+      )}
       <div className="mt-3 space-y-2">
         {constraints.map((c) => (
           <label
             key={c.slug}
             className={cn(
               "flex cursor-pointer items-center gap-2.5 rounded-lg border px-3 py-2 transition-colors hover:bg-muted/50",
-              selected.has(c.slug) && "border-primary bg-primary/5"
+              selected.has(c.slug) && "border-primary bg-primary/5",
+              submitted && "pointer-events-none opacity-70"
             )}
           >
             <input
               type="checkbox"
               checked={selected.has(c.slug)}
               onChange={() => toggle(c.slug)}
+              disabled={submitted}
               className="h-4 w-4 rounded border-input"
             />
             <span className="text-sm">
@@ -552,15 +827,26 @@ function ConstraintBatchBubble({
           </label>
         ))}
       </div>
-      <Button
-        type="button"
-        size="sm"
-        className="mt-4"
-        disabled={submitted}
-        onClick={handleSubmit}
-      >
-        {submitted ? "Saving…" : "Confirm"}
-      </Button>
+      {error && <p className="mt-2 text-xs text-destructive">{error}</p>}
+      <div className="mt-4 flex flex-wrap gap-2">
+        <Button
+          type="button"
+          size="sm"
+          disabled={submitted}
+          onClick={handleSubmit}
+        >
+          {saving ? "Saving…" : "Confirm"}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={submitted}
+          onClick={handleNoneApply}
+        >
+          {saving ? "Saving…" : "None of these apply"}
+        </Button>
+      </div>
     </AssistantBubble>
   );
 }

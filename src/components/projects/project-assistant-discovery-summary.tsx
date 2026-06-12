@@ -56,7 +56,7 @@ export function DiscoverySummary({
   const summaryConstraints: DiscoverySummaryConstraint[] =
     savedConstraints.length > 0
       ? savedConstraints
-      : (discovery?.constraints.map((constraint) => ({
+      : (discovery?.constraints?.map((constraint) => ({
           slug: constraint.slug,
           label: constraint.label,
           source: "notes" as const,
@@ -71,7 +71,7 @@ export function DiscoverySummary({
   const workAreaNames =
     confirmedWorkAreaNames.length > 0
       ? confirmedWorkAreaNames
-      : (discovery?.workAreas.map((w) => w.name) ?? []);
+      : (discovery?.workAreas?.map((w) => w.name) ?? []);
 
   const keyFacts = (discovery?.facts ?? []).map((fact) => {
     const unit = fact.unit ? ` ${fact.unit}` : "";
@@ -79,7 +79,7 @@ export function DiscoverySummary({
   });
 
   const uniqueTrades = discovery
-    ? [...new Set(discovery.trades.map((t) => t.name))].sort()
+    ? [...new Set((discovery.trades ?? []).map((t) => t.name))].sort()
     : [];
 
   if (

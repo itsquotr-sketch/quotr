@@ -143,6 +143,35 @@ export function getPendingConstraints(input: {
   return collectPendingConstraints(input);
 }
 
+export type ConstraintAnswerState = true | false | "unknown";
+
+export function getConstraintAnswerState(
+  slug: string,
+  selectedSlugs: Set<string>,
+  declinedSlugs: Set<string>
+): ConstraintAnswerState {
+  if (selectedSlugs.has(slug)) return true;
+  if (declinedSlugs.has(slug)) return false;
+  return "unknown";
+}
+
+/** Site conditions the assistant still needs to ask about (not true or false). */
+export function getUnknownSiteConditions(input: {
+  workAreaTypeKeys: string[];
+  selectedConstraintSlugs: string[];
+  declinedConstraintSlugs: string[];
+  discoveryConstraintSlugs: string[];
+  answeredQuestionKeys: Set<string>;
+}): ConstraintQuestion[] {
+  return getPendingConstraints({
+    workAreaTypeKeys: input.workAreaTypeKeys,
+    selectedConstraintSlugs: input.selectedConstraintSlugs,
+    discoveryConstraintSlugs: input.discoveryConstraintSlugs,
+    answeredQuestionKeys: input.answeredQuestionKeys,
+    declinedConstraintSlugs: new Set(input.declinedConstraintSlugs),
+  });
+}
+
 export function getNextConstraintQuestion(input: {
   workAreaTypeKeys: string[];
   selectedConstraintSlugs: string[];

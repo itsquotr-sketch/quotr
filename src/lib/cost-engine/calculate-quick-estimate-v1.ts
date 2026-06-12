@@ -17,11 +17,18 @@ import { buildCostBreakdown } from "@/lib/cost-engine/build-cost-breakdown";
 import { buildEstimateTrace } from "@/lib/cost-engine/build-estimate-trace";
 import { createEmptyTrace } from "@/lib/cost-engine/estimate-trace";
 import { isSiteConstraintsAssessed } from "@/lib/cost-engine/estimate-quality";
+import type { WorkAreaEstimateTrace } from "@/lib/cost-engine/estimate-trace";
 import {
+  getScopeRateDefinition,
+  getScopeRateDefinitionByKey,
+} from "@/lib/constants/scope-rates";
+import {
+  isBenchmarkRateSource,
   primaryRateSource,
   rateSourceLabel,
   type RateSource,
 } from "@/lib/cost-engine/rates/get-base-rate-for-scope";
+import type { ScopeRateAllocation } from "@/lib/cost-engine/rates/scope-rate-utils";
 import {
   buildRange,
   getRangeFactor,
@@ -63,10 +70,18 @@ type AreaCalcResult = {
   unit: string;
   baseRate: number;
   rateSource: RateSource;
+  /** True when finish level was baked into template/regional rate selection. */
+  finishEncodedInRate: boolean;
   usedPackage: boolean;
   inputs: string[];
   allowances: string[];
+  assumptions: string[];
   templateKey?: string;
+  scopeTypeKey?: string;
+  scopeRateId?: string;
+  usesDefaultRateOnly?: boolean;
+  scopeAllocation?: ScopeRateAllocation | null;
+  allocationBreakdown?: WorkAreaEstimateTrace["allocationBreakdown"];
 };
 
 function calcGenericArea(name: string): AreaCalcResult {
@@ -77,9 +92,11 @@ function calcGenericArea(name: string): AreaCalcResult {
     unit: "each",
     baseRate: 0,
     rateSource: "placeholder",
+    finishEncodedInRate: false,
     usedPackage: false,
     inputs: [`${name} (generic)`],
     allowances: [`Generic allowance for ${name}`],
+    assumptions: [],
   };
 }
 
@@ -126,6 +143,7 @@ export function calculateQuickEstimateV1(
   );
 
   const orgRates = {
+    scopeRates: input.scopeRates,
     labourRates: input.labourRates,
     materialRates: input.materialRates,
     subcontractorRates: input.subcontractorRates,
@@ -163,7 +181,9 @@ export function calculateQuickEstimateV1(
       qualityLevel: "unknown",
       qualityLevelNote: "Finish level unknown — estimate range kept wider.",
       ratesSource: "fallback",
-      rateSourceDetail: "Placeholder fallback",
+      rateSourceDetail: "Rough placeholder",
+      rateSourceLines: [],
+      benchmarkScopesForOnboarding: [],
       usedPackageRates: false,
       templatesUsed: [],
       keyFactsUsed: [],
@@ -217,10 +237,17 @@ export function calculateQuickEstimateV1(
         unit: calc.unit,
         baseRate: calc.baseRate,
         rateSource: calc.rateSource,
+        finishEncodedInRate: calc.finishEncodedInRate,
         usedPackage: calc.usedPackage,
         inputs: calc.inputs,
         allowances: calc.allowances,
+        assumptions: calc.assumptions,
         templateKey: calc.templateKey,
+        scopeTypeKey: calc.scopeTypeKey,
+        scopeRateId: calc.scopeRateId,
+        usesDefaultRateOnly: calc.usesDefaultRateOnly,
+        scopeAllocation: calc.scopeAllocation,
+        allocationBreakdown: calc.allocationBreakdown,
       };
       templatesUsed.push(template.key);
       rateSources.push(calc.rateSource);
@@ -254,15 +281,43 @@ export function calculateQuickEstimateV1(
   const { centralEstimate: afterConstraints, constraintsApplied } =
     applyConstraintsToCentral(centralEstimate, input.constraints, allAnswers);
 
-  const qualityAdjustment = applyQualityLevelToCentral(
-    afterConstraints,
-    effectiveQualityLevel
-  );
+  // Quality model: template_benchmark selects low/typical/high per finish level inside
+  // getBaseRateForScope — skip the global finish multiplier when any work area already
+  // encoded finish in its rate. Org/package rates do NOT encode finish, so multiplier
+  // still applies for those areas only via the blended central (acceptable approximation).
+  const finishAlreadyInRates =
+    effectiveQualityLevel !== "unknown" &&
+    areaResults.some((area) => area.finishEncodedInRate);
+
+  const qualityAdjustment = finishAlreadyInRates
+    ? {
+        centralEstimate: afterConstraints,
+        assumptions:
+          effectiveQualityLevel === "standard"
+            ? ["Standard / mid-range finish assumed."]
+            : effectiveQualityLevel === "budget"
+              ? [
+                  "Budget / basic finish — lower specification materials and allowances assumed.",
+                ]
+              : effectiveQualityLevel === "premium"
+                ? [
+                    "Premium / high-end finish — higher specification materials assumed.",
+                  ]
+                : [],
+        missingInformation: [] as string[],
+        qualityNote: `${effectiveQualityLevel.charAt(0).toUpperCase()}${effectiveQualityLevel.slice(1)} finish selected.`,
+      }
+    : applyQualityLevelToCentral(afterConstraints, effectiveQualityLevel);
   const baseCost = qualityAdjustment.centralEstimate;
 
-  const hasKeyMeasurements = input.workAreas.every((area) =>
+  const measuredAreaCount = input.workAreas.filter((area) =>
     hasKeyMeasurementsForArea(area.workAreaTypeKey, area.answers)
-  );
+  ).length;
+  const measurementFraction =
+    input.workAreas.length > 0
+      ? measuredAreaCount / input.workAreas.length
+      : 0;
+  const hasKeyMeasurements = measurementFraction >= 1;
 
   const clientBudget = input.quickEstimate.client_budget
     ? Number(input.quickEstimate.client_budget)
@@ -275,6 +330,7 @@ export function calculateQuickEstimateV1(
   );
 
   const siteConstraintsAssessed = isSiteConstraintsAssessed({
+    constraintsAssessed: input.siteConstraintsAssessed,
     constraintCount: input.constraints.length,
     answeredQuestionKeys: input.answeredQuestionKeys,
   });
@@ -285,7 +341,7 @@ export function calculateQuickEstimateV1(
     rateSources,
     clientBudget,
     constraintsAssessed: siteConstraintsAssessed,
-    discoveryNotesLength: input.discovery?.facts.length
+    discoveryNotesLength: input.discovery?.facts?.length
       ? input.sourceNotesLength
       : 0,
     hasCustomScope,
@@ -315,7 +371,10 @@ export function calculateQuickEstimateV1(
     confidenceLevel,
     hasKeyMeasurements,
     qualityLevel: effectiveQualityLevel,
-    usedPackageRates: primarySource === "org_rate" || primarySource === "package_rate",
+    usedPackageRates:
+      primarySource === "scope_rate" ||
+      primarySource === "org_rate" ||
+      primarySource === "package_rate",
     constraintsReviewed: siteConstraintsAssessed,
     rangeWidthPercent,
   });
@@ -337,11 +396,58 @@ export function calculateQuickEstimateV1(
   });
 
   const ratesSource: QuickEstimateOutput["ratesSource"] =
-    primarySource === "org_rate" || primarySource === "package_rate"
+    primarySource === "scope_rate" ||
+    primarySource === "org_rate" ||
+    primarySource === "package_rate"
       ? "saved"
       : "fallback";
 
+  const rateSourceLines = input.workAreas.map((area, index) => {
+    const result = areaResults[index];
+    const scopeDef =
+      getScopeRateDefinitionByKey(result?.scopeTypeKey ?? "") ??
+      getScopeRateDefinition(area.workAreaTypeKey);
+    const scopeLabel = scopeDef?.label ?? area.name;
+    return {
+      workAreaName: area.name,
+      workAreaTypeKey: area.workAreaTypeKey,
+      scopeTypeKey: result?.scopeTypeKey ?? scopeDef?.scopeTypeKey ?? "",
+      label: scopeLabel,
+      rateSource: result?.rateSource ?? "placeholder",
+      rateSourceLabel: rateSourceLabel(result?.rateSource ?? "placeholder", {
+        scopeLabel,
+        usesDefaultRateOnly: result?.usesDefaultRateOnly,
+      }),
+    };
+  });
+
+  const benchmarkScopeKeysSeen = new Set<string>();
+  const benchmarkScopesForOnboarding = rateSourceLines
+    .filter((line) => isBenchmarkRateSource(line.rateSource) && line.scopeTypeKey)
+    .map((line) => {
+      const def = getScopeRateDefinitionByKey(line.scopeTypeKey);
+      if (!def) return null;
+      return {
+        scopeTypeKey: def.scopeTypeKey,
+        label: def.label,
+        workAreaTypeKey: def.workAreaTypeKey,
+        unit: def.unit,
+        benchmarkLow: def.benchmarkLow,
+        benchmarkStandard: def.benchmarkStandard,
+        benchmarkPremium: def.benchmarkPremium,
+      };
+    })
+    .filter((row): row is NonNullable<typeof row> => row != null)
+    .filter((row) => {
+      if (benchmarkScopeKeysSeen.has(row.scopeTypeKey)) return false;
+      benchmarkScopeKeysSeen.add(row.scopeTypeKey);
+      return true;
+    });
+
   const primaryArea = areaResults[0];
+  const primaryScopeDef =
+    getScopeRateDefinitionByKey(primaryArea?.scopeTypeKey ?? "") ??
+    getScopeRateDefinition(input.workAreas[0]?.workAreaTypeKey ?? "");
   const finishTraceAdjustments = qualityAdjustment.assumptions.map((a) => ({
     label: a,
     effect: "Finish level adjustment",
@@ -352,17 +458,41 @@ export function calculateQuickEstimateV1(
     met: !label.startsWith("⚠"),
   }));
 
+  const scaledAreaBreakdown = areaBreakdownInputs.map((area, index) => ({
+    ...area,
+    centralEstimate:
+      baseCost > 0 && centralEstimate > 0
+        ? Math.round((area.centralEstimate / centralEstimate) * baseCost)
+        : area.centralEstimate,
+    scopeAllocation: areaResults[index]?.scopeAllocation,
+  }));
+
   const costBreakdown = buildCostBreakdown({
     centralEstimate: baseCost,
     contingencyPercent,
-    workAreas: areaBreakdownInputs.map((area) => ({
-      ...area,
-      centralEstimate:
-        baseCost > 0 && centralEstimate > 0
-          ? Math.round((area.centralEstimate / centralEstimate) * baseCost)
-          : area.centralEstimate,
-    })),
+    workAreas: scaledAreaBreakdown,
   });
+
+  const workAreaTraces: WorkAreaEstimateTrace[] = input.workAreas.map(
+    (area, index) => {
+      const result = areaResults[index];
+      const scaledCentral =
+        scaledAreaBreakdown[index]?.centralEstimate ?? result.centralEstimate;
+      return {
+        scopeTypeKey: result.scopeTypeKey ?? result.templateKey ?? "generic",
+        workAreaName: area.name,
+        workAreaTypeKey: area.workAreaTypeKey,
+        quantity: result.quantity,
+        unit: result.unit,
+        rate: result.baseRate,
+        rateSource: result.rateSource,
+        finishLevel: effectiveQualityLevel,
+        centralEstimate: scaledCentral,
+        allocationBreakdown: result.allocationBreakdown,
+        assumptions: result.assumptions,
+      };
+    }
+  );
 
   const estimateTrace = buildEstimateTrace({
     workAreas: input.workAreas,
@@ -387,6 +517,7 @@ export function calculateQuickEstimateV1(
     missingCriticalFacts: missingInformation.slice(0, 5),
     finishLevel: effectiveQualityLevel,
     costBreakdown,
+    workAreaTraces,
   });
 
   const tightenMessage =
@@ -430,7 +561,12 @@ export function calculateQuickEstimateV1(
     qualityLevel: effectiveQualityLevel,
     qualityLevelNote: qualityAdjustment.qualityNote,
     ratesSource,
-    rateSourceDetail: rateSourceLabel(primarySource),
+    rateSourceDetail: rateSourceLabel(primarySource, {
+      scopeLabel: primaryScopeDef?.label,
+      usesDefaultRateOnly: primaryArea?.usesDefaultRateOnly,
+    }),
+    rateSourceLines,
+    benchmarkScopesForOnboarding,
     usedPackageRates,
     templatesUsed: [...new Set(templatesUsed)],
     keyFactsUsed,

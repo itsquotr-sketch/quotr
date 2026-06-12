@@ -17,6 +17,7 @@ export type ConfidenceSignal =
   | "COMPLEXITY_ASSESSED"
   | "PROGRAMME_KNOWN"
   | "EXISTING_STRUCTURE_KNOWN"
+  | "SCOPE_RATE_AVAILABLE"
   | "ORG_RATE_AVAILABLE"
   | "PACKAGE_RATE_AVAILABLE"
   | "MISSING_CRITICAL_FACT"
@@ -36,6 +37,7 @@ const SIGNAL_WEIGHTS: Record<ConfidenceSignal, number> = {
   COMPLEXITY_ASSESSED: 5,
   PROGRAMME_KNOWN: 5,
   EXISTING_STRUCTURE_KNOWN: 5,
+  SCOPE_RATE_AVAILABLE: 12,
   ORG_RATE_AVAILABLE: 10,
   PACKAGE_RATE_AVAILABLE: 5,
   MISSING_CRITICAL_FACT: -20,
@@ -62,8 +64,9 @@ const SIGNAL_LABELS: Partial<Record<ConfidenceSignal, string>> = {
   ACCESS_KNOWN: "Access conditions known",
   CLIENT_BUDGET_KNOWN: "Client budget known",
   SITE_CONDITIONS_KNOWN: "Site conditions assessed",
-  ORG_RATE_AVAILABLE: "Your saved rates used",
-  PACKAGE_RATE_AVAILABLE: "Package rate used",
+  SCOPE_RATE_AVAILABLE: "Your saved scope rate used",
+  ORG_RATE_AVAILABLE: "Your trade/material rates used",
+  PACKAGE_RATE_AVAILABLE: "Your package rate used",
   MISSING_CRITICAL_FACT: "Missing critical facts",
   PLACEHOLDER_RATE_USED: "No rate match — placeholder pricing",
   NOTES_TOO_VAGUE: "Notes too vague for precise pricing",
@@ -91,7 +94,7 @@ export function computeConfidenceScore(input: {
     positive.push("SCOPE_IDENTIFIED");
   }
 
-  const allMeasured = input.workAreas.every((area) => {
+  const measuredAreas = input.workAreas.filter((area) => {
     const scope = getScopeByWorkAreaType(area.workAreaTypeKey);
     if (!scope) return false;
     return (
@@ -99,12 +102,26 @@ export function computeConfidenceScore(input: {
     );
   });
 
-  if (allMeasured && input.workAreas.length > 0) {
-    score += SIGNAL_WEIGHTS.AREA_OR_QUANTITY_MEASURED;
-    positive.push("AREA_OR_QUANTITY_MEASURED");
-  } else if (input.workAreas.length > 0) {
-    score += SIGNAL_WEIGHTS.MISSING_CRITICAL_FACT;
-    negative.push("MISSING_CRITICAL_FACT");
+  if (input.workAreas.length > 0) {
+    const measuredFraction = measuredAreas.length / input.workAreas.length;
+
+    if (measuredFraction >= 1) {
+      score += SIGNAL_WEIGHTS.AREA_OR_QUANTITY_MEASURED;
+      positive.push("AREA_OR_QUANTITY_MEASURED");
+    } else if (measuredFraction > 0) {
+      score += Math.round(
+        SIGNAL_WEIGHTS.AREA_OR_QUANTITY_MEASURED * measuredFraction
+      );
+      positive.push("AREA_OR_QUANTITY_MEASURED");
+    }
+
+    const missingFraction = 1 - measuredFraction;
+    if (missingFraction > 0) {
+      score += Math.round(
+        SIGNAL_WEIGHTS.MISSING_CRITICAL_FACT * missingFraction
+      );
+      negative.push("MISSING_CRITICAL_FACT");
+    }
   }
 
   const materialKnown = input.workAreas.some((area) =>
@@ -147,7 +164,10 @@ export function computeConfidenceScore(input: {
     positive.push("COMPLEXITY_ASSESSED");
   }
 
-  if (input.rateSources.some((s) => s === "org_rate")) {
+  if (input.rateSources.some((s) => s === "scope_rate")) {
+    score += SIGNAL_WEIGHTS.SCOPE_RATE_AVAILABLE;
+    positive.push("SCOPE_RATE_AVAILABLE");
+  } else if (input.rateSources.some((s) => s === "org_rate")) {
     score += SIGNAL_WEIGHTS.ORG_RATE_AVAILABLE;
     positive.push("ORG_RATE_AVAILABLE");
   } else if (input.rateSources.some((s) => s === "package_rate")) {

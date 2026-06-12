@@ -8,6 +8,9 @@ import {
   logSupabaseError,
   userFacingSupabaseError,
 } from "@/lib/supabase/log-error";
+import { recalculateQuickEstimate } from "@/lib/cost-engine/recalculate-quick-estimate";
+import { revalidateProjectAssistant } from "@/lib/assistant-v2/revalidate";
+import { formatCurrencyRange } from "@/lib/format-currency";
 import {
   labourRateSchema,
   materialRateSchema,
@@ -15,6 +18,8 @@ import {
   parseBooleanFormValue,
   pricingSettingsSchema,
   rateIdOnlySchema,
+  scopeRateSchema,
+  scopeRateUpsertSchema,
   subcontractorRateSchema,
   type RateActionState,
 } from "@/lib/validations/rates";
@@ -515,4 +520,233 @@ export async function updatePricingSettings(
 
   revalidatePath(RATES_PATH);
   return { success: true, message: "Pricing settings saved." };
+}
+
+function optionalFormNumber(value: FormDataEntryValue | null): number | null {
+  if (value == null || String(value).trim() === "") return null;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseScopeRateForm(formData: FormData) {
+  return scopeRateUpsertSchema.safeParse({
+    scopeTypeKey: formData.get("scopeTypeKey"),
+    label: formData.get("label"),
+    unit: formData.get("unit") || "m²",
+    budgetRate: optionalFormNumber(formData.get("budgetRate")),
+    standardRate: optionalFormNumber(formData.get("standardRate")),
+    premiumRate: optionalFormNumber(formData.get("premiumRate")),
+    defaultRate: optionalFormNumber(formData.get("defaultRate")),
+    labourAllocationPercent: optionalFormNumber(
+      formData.get("labourAllocationPercent")
+    ),
+    materialsAllocationPercent: optionalFormNumber(
+      formData.get("materialsAllocationPercent")
+    ),
+    subcontractorAllocationPercent: optionalFormNumber(
+      formData.get("subcontractorAllocationPercent")
+    ),
+    allowanceAllocationPercent: optionalFormNumber(
+      formData.get("allowanceAllocationPercent")
+    ),
+    isActive: parseBooleanFormValue(formData.get("isActive")),
+  });
+}
+
+function scopeRateDbRow(data: z.infer<typeof scopeRateSchema>) {
+  return {
+    scope_type_key: data.scopeTypeKey,
+    label: data.label,
+    unit: data.unit,
+    budget_rate: data.budgetRate,
+    standard_rate: data.standardRate,
+    premium_rate: data.premiumRate,
+    default_rate: data.defaultRate,
+    labour_allocation_percent: data.labourAllocationPercent,
+    materials_allocation_percent: data.materialsAllocationPercent,
+    subcontractor_allocation_percent: data.subcontractorAllocationPercent,
+    allowance_allocation_percent: data.allowanceAllocationPercent,
+    is_active: data.isActive,
+  };
+}
+
+export async function upsertScopeRate(
+  _prev: RateActionState,
+  formData: FormData
+): Promise<RateActionState> {
+  const { organisationId } = await requireOrganisation();
+  const parsed = parseScopeRateForm(formData);
+
+  if (!parsed.success) {
+    return { fieldErrors: parsed.error.flatten().fieldErrors };
+  }
+
+  const supabase = await createClient();
+  const { error } = await supabase.from("scope_rates").upsert(
+    {
+      organisation_id: organisationId,
+      ...scopeRateDbRow(parsed.data),
+    },
+    { onConflict: "organisation_id,scope_type_key,unit" }
+  );
+
+  if (error) {
+    logSupabaseError("upsertScopeRate", error);
+    return {
+      error: userFacingSupabaseError(error, "Could not save scope rate."),
+    };
+  }
+
+  revalidatePath(RATES_PATH);
+  return { success: true, message: "Scope rate saved." };
+}
+
+export async function updateScopeRate(
+  _prev: RateActionState,
+  formData: FormData
+): Promise<RateActionState> {
+  const { organisationId } = await requireOrganisation();
+  const idParsed = rateIdOnlySchema.safeParse({ id: formData.get("id") });
+  const parsed = parseScopeRateForm(formData);
+
+  if (!idParsed.success) {
+    return { fieldErrors: idParsed.error.flatten().fieldErrors };
+  }
+  if (!parsed.success) {
+    return { fieldErrors: parsed.error.flatten().fieldErrors };
+  }
+
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("scope_rates")
+    .update(scopeRateDbRow(parsed.data))
+    .eq("id", idParsed.data.id)
+    .eq("organisation_id", organisationId);
+
+  if (error) {
+    logSupabaseError("updateScopeRate", error);
+    return {
+      error: userFacingSupabaseError(error, "Could not update scope rate."),
+    };
+  }
+
+  revalidatePath(RATES_PATH);
+  return { success: true, message: "Scope rate updated." };
+}
+
+export async function disableScopeRate(
+  id: string
+): Promise<{ error?: string; success?: boolean }> {
+  const { organisationId } = await requireOrganisation();
+  const parsed = rateIdOnlySchema.safeParse({ id });
+  if (!parsed.success) {
+    return { error: "Invalid scope rate." };
+  }
+
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("scope_rates")
+    .update({ is_active: false })
+    .eq("id", parsed.data.id)
+    .eq("organisation_id", organisationId);
+
+  if (error) {
+    logSupabaseError("disableScopeRate", error);
+    return {
+      error: userFacingSupabaseError(error, "Could not disable scope rate."),
+    };
+  }
+
+  revalidatePath(RATES_PATH);
+  return { success: true };
+}
+
+export async function saveScopeRateAndRecalculate(
+  projectId: string,
+  formData: FormData
+): Promise<{
+  error?: string;
+  success?: boolean;
+  message?: string;
+  estimateDeltaMessage?: string;
+}> {
+  const { organisationId } = await requireOrganisation();
+  const parsed = parseScopeRateForm(formData);
+
+  if (!parsed.success) {
+    return { error: parsed.error.flatten().fieldErrors.standardRate?.[0] ?? "Invalid rate." };
+  }
+
+  const supabase = await createClient();
+
+  const { data: previousEstimate } = await supabase
+    .from("quick_estimates")
+    .select("estimated_cost_low, estimated_cost_high")
+    .eq("project_id", projectId)
+    .eq("organisation_id", organisationId)
+    .maybeSingle();
+
+  const { error: upsertError } = await supabase.from("scope_rates").upsert(
+    {
+      organisation_id: organisationId,
+      ...scopeRateDbRow(parsed.data),
+    },
+    { onConflict: "organisation_id,scope_type_key,unit" }
+  );
+
+  if (upsertError) {
+    logSupabaseError("saveScopeRateAndRecalculate.upsert", upsertError);
+    return {
+      error: userFacingSupabaseError(upsertError, "Could not save your rate."),
+    };
+  }
+
+  const recalc = await recalculateQuickEstimate(
+    supabase,
+    organisationId,
+    projectId,
+    {
+      triggerEvent: "scope_rate_saved",
+      changeReason: `Saved your ${parsed.data.label} rate`,
+    }
+  );
+
+  if (!recalc.success) {
+    return { error: recalc.error ?? "Rate saved but estimate could not update." };
+  }
+
+  await revalidateProjectAssistant(projectId);
+
+  const prevLow = previousEstimate?.estimated_cost_low;
+  const prevHigh = previousEstimate?.estimated_cost_high;
+
+  const { data: updatedEstimate } = await supabase
+    .from("quick_estimates")
+    .select("estimated_cost_low, estimated_cost_high")
+    .eq("project_id", projectId)
+    .eq("organisation_id", organisationId)
+    .maybeSingle();
+
+  let estimateDeltaMessage: string | undefined;
+  if (
+    prevLow != null &&
+    prevHigh != null &&
+    updatedEstimate?.estimated_cost_low != null &&
+    updatedEstimate?.estimated_cost_high != null
+  ) {
+    const from = formatCurrencyRange(Number(prevLow), Number(prevHigh));
+    const to = formatCurrencyRange(
+      Number(updatedEstimate.estimated_cost_low),
+      Number(updatedEstimate.estimated_cost_high)
+    );
+    if (from !== to) {
+      estimateDeltaMessage = `Using your rate changed this estimate from ${from} to ${to}.`;
+    }
+  }
+
+  return {
+    success: true,
+    message: `Your ${parsed.data.label} rate saved.`,
+    estimateDeltaMessage,
+  };
 }

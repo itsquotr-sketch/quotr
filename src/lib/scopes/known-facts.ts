@@ -28,7 +28,7 @@ export function buildKnownFactsMapForWorkArea(input: {
   );
   const { answers, fromNotes } = buildAnswersMap(scopeQuestions);
 
-  if (input.discovery?.facts.length) {
+  if (input.discovery?.facts?.length) {
     for (const q of scopeQuestions) {
       const key = normalizeQuestionKey(q.question_key);
       if (!key) continue;

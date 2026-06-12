@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import { useMemo, useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import { Pencil, Trash2 } from "lucide-react";
 import { deleteProjectScope } from "@/actions/scopes";
 import { AnswerChips } from "@/components/assistant-v2/answer-chips";
@@ -79,9 +78,8 @@ function WorkAreaCard({
   scopeQuestions: ScopeQuestionWithAnswers[];
   discovery: DiscoveryResult | null;
 }) {
-  const router = useRouter();
   const { markUpdating, markSaved } = useEstimateUpdate();
-  const { flushScopeBatch, optimisticAnswers } = useAssistantChat();
+  const { flushScopeBatch, optimisticAnswers, syncAssistant } = useAssistantChat();
   const [deletePending, startDelete] = useTransition();
   const [editingKey, setEditingKey] = useState<string | null>(null);
 
@@ -132,7 +130,7 @@ function WorkAreaCard({
     startDelete(async () => {
       markUpdating();
       await deleteProjectScope(projectId, scope.id);
-      router.refresh();
+      await syncAssistant();
       markSaved();
     });
   }

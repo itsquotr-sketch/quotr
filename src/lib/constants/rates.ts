@@ -58,6 +58,7 @@ export const RATE_CONFIDENCE_LEVELS = [
 ] as const;
 
 export const RATE_TAB_KEYS = [
+  "scope",
   "labour",
   "subcontractors",
   "materials",

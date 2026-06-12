@@ -39,12 +39,13 @@ export function AssistantV2ResetDialog({
               <ul className="list-inside list-disc space-y-0.5">
                 <li>Discovery results</li>
                 <li>Generated questions and answers</li>
-                <li>Constraints and draft estimate</li>
+                <li>Work areas and draft estimate</li>
+                <li>Constraints and estimate trace</li>
               </ul>
               <p>It will <strong>not</strong> remove:</p>
               <ul className="list-inside list-disc space-y-0.5">
                 <li>Project and client details</li>
-                <li>Saved notes (unless you delete them separately)</li>
+                <li>Saved project notes</li>
                 <li>Photos and uploaded documents</li>
               </ul>
             </div>

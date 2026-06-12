@@ -130,16 +130,70 @@ function toPricingQuestion(
 
 const MAX_BATCH_QUESTIONS = 3;
 
-export function getNextPricingQuestions(
+function questionPriority(questionKey: string, inputType: string): number {
+  const key = questionKey.toLowerCase();
+  if (
+    inputType === "number" ||
+    key.includes("area") ||
+    key.includes("length") ||
+    key.includes("quantity") ||
+    key.includes("_m2") ||
+    key.includes("_m")
+  ) {
+    return 100;
+  }
+  if (key.includes("material")) return 70;
+  if (key.includes("access") || key.includes("level_type")) return 50;
+  if (key.includes("finish")) return 30;
+  return 60;
+}
+
+type RankedQuestion = PricingQuestion & { priority: number };
+
+function interleaveByScope(questions: RankedQuestion[], maxCount: number): PricingQuestion[] {
+  const byScope = new Map<string, RankedQuestion[]>();
+  for (const q of questions) {
+    const list = byScope.get(q.scopeId) ?? [];
+    list.push(q);
+    byScope.set(q.scopeId, list);
+  }
+
+  for (const list of byScope.values()) {
+    list.sort((a, b) => b.priority - a.priority);
+  }
+
+  const scopeIds = [...byScope.keys()];
+  const result: PricingQuestion[] = [];
+  let round = 0;
+
+  while (result.length < maxCount && scopeIds.length > 0) {
+    let added = false;
+    for (const scopeId of scopeIds) {
+      const list = byScope.get(scopeId);
+      const item = list?.[round];
+      if (item) {
+        result.push(item);
+        added = true;
+        if (result.length >= maxCount) break;
+      }
+    }
+    if (!added) break;
+    round += 1;
+  }
+
+  return result;
+}
+
+function collectRankedQuestions(
   input: {
     scopeGroups: ScopeGroupInput[];
     discovery: DiscoveryResult | null;
     scopeQuestions: ScopeQuestionWithAnswers[];
     answeredQuestionKeys?: Set<string>;
   },
-  maxCount = MAX_BATCH_QUESTIONS
-): PricingQuestion[] {
-  const questions: PricingQuestion[] = [];
+  requiredOnly: boolean
+): RankedQuestion[] {
+  const questions: RankedQuestion[] = [];
   const answered = input.answeredQuestionKeys ?? new Set<string>();
 
   for (const group of input.scopeGroups) {
@@ -154,45 +208,52 @@ export function getNextPricingQuestions(
 
     for (const question of group.questions) {
       if (!questionBelongsInFlow(question, typeKey)) continue;
-      if (!isRequiredFact(question, typeKey)) continue;
+      const isRequired = isRequiredFact(question, typeKey);
+      if (requiredOnly && !isRequired) continue;
+      if (!requiredOnly && isRequired) continue;
+
+      if (!requiredOnly) {
+        const scope = getScopeByWorkAreaType(typeKey);
+        if (!scope) continue;
+        const key = normalizeQuestionKey(question.question_key);
+        const highImpact = new Set(scope.confidenceRules.highImpactOptionalKeys);
+        if (!key || !highImpact.has(key)) continue;
+      }
+
       const key = normalizeQuestionKey(question.question_key);
       if (key && answered.has(key)) continue;
       if (isKnownQuestion(question, typeKey, merged)) continue;
-      const pq = toPricingQuestion(question, group, true);
-      if (pq) questions.push(pq);
-      if (questions.length >= maxCount) return questions;
+
+      const pq = toPricingQuestion(question, group, requiredOnly);
+      if (!pq) continue;
+
+      questions.push({
+        ...pq,
+        priority: questionPriority(pq.questionKey, pq.inputType),
+      });
     }
   }
 
-  for (const group of input.scopeGroups) {
-    const typeKey = resolveWorkAreaTypeKey(group.scopeTypeName, group.scopeName);
-    const scope = getScopeByWorkAreaType(typeKey);
-    if (!scope) continue;
-
-    const merged = buildMergedAnswersForScope(
-      group.scopeId,
-      group.scopeName,
-      group.scopeTypeName,
-      input.scopeQuestions,
-      input.discovery
-    );
-
-    const highImpact = new Set(scope.confidenceRules.highImpactOptionalKeys);
-
-    for (const question of group.questions) {
-      if (!questionBelongsInFlow(question, typeKey)) continue;
-      if (isRequiredFact(question, typeKey)) continue;
-      const key = normalizeQuestionKey(question.question_key);
-      if (!key || !highImpact.has(key)) continue;
-      if (answered.has(key)) continue;
-      if (isKnownQuestion(question, typeKey, merged)) continue;
-      const pq = toPricingQuestion(question, group, false);
-      if (pq) questions.push(pq);
-      if (questions.length >= maxCount) return questions;
-    }
-  }
-
+  questions.sort((a, b) => b.priority - a.priority);
   return questions;
+}
+
+export function getNextPricingQuestions(
+  input: {
+    scopeGroups: ScopeGroupInput[];
+    discovery: DiscoveryResult | null;
+    scopeQuestions: ScopeQuestionWithAnswers[];
+    answeredQuestionKeys?: Set<string>;
+  },
+  maxCount = MAX_BATCH_QUESTIONS
+): PricingQuestion[] {
+  const required = collectRankedQuestions(input, true);
+  if (required.length > 0) {
+    return interleaveByScope(required, maxCount);
+  }
+
+  const optional = collectRankedQuestions(input, false);
+  return interleaveByScope(optional, maxCount);
 }
 
 export function getNextPricingQuestion(input: {

@@ -1086,6 +1086,48 @@ export interface Database {
           },
         ];
       };
+      project_constraint_selections: {
+        Row: {
+          id: string;
+          organisation_id: string;
+          project_id: string;
+          quick_estimate_id: string | null;
+          constraint_key: string;
+          label: string;
+          selected: boolean;
+          metadata: Json;
+          created_by: string | null;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          organisation_id: string;
+          project_id: string;
+          quick_estimate_id?: string | null;
+          constraint_key: string;
+          label: string;
+          selected: boolean;
+          metadata?: Json;
+          created_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          organisation_id?: string;
+          project_id?: string;
+          quick_estimate_id?: string | null;
+          constraint_key?: string;
+          label?: string;
+          selected?: boolean;
+          metadata?: Json;
+          created_by?: string | null;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
+      };
       project_estimate_driver_values: {
         Row: {
           id: string;
@@ -1126,6 +1168,71 @@ export interface Database {
             columns: ["estimate_driver_id"];
             isOneToOne: false;
             referencedRelation: "estimate_drivers";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      scope_rates: {
+        Row: {
+          id: string;
+          organisation_id: string;
+          scope_type_key: string;
+          label: string;
+          unit: string;
+          budget_rate: number | null;
+          standard_rate: number | null;
+          premium_rate: number | null;
+          default_rate: number | null;
+          labour_allocation_percent: number | null;
+          materials_allocation_percent: number | null;
+          subcontractor_allocation_percent: number | null;
+          allowance_allocation_percent: number | null;
+          is_active: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          organisation_id: string;
+          scope_type_key: string;
+          label: string;
+          unit: string;
+          budget_rate?: number | null;
+          standard_rate?: number | null;
+          premium_rate?: number | null;
+          default_rate?: number | null;
+          labour_allocation_percent?: number | null;
+          materials_allocation_percent?: number | null;
+          subcontractor_allocation_percent?: number | null;
+          allowance_allocation_percent?: number | null;
+          is_active?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          organisation_id?: string;
+          scope_type_key?: string;
+          label?: string;
+          unit?: string;
+          budget_rate?: number | null;
+          standard_rate?: number | null;
+          premium_rate?: number | null;
+          default_rate?: number | null;
+          labour_allocation_percent?: number | null;
+          materials_allocation_percent?: number | null;
+          subcontractor_allocation_percent?: number | null;
+          allowance_allocation_percent?: number | null;
+          is_active?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "scope_rates_organisation_id_fkey";
+            columns: ["organisation_id"];
+            isOneToOne: false;
+            referencedRelation: "organisations";
             referencedColumns: ["id"];
           },
         ];
@@ -1776,6 +1883,7 @@ export type ProjectScopeSuggestion =
   Database["public"]["Tables"]["project_scope_suggestions"]["Row"];
 export type ProjectScope = Database["public"]["Tables"]["project_scopes"]["Row"];
 export type ProjectTrade = Database["public"]["Tables"]["project_trades"]["Row"];
+export type ScopeRate = Database["public"]["Tables"]["scope_rates"]["Row"];
 export type LabourRate = Database["public"]["Tables"]["labour_rates"]["Row"];
 export type MaterialRate = Database["public"]["Tables"]["material_rates"]["Row"];
 export type OrganisationPricingSettings =

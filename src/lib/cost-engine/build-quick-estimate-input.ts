@@ -21,6 +21,7 @@ import {
   listLabourRates,
   listMaterialRates,
   listPackageRates,
+  listScopeRates,
   listSubcontractorRates,
 } from "@/lib/rates-data";
 import { listScopeBuilderInputs } from "@/lib/scope-builder-data";
@@ -93,6 +94,7 @@ export async function buildQuickEstimateInput(
   }
 
   const [
+    { data: scopeRates },
     { data: packageRates },
     { data: labourRates },
     { data: materialRates },
@@ -101,6 +103,7 @@ export async function buildQuickEstimateInput(
     { data: discoveryRun },
     { data: scopeBuilderInputs },
   ] = await Promise.all([
+    listScopeRates(supabase, organisationId),
     listPackageRates(supabase, organisationId),
     listLabourRates(supabase, organisationId),
     listMaterialRates(supabase, organisationId),
@@ -131,7 +134,7 @@ export async function buildQuickEstimateInput(
     const { answers, fromNotes } = buildAnswersMap(scopeQuestions);
 
     // Saved answers win — only fill gaps from discovery facts
-    if (discovery?.facts.length) {
+    if (discovery?.facts?.length) {
       for (const q of scopeQuestions) {
         const key = normalizeQuestionKey(q.question_key);
         if (!key) continue;
@@ -228,31 +231,37 @@ export async function buildQuickEstimateInput(
     answeredQuestionKeys
   );
 
-  const { data: driverValues } = await supabase
-    .from("project_estimate_driver_values")
-    .select("constraint_key, value")
-    .eq("quick_estimate_id", quickEstimate.id)
+  const { data: constraintSelections } = await supabase
+    .from("project_constraint_selections")
+    .select("constraint_key, label, selected, metadata")
+    .eq("project_id", projectId)
     .eq("organisation_id", organisationId);
 
-  const savedConstraints = (driverValues ?? [])
-    .filter((v) => v.constraint_key)
-    .map((v) => {
-      const slug = v.constraint_key as string;
+  const assessedSlugs = new Set(
+    (constraintSelections ?? []).map((row) => row.constraint_key)
+  );
+
+  const savedConstraints = (constraintSelections ?? [])
+    .filter((row) => row.selected === true)
+    .map((row) => {
+      const slug = row.constraint_key;
       const constraint =
         allConstraints.find((c) => c.slug === slug) ?? getConstraintBySlug(slug);
-      const val = v.value as {
+      const val = row.metadata as {
         metres?: number;
         description?: string;
         severity?: "low" | "typical" | "high";
       } | null;
       return {
         slug,
-        label: constraint?.label ?? slug,
+        label: row.label || constraint?.label || slug,
         metres: val?.metres,
         description: val?.description,
         severity: val?.severity,
       };
     });
+
+  const siteConstraintsAssessed = assessedSlugs.size > 0;
 
   const mergedAnswers: Record<string, string> = {};
   for (const area of workAreas) {
@@ -294,6 +303,7 @@ export async function buildQuickEstimateInput(
       },
       workAreas,
       constraints,
+      scopeRates: scopeRates ?? [],
       packageRates: packageRates ?? [],
       labourRates: labourRates ?? [],
       materialRates: materialRates ?? [],
@@ -308,6 +318,7 @@ export async function buildQuickEstimateInput(
       scopeQuestions,
       excludedWorkAreaNames,
       allWorkAreasExcluded,
+      siteConstraintsAssessed,
     },
     error: null,
   };

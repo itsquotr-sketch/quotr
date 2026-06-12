@@ -1,7 +1,7 @@
 import type { QualityLevel } from "@/lib/constants/quality-level";
 import type { DiscoveryResult } from "@/lib/ai/discovery/types";
 import {
-  getPendingConstraints,
+  getUnknownSiteConditions,
   type ConstraintQuestion,
 } from "@/lib/assistant-v2/get-next-constraint-question";
 import {
@@ -42,9 +42,9 @@ function scopeBatchIntro(questions: PricingQuestion[]): string {
     return contextualScopePrompt(questions[0]!);
   }
   if (hasRequired) {
-    return "I need a few details to price this accurately:";
+    return "To tighten this estimate I need:";
   }
-  return "I can price this now, but these will improve accuracy:";
+  return "I can price this now — these would sharpen the range:";
 }
 
 function contextualScopePrompt(q: PricingQuestion): string {
@@ -101,14 +101,14 @@ export function getNextAssistantTurn(input: {
   }
 
   const discoverySlugs =
-    input.discovery?.constraints.map((c) => c.slug) ?? [];
+    input.discovery?.constraints?.map((c) => c.slug) ?? [];
 
-  const pendingConstraints = getPendingConstraints({
+  const pendingConstraints = getUnknownSiteConditions({
     workAreaTypeKeys: input.workAreaTypeKeys,
     selectedConstraintSlugs: input.selectedConstraintSlugs,
     discoveryConstraintSlugs: discoverySlugs,
     answeredQuestionKeys: input.answeredQuestionKeys,
-    declinedConstraintSlugs: input.declinedConstraintSlugs,
+    declinedConstraintSlugs: [...input.declinedConstraintSlugs],
   });
 
   if (pendingConstraints.length > 0) {

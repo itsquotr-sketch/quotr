@@ -90,11 +90,46 @@ export const rateIdOnlySchema = z.object({
   id: rateIdSchema,
 });
 
+const optionalPercent = z.coerce
+  .number({ invalid_type_error: "Enter a valid number" })
+  .min(0, "Must be zero or greater")
+  .max(100, "Cannot exceed 100%")
+  .optional()
+  .nullable();
+
+export const scopeRateSchema = z.object({
+  scopeTypeKey: z.string().min(1, "Scope type is required"),
+  label: z.string().min(1, "Label is required"),
+  unit: z.string().min(1, "Unit is required"),
+  budgetRate: positiveRate.optional().nullable(),
+  standardRate: positiveRate.optional().nullable(),
+  premiumRate: positiveRate.optional().nullable(),
+  defaultRate: positiveRate.optional().nullable(),
+  labourAllocationPercent: optionalPercent,
+  materialsAllocationPercent: optionalPercent,
+  subcontractorAllocationPercent: optionalPercent,
+  allowanceAllocationPercent: optionalPercent,
+  isActive: z.coerce.boolean().default(true),
+});
+
+export const scopeRateUpsertSchema = scopeRateSchema.refine(
+  (data) =>
+    data.budgetRate != null ||
+    data.standardRate != null ||
+    data.premiumRate != null ||
+    data.defaultRate != null,
+  {
+    message: "Enter at least one rate",
+    path: ["standardRate"],
+  }
+);
+
 export type RateRangeInput = z.infer<typeof rateRangeSchema>;
 export type LabourRateInput = z.infer<typeof labourRateSchema>;
 export type SubcontractorRateInput = z.infer<typeof subcontractorRateSchema>;
 export type MaterialRateInput = z.infer<typeof materialRateSchema>;
 export type PackageRateInput = z.infer<typeof packageRateSchema>;
+export type ScopeRateInput = z.infer<typeof scopeRateSchema>;
 export type PricingSettingsInput = z.infer<typeof pricingSettingsSchema>;
 
 export type RateActionState = {

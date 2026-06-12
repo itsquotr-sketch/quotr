@@ -5,7 +5,18 @@ import { buildMergedAnswersForScope } from "@/lib/assistant-v2/build-merged-answ
 import { formatKnownFactLabels } from "@/lib/assistant-v2/compute-information-completeness";
 import { insertAssistantMessage } from "@/lib/assistant-v2/assistant-messages-data";
 import { loadProjectAssistantData } from "@/lib/assistant-v2/load-assistant-data";
-import { revalidateProjectAssistant } from "@/lib/assistant-v2/revalidate";
+import {
+  revalidateAssistantTags,
+  revalidateConstraintsAndEstimate,
+  revalidateEstimateOnly,
+  revalidateProjectAssistant,
+  revalidateScopeAnswers,
+} from "@/lib/assistant-v2/revalidate";
+import { clearSiteConditionsForEdit } from "@/lib/assistant-v2/clear-site-conditions";
+import {
+  confirmWorkAreaSelections,
+  type WorkAreaSelection,
+} from "@/lib/assistant-v2/confirm-work-areas";
 import { resetAssistantState } from "@/lib/assistant-v2/reset-assistant";
 import { runAssistantAnalysis } from "@/lib/assistant-v2/run-assistant-analysis";
 import { saveConstraintAnswer } from "@/lib/assistant-v2/save-constraint-answer";
@@ -21,9 +32,17 @@ import { ensureQuestionsForProjectScopes } from "@/lib/scope-questions-seed";
 import { recalculateQuickEstimate } from "@/lib/cost-engine/recalculate-quick-estimate";
 import { resolveWorkAreaTypeKey } from "@/lib/project-assistant-questions";
 import { getProjectById } from "@/lib/projects-data";
+import type { ScopeQuestionWithAnswers } from "@/lib/project-assistant-data";
 import { createClient } from "@/lib/supabase/server";
 import { logSupabaseError } from "@/lib/supabase/log-error";
+import { getQuickEstimateForProject } from "@/lib/quick-estimate-data";
+import { quickEstimateMarginSchema } from "@/lib/validations/project-assistant";
 import type { QualityLevel } from "@/lib/constants/quality-level";
+import type {
+  ProjectScope,
+  QuickEstimate,
+} from "@/types/database";
+import type { AssistantMessageRow } from "@/lib/assistant-v2/assistant-messages-data";
 
 export type AssistantV2ActionState = {
   error?: string;
@@ -63,7 +82,7 @@ export async function resetAssistant(
   revalidateProjectAssistant(projectId);
   return {
     success: true,
-    message: "Assistant reset. Your notes are still saved.",
+    message: "Assistant reset. Project details and notes are still saved.",
   };
 }
 
@@ -145,15 +164,19 @@ export async function submitAssistantNotes(
     userId: user.id,
   });
 
-  const acceptResult = await acceptAllPendingSuggestions(projectId);
-  if (acceptResult.error) {
-    return { error: acceptResult.error };
-  }
+  const { data: pendingSuggestions } = await supabase
+    .from("project_scope_suggestions")
+    .select("suggested_name")
+    .eq("project_id", projectId)
+    .eq("organisation_id", organisationId)
+    .eq("status", "pending");
 
   const assistantText = analyseResult.success
-    ? analyseResult.usedFallback
-      ? "I used basic analysis — your notes are saved and I'm building the estimate."
-      : "Got it — I'm reviewing the scope and updating your estimate."
+    ? (pendingSuggestions?.length ?? 0) > 0
+      ? "I found these work areas. Confirm what should be included in this estimate."
+      : analyseResult.usedFallback
+        ? "I used basic analysis — your notes are saved."
+        : "Got it — I'm reviewing the scope."
     : "Notes saved. Add more detail if needed.";
 
   await insertAssistantMessage(supabase, {
@@ -201,10 +224,59 @@ export async function batchSaveAssistantScopeAnswers(
   }
 
   if (result.changed) {
-    revalidateProjectAssistant(projectId);
+    revalidateScopeAnswers(projectId);
   }
 
   return { success: true };
+}
+
+export async function confirmAssistantWorkAreas(
+  projectId: string,
+  selections: WorkAreaSelection[]
+): Promise<AssistantV2ActionState> {
+  const { user, organisationId } = await requireOrganisation();
+  const supabase = await createClient();
+
+  const result = await confirmWorkAreaSelections(supabase, {
+    organisationId,
+    projectId,
+    userId: user.id,
+    selections,
+  });
+
+  if (result.error) {
+    return { error: result.error };
+  }
+
+  revalidateScopeAnswers(projectId);
+  return {
+    success: true,
+    message:
+      result.includedNames.length > 0
+        ? `Included ${result.includedNames.join(", ")} in estimate.`
+        : "Work areas updated.",
+  };
+}
+
+export async function reopenSiteConditions(
+  projectId: string
+): Promise<AssistantV2ActionState> {
+  const { user, organisationId } = await requireOrganisation();
+  const supabase = await createClient();
+
+  const { error } = await clearSiteConditionsForEdit(
+    supabase,
+    organisationId,
+    projectId,
+    user.id
+  );
+
+  if (error) {
+    return { error };
+  }
+
+  revalidateConstraintsAndEstimate(projectId);
+  return { success: true, message: "Site conditions cleared — you can update them below." };
 }
 
 export async function batchSaveAssistantConstraintAnswers(
@@ -226,7 +298,7 @@ export async function batchSaveAssistantConstraintAnswers(
   }
 
   if (result.changed) {
-    revalidateProjectAssistant(projectId);
+    revalidateConstraintsAndEstimate(projectId);
   }
 
   return { success: true };
@@ -253,7 +325,7 @@ export async function autoSaveScopeQuestionAnswer(
   }
 
   if (result.changed) {
-    revalidateProjectAssistant(projectId);
+    revalidateScopeAnswers(projectId);
   }
 
   return { success: true, message: result.message };
@@ -282,7 +354,7 @@ export async function autoSaveConstraintAnswer(
   }
 
   if (result.changed || !apply) {
-    revalidateProjectAssistant(projectId);
+    revalidateConstraintsAndEstimate(projectId);
   }
 
   return { success: true };
@@ -307,7 +379,7 @@ export async function autoSaveQualityLevel(
   }
 
   if (result.changed) {
-    revalidateProjectAssistant(projectId);
+    revalidateEstimateOnly(projectId);
   }
 
   return { success: true, message: `Finish level set to ${result.label}.` };
@@ -326,12 +398,154 @@ export async function generateAssistantEstimate(
     { triggerEvent: "manual_recalculate" }
   );
 
-  revalidateProjectAssistant(projectId);
+  revalidateEstimateOnly(projectId);
   return {
     success: result.success,
     error: result.error,
     message: result.message ?? "Estimate updated.",
   };
+}
+
+export type AssistantSyncPayload = {
+  chatMessages: AssistantMessageRow[];
+  quickEstimate: QuickEstimate | null;
+  scopeQuestions: ScopeQuestionWithAnswers[];
+  confirmedScopes: (ProjectScope & { scope_types: { name: string } | null })[];
+  selectedConstraintSlugs: string[];
+  declinedConstraintSlugs: string[];
+};
+
+export async function syncAssistantState(
+  projectId: string
+): Promise<{ data?: AssistantSyncPayload; error?: string }> {
+  const { user, organisationId } = await requireOrganisation();
+  const supabase = await createClient();
+
+  const { data, error } = await loadProjectAssistantData(
+    supabase,
+    organisationId,
+    projectId,
+    user.id
+  );
+
+  if (error || !data) {
+    return { error: error ?? "Could not refresh assistant." };
+  }
+
+  return {
+    data: {
+      chatMessages: data.chatMessages,
+      quickEstimate: data.quickEstimate,
+      scopeQuestions: data.scopeQuestions,
+      confirmedScopes: data.confirmedScopes,
+      selectedConstraintSlugs: data.selectedConstraintSlugs,
+      declinedConstraintSlugs: data.declinedConstraintSlugs,
+    },
+  };
+}
+
+export async function updateAssistantMargin(
+  projectId: string,
+  targetMarginPercent: number
+): Promise<AssistantV2ActionState> {
+  const { organisationId } = await requireOrganisation();
+  const supabase = await createClient();
+
+  const parsed = quickEstimateMarginSchema.safeParse({ targetMarginPercent });
+  if (!parsed.success) {
+    return {
+      error:
+        parsed.error.flatten().fieldErrors.targetMarginPercent?.[0] ??
+        "Invalid margin percentage.",
+    };
+  }
+
+  const { data: quickEstimate } = await getQuickEstimateForProject(
+    supabase,
+    organisationId,
+    projectId
+  );
+
+  if (!quickEstimate) {
+    return { error: "Quick estimate not found." };
+  }
+
+  const currentMargin = Number(quickEstimate.target_margin_percent ?? 0);
+  if (currentMargin === parsed.data.targetMarginPercent) {
+    return { success: true, message: "Margin unchanged." };
+  }
+
+  const { error: updateError } = await supabase
+    .from("quick_estimates")
+    .update({ target_margin_percent: parsed.data.targetMarginPercent })
+    .eq("id", quickEstimate.id)
+    .eq("organisation_id", organisationId);
+
+  if (updateError) {
+    logSupabaseError("updateAssistantMargin", updateError);
+    return { error: "Could not save target margin." };
+  }
+
+  const result = await recalculateQuickEstimate(
+    supabase,
+    organisationId,
+    projectId,
+    { triggerEvent: "margin_changed" }
+  );
+
+  if (!result.success) {
+    return { error: result.error ?? "Could not recalculate sell range." };
+  }
+
+  revalidateEstimateOnly(projectId);
+  return {
+    success: true,
+    message: "Margin updated",
+  };
+}
+
+export async function persistAssistantQuestionBatch(
+  projectId: string,
+  content: string,
+  fingerprint: string,
+  metadata?: Record<string, unknown>
+): Promise<AssistantV2ActionState> {
+  const { user, organisationId } = await requireOrganisation();
+  const supabase = await createClient();
+
+  const { data: existing } = await supabase
+    .from("assistant_messages")
+    .select("id, metadata")
+    .eq("organisation_id", organisationId)
+    .eq("project_id", projectId)
+    .eq("role", "assistant")
+    .order("created_at", { ascending: false })
+    .limit(20);
+
+  const alreadyPersisted = (existing ?? []).some((row) => {
+    const meta = row.metadata as Record<string, unknown> | null;
+    return meta?.batchFingerprint === fingerprint;
+  });
+
+  if (alreadyPersisted) {
+    return { success: true };
+  }
+
+  await insertAssistantMessage(supabase, {
+    organisationId,
+    projectId,
+    userId: user.id,
+    role: "assistant",
+    content,
+    metadata: {
+      messageType: "question_batch",
+      batchFingerprint: fingerprint,
+      ...metadata,
+    },
+  });
+
+  revalidateAssistantTags(projectId, ["messages"]);
+  return { success: true };
 }
 
 export async function exportScopeSummary(

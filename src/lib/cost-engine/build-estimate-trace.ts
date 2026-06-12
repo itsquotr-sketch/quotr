@@ -1,5 +1,9 @@
 import type { QualityLevel } from "@/lib/constants/quality-level";
-import type { EstimateTrace, EstimateTraceAdjustment } from "@/lib/cost-engine/estimate-trace";
+import type {
+  EstimateTrace,
+  EstimateTraceAdjustment,
+  WorkAreaEstimateTrace,
+} from "@/lib/cost-engine/estimate-trace";
 import type { RateSource } from "@/lib/cost-engine/rates/get-base-rate-for-scope";
 import {
   getKnownFactsForScope,
@@ -33,6 +37,7 @@ export function buildEstimateTrace(input: {
   missingCriticalFacts: string[];
   finishLevel: QualityLevel;
   costBreakdown?: CostBreakdown;
+  workAreaTraces?: WorkAreaEstimateTrace[];
 }): EstimateTrace {
   const extractedFacts: NonNullable<EstimateTrace["extractedFacts"]> = [];
   const missingFacts: NonNullable<EstimateTrace["missingFacts"]> = [];
@@ -94,6 +99,7 @@ export function buildEstimateTrace(input: {
     finalSellRange: { low: input.sellLow, high: input.sellHigh },
     missingCriticalFacts: input.missingCriticalFacts,
     costBreakdown: input.costBreakdown,
+    workAreaTraces: input.workAreaTraces ?? [],
     workAreas: input.workAreas.map((a) => ({
       name: a.name,
       typeKey: a.workAreaTypeKey,

@@ -253,7 +253,7 @@ export function DiscoveryPanel({
 
 
 
-    if (discovery?.trades.length) {
+    if (discovery?.trades?.length) {
 
       for (const trade of discovery.trades) {
 

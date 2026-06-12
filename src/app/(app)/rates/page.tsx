@@ -6,6 +6,7 @@ import {
   listLabourRates,
   listMaterialRates,
   listPackageRates,
+  listScopeRates,
   listSubcontractorRates,
 } from "@/lib/rates-data";
 import { createClient } from "@/lib/supabase/server";
@@ -15,12 +16,14 @@ export default async function RatesPage() {
   const supabase = await createClient();
 
   const [
+    { data: scopeRates },
     { data: labourRates },
     { data: subcontractorRates },
     { data: materialRates },
     { data: packageRates },
     { data: pricingSettings },
   ] = await Promise.all([
+    listScopeRates(supabase, organisationId),
     listLabourRates(supabase, organisationId),
     listSubcontractorRates(supabase, organisationId),
     listMaterialRates(supabase, organisationId),
@@ -46,9 +49,10 @@ export default async function RatesPage() {
     <div>
       <PageHeader
         title="Rates"
-        description="Your pricing DNA — labour, subcontractors, materials, and packages. Organisation-specific rates power future estimates."
+        description="Your scope, labour, subcontractor, material, and package rates power quick estimates."
       />
       <RatesManager
+        scopeRates={scopeRates ?? []}
         labourRates={labourRates ?? []}
         subcontractorRates={subcontractorRates ?? []}
         materialRates={materialRates ?? []}

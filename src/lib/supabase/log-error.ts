@@ -38,7 +38,10 @@ export function isMissingSuggestionsTableError(error: PostgrestError): boolean {
 }
 
 export function isMissingDriverValuesTableError(error: PostgrestError): boolean {
-  return isMissingTableError(error, "project_estimate_driver_values");
+  return (
+    isMissingTableError(error, "project_estimate_driver_values") ||
+    isMissingTableError(error, "project_constraint_selections")
+  );
 }
 
 export function isMissingProjectEstimateDriversTableError(
@@ -74,12 +77,13 @@ export function userFacingSupabaseError(
 export function userFacingConstraintPersistError(message: string): string {
   const lower = message.toLowerCase();
   if (
-    lower.includes("project_estimate_driver_values") &&
+    (lower.includes("project_estimate_driver_values") ||
+      lower.includes("project_constraint_selections")) &&
     (lower.includes("could not find") ||
       lower.includes("does not exist") ||
       lower.includes("schema cache"))
   ) {
-    return "Constraint storage is not set up yet. Apply migration 014 or 024_ensure_project_estimate_driver_values.sql in Supabase SQL Editor, then try again.";
+    return "Constraint storage is not set up yet. Apply migration 030_project_constraint_selections.sql in Supabase SQL Editor, then try again.";
   }
 
   if (

@@ -7,12 +7,23 @@ import type { Database, Json } from "@/types/database";
 
 type Supabase = SupabaseClient<Database>;
 
-function formatRangeChangedMessage(
+export type EstimateChangeEvent = {
+  kind: "increased" | "decreased" | "narrowed" | "widened" | "unchanged";
+  previousLow: number;
+  previousHigh: number;
+  newLow: number;
+  newHigh: number;
+  reason: string | null;
+  at: string;
+};
+
+function buildEstimateChangeEvent(
   prevLow: number | null,
   prevHigh: number | null,
   newLow: number | null,
-  newHigh: number | null
-): string | null {
+  newHigh: number | null,
+  reason?: string | null
+): EstimateChangeEvent | null {
   if (
     prevLow == null ||
     prevHigh == null ||
@@ -22,15 +33,142 @@ function formatRangeChangedMessage(
     return null;
   }
   if (prevLow === newLow && prevHigh === newHigh) return null;
-  return `Your estimate changed from ${formatCurrencyRange(prevLow, prevHigh)} to ${formatCurrencyRange(newLow, newHigh)}.`;
+
+  const prevMid = (prevLow + prevHigh) / 2;
+  const newMid = (newLow + newHigh) / 2;
+  const prevWidth = prevHigh - prevLow;
+  const newWidth = newHigh - newLow;
+
+  let kind: EstimateChangeEvent["kind"] = "unchanged";
+  if (newWidth < prevWidth * 0.85) {
+    kind = "narrowed";
+  } else if (newWidth > prevWidth * 1.15) {
+    kind = "widened";
+  } else if (newMid > prevMid * 1.03) {
+    kind = "increased";
+  } else if (newMid < prevMid * 0.97) {
+    kind = "decreased";
+  }
+
+  return {
+    kind,
+    previousLow: prevLow,
+    previousHigh: prevHigh,
+    newLow,
+    newHigh,
+    reason: reason ?? null,
+    at: new Date().toISOString(),
+  };
+}
+
+const SNAPSHOT_ALWAYS_TRIGGERS = new Set([
+  "manual_recalculate",
+  "lock",
+  "generate",
+  "margin_changed",
+  "quality_changed",
+  "constraint_changed",
+]);
+
+const SNAPSHOT_STALE_MS = 24 * 60 * 60 * 1000;
+
+async function getPreviousConfidenceLabel(
+  supabase: Supabase,
+  organisationId: string,
+  quickEstimateId: string
+): Promise<string | null> {
+  const { data } = await supabase
+    .from("quick_estimates")
+    .select("notes")
+    .eq("id", quickEstimateId)
+    .eq("organisation_id", organisationId)
+    .maybeSingle();
+
+  if (!data?.notes) return null;
+  try {
+    const parsed = JSON.parse(data.notes) as { confidenceLevelLabel?: string };
+    return parsed.confidenceLevelLabel ?? null;
+  } catch {
+    return null;
+  }
+}
+
+async function shouldInsertEstimateSnapshot(
+  supabase: Supabase,
+  params: {
+    organisationId: string;
+    quickEstimateId: string;
+    triggerEvent?: string;
+    previousConfidenceLevel: string | null;
+    newConfidenceLevel: string;
+    newMarginPercent: number;
+    previousMarginPercent: number | null;
+  }
+): Promise<boolean> {
+  const trigger = params.triggerEvent ?? "recalculate";
+  if (SNAPSHOT_ALWAYS_TRIGGERS.has(trigger)) {
+    return true;
+  }
+
+  if (
+    params.previousConfidenceLevel != null &&
+    params.previousConfidenceLevel !== params.newConfidenceLevel
+  ) {
+    return true;
+  }
+
+  if (
+    params.previousMarginPercent != null &&
+    params.previousMarginPercent !== params.newMarginPercent
+  ) {
+    return true;
+  }
+
+  const { data: lastSnapshot } = await supabase
+    .from("quick_estimate_snapshots")
+    .select("created_at")
+    .eq("quick_estimate_id", params.quickEstimateId)
+    .eq("organisation_id", params.organisationId)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (!lastSnapshot?.created_at) {
+    return true;
+  }
+
+  const ageMs = Date.now() - new Date(lastSnapshot.created_at).getTime();
+  return ageMs >= SNAPSHOT_STALE_MS;
+}
+
+function formatRangeChangedMessage(event: EstimateChangeEvent): string {
+  const from = formatCurrencyRange(event.previousLow, event.previousHigh);
+  const to = formatCurrencyRange(event.newLow, event.newHigh);
+  const verb =
+    event.kind === "narrowed"
+      ? "Estimate narrowed"
+      : event.kind === "widened"
+        ? "Estimate widened"
+        : event.kind === "increased"
+          ? "Estimate increased"
+          : event.kind === "decreased"
+            ? "Estimate decreased"
+            : "Estimate updated";
+  const reason = event.reason ? ` — ${event.reason}` : "";
+  return `${verb}: ${from} → ${to}${reason}`;
 }
 
 export async function recalculateQuickEstimate(
   supabase: Supabase,
   organisationId: string,
   projectId: string,
-  options?: { triggerEvent?: string }
-): Promise<{ success: boolean; error?: string; message?: string }> {
+  options?: { triggerEvent?: string; changeReason?: string | null }
+): Promise<{
+  success: boolean;
+  error?: string;
+  message?: string;
+  estimateChange?: EstimateChangeEvent | null;
+}> {
   const { input, error: buildError } = await buildQuickEstimateInput(
     supabase,
     organisationId,
@@ -50,8 +188,8 @@ export async function recalculateQuickEstimate(
 
   const result = calculateQuickEstimateV1(input);
 
-  const rangeChangedMessage = result.canCalculate
-    ? formatRangeChangedMessage(
+  const estimateChangeEvent = result.canCalculate
+    ? buildEstimateChangeEvent(
         previousEstimate?.estimated_cost_low != null
           ? Number(previousEstimate.estimated_cost_low)
           : null,
@@ -59,8 +197,13 @@ export async function recalculateQuickEstimate(
           ? Number(previousEstimate.estimated_cost_high)
           : null,
         result.estimatedCostLow,
-        result.estimatedCostHigh
+        result.estimatedCostHigh,
+        options?.changeReason ?? null
       )
+    : null;
+
+  const rangeChangedMessage = estimateChangeEvent
+    ? formatRangeChangedMessage(estimateChangeEvent)
     : null;
 
   if (rangeChangedMessage) {
@@ -81,6 +224,8 @@ export async function recalculateQuickEstimate(
     missingInformation: result.missingInformation,
     ratesSource: result.ratesSource,
     rateSourceDetail: result.rateSourceDetail,
+    rateSourceLines: result.rateSourceLines,
+    benchmarkScopesForOnboarding: result.benchmarkScopesForOnboarding,
     constraintsApplied: result.constraintsApplied,
     qualityLevel: result.qualityLevel,
     qualityLevelNote: result.qualityLevelNote,
@@ -104,6 +249,7 @@ export async function recalculateQuickEstimate(
     qualityFactors: result.qualityFactors,
     estimateTrace: result.estimateTrace,
     rangeChangedMessage: result.rangeChangedMessage,
+    lastEstimateChange: estimateChangeEvent,
   });
 
   const updatePayload = result.canCalculate
@@ -136,35 +282,56 @@ export async function recalculateQuickEstimate(
   }
 
   if (result.canCalculate) {
-    const rateSourceKey =
-      typeof result.estimateTrace.rateSource === "string"
-        ? result.estimateTrace.rateSource
-        : "placeholder";
+    const shouldSnapshot = await shouldInsertEstimateSnapshot(supabase, {
+      organisationId,
+      quickEstimateId: input.quickEstimate.id,
+      triggerEvent: options?.triggerEvent,
+      previousConfidenceLevel: previousEstimate
+        ? await getPreviousConfidenceLabel(
+            supabase,
+            organisationId,
+            input.quickEstimate.id
+          )
+        : null,
+      newConfidenceLevel: result.confidenceLevelLabel,
+      newMarginPercent: result.targetMarginPercent,
+      previousMarginPercent:
+        input.targetMarginPercent != null
+          ? Number(input.targetMarginPercent)
+          : null,
+    });
 
-    const { error: snapshotError } = await supabase
-      .from("quick_estimate_snapshots")
-      .insert({
-        organisation_id: organisationId,
-        project_id: projectId,
-        quick_estimate_id: input.quickEstimate.id,
-        confidence_score: result.confidenceScore,
-        confidence_level: result.confidenceLevelLabel,
-        estimated_cost_low: result.estimatedCostLow,
-        estimated_cost_high: result.estimatedCostHigh,
-        sell_low: result.recommendedSellLow,
-        sell_high: result.recommendedSellHigh,
-        central_estimate: result.centralEstimate,
-        target_margin_percent: result.targetMarginPercent,
-        contingency_percent: result.contingencyPercent,
-        rate_source: rateSourceKey,
-        trigger_event: options?.triggerEvent ?? "recalculate",
-        calculation_trace: JSON.parse(
-          JSON.stringify(result.estimateTrace)
-        ) as Json,
-      });
+    if (shouldSnapshot) {
+      const rateSourceKey =
+        typeof result.estimateTrace.rateSource === "string"
+          ? result.estimateTrace.rateSource
+          : "placeholder";
 
-    if (snapshotError) {
-      logSupabaseError("recalculateQuickEstimate.snapshot", snapshotError);
+      const { error: snapshotError } = await supabase
+        .from("quick_estimate_snapshots")
+        .insert({
+          organisation_id: organisationId,
+          project_id: projectId,
+          quick_estimate_id: input.quickEstimate.id,
+          confidence_score: result.confidenceScore,
+          confidence_level: result.confidenceLevelLabel,
+          estimated_cost_low: result.estimatedCostLow,
+          estimated_cost_high: result.estimatedCostHigh,
+          sell_low: result.recommendedSellLow,
+          sell_high: result.recommendedSellHigh,
+          central_estimate: result.centralEstimate,
+          target_margin_percent: result.targetMarginPercent,
+          contingency_percent: result.contingencyPercent,
+          rate_source: rateSourceKey,
+          trigger_event: options?.triggerEvent ?? "recalculate",
+          calculation_trace: JSON.parse(
+            JSON.stringify(result.estimateTrace)
+          ) as Json,
+        });
+
+      if (snapshotError) {
+        logSupabaseError("recalculateQuickEstimate.snapshot", snapshotError);
+      }
     }
   }
 
@@ -176,5 +343,6 @@ export async function recalculateQuickEstimate(
   return {
     success: true,
     message: messages.join(" "),
+    estimateChange: estimateChangeEvent,
   };
 }

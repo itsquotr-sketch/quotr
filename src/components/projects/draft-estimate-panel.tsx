@@ -305,10 +305,10 @@ export function DraftEstimatePanel({
                       value={breakdown.contingency}
                     />
                   </dl>
-                  {breakdown.byWorkArea.length > 0 && (
+                  {(breakdown.byWorkArea?.length ?? 0) > 0 && (
                     <div className="space-y-1 border-t pt-2">
                       <p className="font-medium">By work area</p>
-                      {breakdown.byWorkArea.map((area) => (
+                      {(breakdown.byWorkArea ?? []).map((area) => (
                         <p key={area.name} className="flex justify-between gap-2">
                           <span>{area.name}</span>
                           <span>

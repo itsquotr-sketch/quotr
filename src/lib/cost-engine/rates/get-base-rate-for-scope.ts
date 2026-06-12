@@ -1,15 +1,25 @@
 import { PLACEHOLDER_BASE_RANGES } from "@/lib/constants/quick-estimate";
+import {
+  getScopeRateDefinition,
+  getScopeRateDefinitionByKey,
+} from "@/lib/constants/scope-rates";
 import { getScopeTemplateByWorkAreaType } from "@/lib/scope-templates";
 import type {
   LabourRate,
   MaterialRate,
   PackageRate,
+  ScopeRate,
   SubcontractorRate,
 } from "@/types/database";
+import {
+  pickScopeRateValue,
+  rateUnitsMatch,
+} from "@/lib/cost-engine/rates/scope-rate-utils";
 
 export type RateSource =
-  | "org_rate"
+  | "scope_rate"
   | "package_rate"
+  | "org_rate"
   | "template_benchmark"
   | "regional_fallback"
   | "placeholder";
@@ -18,9 +28,13 @@ export type BaseRateResult = {
   rate: number;
   source: RateSource;
   confidenceBonus: number;
+  scopeTypeKey?: string;
+  scopeRateId?: string;
+  usesDefaultRateOnly?: boolean;
 };
 
 export type OrgRatesInput = {
+  scopeRates: ScopeRate[];
   labourRates: LabourRate[];
   materialRates: MaterialRate[];
   subcontractorRates: SubcontractorRate[];
@@ -28,13 +42,75 @@ export type OrgRatesInput = {
 };
 
 const SCOPE_KEYWORDS: Record<string, string[]> = {
-  deck: ["deck", "decking", "timber", "composite"],
-  "retaining-wall": ["retaining", "wall", "block"],
-  "bathroom-renovation": ["bathroom", "tile", "vanity", "shower"],
+  deck: [
+    "deck",
+    "decking",
+    "timber",
+    "composite",
+    "hardwood",
+    "merbau",
+    "kwila",
+    "outdoor",
+  ],
+  "retaining-wall": [
+    "retaining",
+    "wall",
+    "block",
+    "blockwall",
+    "blockwork",
+    "sleeper",
+    "gabion",
+    "earth",
+  ],
+  "retaining_wall": [
+    "retaining",
+    "wall",
+    "block",
+    "blockwall",
+    "blockwork",
+    "sleeper",
+    "gabion",
+    "earth",
+  ],
+  "bathroom-renovation": [
+    "bathroom",
+    "bath",
+    "tile",
+    "tiling",
+    "vanity",
+    "shower",
+    "ensuite",
+    "wet area",
+    "reno",
+  ],
+  bathroom_renovation: [
+    "bathroom",
+    "bath",
+    "tile",
+    "tiling",
+    "vanity",
+    "shower",
+    "ensuite",
+    "wet area",
+    "reno",
+  ],
 };
 
 function normaliseKey(key: string): string {
-  return key.toLowerCase().replace(/\s+/g, "-");
+  return key.toLowerCase().replace(/\s+/g, "-").replace(/_/g, "-");
+}
+
+function findScopeRate(
+  scopeRates: ScopeRate[],
+  scopeTypeKey: string,
+  unit: string
+): ScopeRate | undefined {
+  return scopeRates.find(
+    (rate) =>
+      rate.is_active &&
+      rate.scope_type_key === scopeTypeKey &&
+      rateUnitsMatch(rate.unit, unit)
+  );
 }
 
 function findPackageRate(
@@ -49,7 +125,10 @@ function findPackageRate(
 }
 
 function matchesScopeKeywords(text: string, scopeKey: string): boolean {
-  const keywords = SCOPE_KEYWORDS[normaliseKey(scopeKey)] ?? [scopeKey];
+  const keywords =
+    SCOPE_KEYWORDS[normaliseKey(scopeKey)] ??
+    SCOPE_KEYWORDS[scopeKey.replace(/-/g, "_")] ??
+    [scopeKey];
   const lower = text.toLowerCase();
   return keywords.some((kw) => lower.includes(kw));
 }
@@ -62,7 +141,7 @@ function findOrgMaterialRate(
   return materialRates.find(
     (r) =>
       r.is_active &&
-      r.unit.toLowerCase() === unit.toLowerCase() &&
+      rateUnitsMatch(r.unit, unit) &&
       matchesScopeKeywords(
         `${r.material_name} ${r.category ?? ""}`,
         scopeTemplateKey
@@ -78,7 +157,7 @@ function findOrgLabourRate(
   return labourRates.find(
     (r) =>
       r.is_active &&
-      r.unit.toLowerCase() === unit.toLowerCase() &&
+      rateUnitsMatch(r.unit, unit) &&
       matchesScopeKeywords(`${r.name} ${r.category ?? ""}`, scopeTemplateKey)
   );
 }
@@ -91,20 +170,31 @@ function findOrgSubcontractorRate(
   return subcontractorRates.find(
     (r) =>
       r.is_active &&
-      r.unit.toLowerCase() === unit.toLowerCase() &&
+      rateUnitsMatch(r.unit, unit) &&
       matchesScopeKeywords(r.trade, scopeTemplateKey)
   );
 }
 
-function placeholderRateForScope(scopeTemplateKey: string, unit: string): number {
+function placeholderRateForScope(
+  scopeTemplateKey: string,
+  workAreaTypeKey: string,
+  unit: string
+): number {
+  const template = getScopeTemplateByWorkAreaType(workAreaTypeKey);
+  if (template?.benchmarkRates && rateUnitsMatch(unit, template.benchmarkRates.unit)) {
+    return template.benchmarkRates.typical;
+  }
+
   const key = normaliseKey(scopeTemplateKey);
   const placeholder =
     PLACEHOLDER_BASE_RANGES[key] ??
     PLACEHOLDER_BASE_RANGES[key.replace(/-/g, "_")] ??
     PLACEHOLDER_BASE_RANGES.other;
   const mid = (placeholder.low + placeholder.high) / 2;
-  if (unit === "m²" || unit === "sqm") {
-    return Math.round(mid / 20);
+  if (rateUnitsMatch(unit, "m²")) {
+    const typicalArea =
+      key === "deck" ? 25 : key.includes("bathroom") ? 6 : 12;
+    return Math.round(mid / typicalArea);
   }
   return Math.round(mid);
 }
@@ -116,13 +206,47 @@ export function getBaseRateForScope(
   orgRates: OrgRatesInput,
   finishLevel?: "budget" | "standard" | "premium" | "unknown"
 ): BaseRateResult {
+  const scopeDef =
+    getScopeRateDefinitionByKey(scopeTemplateKey) ??
+    getScopeRateDefinition(workAreaTypeKey);
+  const scopeTypeKey = scopeDef?.scopeTypeKey ?? scopeTemplateKey;
+
+  const scopeRate = findScopeRate(orgRates.scopeRates, scopeTypeKey, unit);
+  if (scopeRate) {
+    const rate = pickScopeRateValue(scopeRate, finishLevel);
+    if (rate != null && rate > 0) {
+      const usesDefaultRateOnly =
+        finishLevel === "unknown" &&
+        scopeRate.standard_rate == null &&
+        scopeRate.default_rate != null;
+      return {
+        rate,
+        source: "scope_rate",
+        confidenceBonus: 12,
+        scopeTypeKey,
+        scopeRateId: scopeRate.id,
+        usesDefaultRateOnly,
+      };
+    }
+  }
+
+  const pkg = findPackageRate(orgRates.packageRates, workAreaTypeKey);
+  if (pkg) {
+    const typical = Number(pkg.typical_base_cost ?? pkg.base_cost);
+    return { rate: typical, source: "package_rate", confidenceBonus: 5 };
+  }
+
   const material = findOrgMaterialRate(
     orgRates.materialRates,
     scopeTemplateKey,
     unit
   );
   if (material) {
-    return { rate: Number(material.cost_rate), source: "org_rate", confidenceBonus: 10 };
+    return {
+      rate: Number(material.cost_rate),
+      source: "org_rate",
+      confidenceBonus: 10,
+    };
   }
 
   const labour = findOrgLabourRate(
@@ -131,7 +255,11 @@ export function getBaseRateForScope(
     unit
   );
   if (labour) {
-    return { rate: Number(labour.cost_rate), source: "org_rate", confidenceBonus: 10 };
+    return {
+      rate: Number(labour.cost_rate),
+      source: "org_rate",
+      confidenceBonus: 10,
+    };
   }
 
   const sub = findOrgSubcontractorRate(
@@ -144,12 +272,6 @@ export function getBaseRateForScope(
     return { rate, source: "org_rate", confidenceBonus: 10 };
   }
 
-  const pkg = findPackageRate(orgRates.packageRates, workAreaTypeKey);
-  if (pkg) {
-    const typical = Number(pkg.typical_base_cost ?? pkg.base_cost);
-    return { rate: typical, source: "package_rate", confidenceBonus: 5 };
-  }
-
   const template = getScopeTemplateByWorkAreaType(workAreaTypeKey);
   if (template?.benchmarkRates) {
     const rates = template.benchmarkRates;
@@ -160,44 +282,64 @@ export function getBaseRateForScope(
       rate,
       source: "template_benchmark",
       confidenceBonus: 0,
+      scopeTypeKey,
     };
   }
 
-  const regionalRate = placeholderRateForScope(scopeTemplateKey, unit);
+  const regionalRate = placeholderRateForScope(
+    scopeTemplateKey,
+    workAreaTypeKey,
+    unit
+  );
   if (regionalRate > 0) {
     return {
       rate: regionalRate,
       source: "regional_fallback",
       confidenceBonus: -5,
+      scopeTypeKey,
     };
   }
 
   return {
-    rate: placeholderRateForScope(scopeTemplateKey, unit),
+    rate: placeholderRateForScope(scopeTemplateKey, workAreaTypeKey, unit),
     source: "placeholder",
     confidenceBonus: -10,
+    scopeTypeKey,
   };
 }
 
-export function rateSourceLabel(source: RateSource): string {
+export function rateSourceLabel(
+  source: RateSource,
+  options?: { scopeLabel?: string; usesDefaultRateOnly?: boolean }
+): string {
   switch (source) {
-    case "org_rate":
-      return "Your saved rates";
+    case "scope_rate":
+      if (options?.usesDefaultRateOnly) {
+        return options.scopeLabel
+          ? `Your saved default ${options.scopeLabel} rate`
+          : "Your saved default rate";
+      }
+      return options?.scopeLabel
+        ? `Your saved ${options.scopeLabel} rate`
+        : "Your saved rate";
     case "package_rate":
-      return "Package rate";
+      return "Your package rate";
+    case "org_rate":
+      return "Your trade/material rates";
     case "template_benchmark":
-      return "Template benchmark";
+      return "Quotr benchmark";
     case "regional_fallback":
-      return "Regional fallback";
+      return "Regional benchmark";
     case "placeholder":
-      return "Placeholder fallback";
+      return "Rough placeholder";
   }
 }
 
 export function primaryRateSource(sources: RateSource[]): RateSource {
   const priority: RateSource[] = [
-    "org_rate",
+    "scope_rate",
     "package_rate",
+    "org_rate",
     "template_benchmark",
     "regional_fallback",
     "placeholder",
@@ -206,4 +348,12 @@ export function primaryRateSource(sources: RateSource[]): RateSource {
     if (sources.includes(p)) return p;
   }
   return "placeholder";
+}
+
+export function isBenchmarkRateSource(source: RateSource): boolean {
+  return (
+    source === "template_benchmark" ||
+    source === "regional_fallback" ||
+    source === "placeholder"
+  );
 }

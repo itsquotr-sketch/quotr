@@ -20,7 +20,7 @@ export function buildMergedAnswersForScope(
     if (q.question_key && val) answers[q.question_key] = val;
   }
 
-  if (discovery?.facts.length) {
+  if (discovery?.facts?.length) {
     for (const fact of discovery.facts) {
       if (fact.workAreaTypeKey && fact.workAreaTypeKey !== typeKey) continue;
       const key = normalizeQuestionKey(fact.key);

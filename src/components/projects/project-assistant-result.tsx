@@ -83,7 +83,7 @@ export function ProjectAssistantResult({
   const baseCalculations = inputsUsed.filter((item) => item.includes("× $"));
   const keyFacts = summary?.keyFactsUsed ?? baseCalculations;
   const discoveryFacts =
-    discovery?.facts.map((f) => `${f.label}: ${f.value}${f.unit ? ` ${f.unit}` : ""}`) ?? [];
+    discovery?.facts?.map((f) => `${f.label}: ${f.value}${f.unit ? ` ${f.unit}` : ""}`) ?? [];
 
   function handleUpdate() {
     startTransition(async () => {

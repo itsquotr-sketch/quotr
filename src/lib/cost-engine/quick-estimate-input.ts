@@ -11,12 +11,14 @@ import {
   parseScopeAnswer,
 } from "@/lib/scope-answer-format";
 import { isAnswered } from "@/lib/scope-answer-state";
+import type { WorkAreaRateSourceLine } from "@/lib/cost-engine/estimate-trace";
 import type {
   LabourRate,
   MaterialRate,
   PackageRate,
   Project,
   QuickEstimate,
+  ScopeRate,
   SubcontractorRate,
 } from "@/types/database";
 
@@ -44,6 +46,7 @@ export type QuickEstimateInput = {
   >;
   workAreas: QuickEstimateWorkAreaInput[];
   constraints: QuickEstimateConstraintInput[];
+  scopeRates: ScopeRate[];
   packageRates: PackageRate[];
   labourRates: LabourRate[];
   materialRates: MaterialRate[];
@@ -58,6 +61,8 @@ export type QuickEstimateInput = {
   scopeQuestions: ScopeQuestionForMissing[];
   excludedWorkAreaNames?: string[];
   allWorkAreasExcluded?: boolean;
+  /** True when user has confirmed site conditions (selected or declined). */
+  siteConstraintsAssessed?: boolean;
 };
 
 export type QuickEstimateOutput = {
@@ -89,6 +94,16 @@ export type QuickEstimateOutput = {
   qualityLevelNote: string | null;
   ratesSource: "saved" | "fallback";
   rateSourceDetail: string;
+  rateSourceLines: WorkAreaRateSourceLine[];
+  benchmarkScopesForOnboarding: {
+    scopeTypeKey: string;
+    label: string;
+    workAreaTypeKey: string;
+    unit: string;
+    benchmarkLow: number;
+    benchmarkStandard: number;
+    benchmarkPremium: number;
+  }[];
   usedPackageRates: boolean;
   templatesUsed: string[];
   keyFactsUsed: string[];

@@ -1,12 +1,22 @@
-import { getLatestDiscoveryEngineRun, getLatestDiscoveryRun, parseDiscoveryEngineRun, parseDiscoveryRun } from "@/lib/discovery-data";
+import {
+  getLatestDiscoveryEngineRun,
+  getLatestDiscoveryRun,
+  normalizeDiscoveryResult,
+  parseDiscoveryEngineRun,
+  parseDiscoveryRun,
+} from "@/lib/discovery-data";
 import { getProjectDiscoveryMeta } from "@/lib/discovery-meta";
 import { listScopeQuestionsForProject } from "@/lib/project-assistant-data";
-import { loadSavedProjectConstraints } from "@/lib/project-constraints-load";
+import {
+  loadSavedProjectConstraints,
+  mergeDeclinedConstraintSlugs,
+} from "@/lib/project-constraints-load";
 import { listScopeBuilderInputs, listScopeSuggestions } from "@/lib/scope-builder-data";
 import { ensureQuestionsForProjectScopes } from "@/lib/scope-questions-seed";
-import { ensureQuickEstimateForProject, getQuickEstimateForProject } from "@/lib/quick-estimate-data";
+import { ensureQuickEstimateForProject } from "@/lib/quick-estimate-data";
 import {
   extractDeclinedConstraintSlugs,
+  extractAnsweredConstraintSlugs,
   listAssistantMessages,
   type AssistantMessageRow,
 } from "@/lib/assistant-v2/assistant-messages-data";
@@ -60,7 +70,7 @@ export async function loadProjectAssistantData(
     return { data: null, error: "Project not found." };
   }
 
-  const [, , { data: scopes }] = await Promise.all([
+  const [quickEstimate, , { data: scopes }] = await Promise.all([
     ensureQuickEstimateForProject(supabase, organisationId, projectId, userId),
     ensureQuestionsForProjectScopes(supabase, organisationId, projectId),
     supabase
@@ -76,39 +86,50 @@ export async function loadProjectAssistantData(
   const [
     { data: scopeBuilderInputs },
     { data: scopeSuggestions },
-    { data: quickEstimate },
     { data: latestEngineRun },
     { data: latestDiscoveryRun },
     discoveryMeta,
     { data: scopeQuestions },
     { data: chatMessages },
+    savedConstraints,
   ] = await Promise.all([
     listScopeBuilderInputs(supabase, organisationId, projectId),
     listScopeSuggestions(supabase, organisationId, projectId),
-    getQuickEstimateForProject(supabase, organisationId, projectId),
     getLatestDiscoveryEngineRun(supabase, organisationId, projectId),
     getLatestDiscoveryRun(supabase, organisationId, projectId),
     getProjectDiscoveryMeta(supabase, organisationId, projectId),
     listScopeQuestionsForProject(supabase, scopeIds),
     listAssistantMessages(supabase, organisationId, projectId),
-  ]);
-
-  const discovery =
-    parseDiscoveryEngineRun(latestEngineRun ?? null) ??
-    parseDiscoveryRun(latestDiscoveryRun ?? null);
-
-  let selectedConstraintSlugs: string[] = [];
-  let followUpValues: Record<string, string | number> = {};
-
-  if (quickEstimate?.id) {
-    const saved = await loadSavedProjectConstraints(
+    loadSavedProjectConstraints(
       supabase,
       organisationId,
-      quickEstimate.id
-    );
-    selectedConstraintSlugs = saved.slugs;
-    followUpValues = saved.followUpValues;
-  }
+      projectId,
+      quickEstimate?.id
+    ),
+  ]);
+
+  const discovery = normalizeDiscoveryResult(
+    parseDiscoveryEngineRun(latestEngineRun ?? null) ??
+      parseDiscoveryRun(latestDiscoveryRun ?? null)
+  );
+
+  const selectedConstraintSlugs = savedConstraints.slugs;
+  const followUpValues = savedConstraints.followUpValues;
+  const answeredFromMessages = extractAnsweredConstraintSlugs(
+    chatMessages ?? []
+  );
+  const declinedConstraintSlugs = mergeDeclinedConstraintSlugs(
+    savedConstraints.declinedSlugs,
+    extractDeclinedConstraintSlugs(chatMessages ?? [])
+  );
+  const mergedSelectedSlugs = [
+    ...new Set([
+      ...selectedConstraintSlugs,
+      ...[...answeredFromMessages].filter(
+        (slug) => !declinedConstraintSlugs.includes(slug)
+      ),
+    ]),
+  ];
 
   devLog("assistant.load.timing", {
     projectId,
@@ -125,14 +146,12 @@ export async function loadProjectAssistantData(
       confirmedScopes: scopes ?? [],
       scopeQuestions: scopeQuestions ?? [],
       quickEstimate: quickEstimate ?? null,
-      selectedConstraintSlugs,
+      selectedConstraintSlugs: mergedSelectedSlugs,
       followUpValues,
       discovery,
       discoveryMeta,
       chatMessages: chatMessages ?? [],
-      declinedConstraintSlugs: [
-        ...extractDeclinedConstraintSlugs(chatMessages ?? []),
-      ],
+      declinedConstraintSlugs,
     },
     error: null,
   };

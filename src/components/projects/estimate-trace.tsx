@@ -18,9 +18,14 @@ export function EstimateTracePanel({ trace }: EstimateTracePanelProps) {
 
   const rateLabel =
     typeof trace.rateSource === "string" &&
-    ["org_rate", "package_rate", "template_benchmark", "regional_fallback", "placeholder"].includes(
-      trace.rateSource
-    )
+    [
+      "scope_rate",
+      "org_rate",
+      "package_rate",
+      "template_benchmark",
+      "regional_fallback",
+      "placeholder",
+    ].includes(trace.rateSource)
       ? rateSourceLabel(trace.rateSource as RateSource)
       : String(trace.rateSource);
 
@@ -63,22 +68,22 @@ export function EstimateTracePanel({ trace }: EstimateTracePanelProps) {
             {rateLabel}
           </p>
 
-          {trace.finishAdjustments.length > 0 && (
+          {(trace.finishAdjustments?.length ?? 0) > 0 && (
             <div>
               <p className="font-medium text-muted-foreground">Finish</p>
               <ul className="mt-0.5 space-y-0.5">
-                {trace.finishAdjustments.map((a) => (
+                {(trace.finishAdjustments ?? []).map((a) => (
                   <li key={a.label}>{a.label}</li>
                 ))}
               </ul>
             </div>
           )}
 
-          {trace.constraintAdjustments.length > 0 && (
+          {(trace.constraintAdjustments?.length ?? 0) > 0 && (
             <div>
               <p className="font-medium text-muted-foreground">Constraints</p>
               <ul className="mt-0.5 space-y-0.5">
-                {trace.constraintAdjustments.map((a) => (
+                {(trace.constraintAdjustments ?? []).map((a) => (
                   <li key={a.label}>{a.label}</li>
                 ))}
               </ul>
@@ -97,30 +102,30 @@ export function EstimateTracePanel({ trace }: EstimateTracePanelProps) {
 
           <p>
             <span className="text-muted-foreground">Confidence: </span>
-            {trace.confidenceScore}/100 (±{Math.round(trace.rangeFactor * 100)}%)
+            {trace.confidenceScore}/100 (±{Math.round((trace.rangeFactor ?? 0) * 100)}%)
           </p>
 
           <p>
             <span className="text-muted-foreground">Cost range: </span>
             {formatCurrencyRange(
-              trace.finalCostRange.low,
-              trace.finalCostRange.high
+              trace.finalCostRange?.low ?? null,
+              trace.finalCostRange?.high ?? null
             )}
           </p>
 
           <p>
             <span className="text-muted-foreground">Sell range: </span>
             {formatCurrencyRange(
-              trace.finalSellRange.low,
-              trace.finalSellRange.high
+              trace.finalSellRange?.low ?? null,
+              trace.finalSellRange?.high ?? null
             )}
           </p>
 
-          {trace.missingCriticalFacts.length > 0 && (
+          {(trace.missingCriticalFacts?.length ?? 0) > 0 && (
             <div>
               <p className="font-medium text-muted-foreground">Missing facts</p>
               <ul className="mt-0.5 space-y-0.5">
-                {trace.missingCriticalFacts.map((f) => (
+                {(trace.missingCriticalFacts ?? []).map((f) => (
                   <li key={f}>{f}</li>
                 ))}
               </ul>

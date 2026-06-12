@@ -38,7 +38,7 @@ export async function syncDiscoveryFactsToScopeAnswers(
     projectId
   );
   const discovery = parseDiscoveryRun(latestRun ?? null);
-  if (!discovery?.facts.length) {
+  if (!discovery?.facts?.length) {
     return { synced: 0, error: null };
   }
 

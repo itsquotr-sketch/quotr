@@ -49,6 +49,17 @@ export async function listPackageRates(
     .order("package_name", { ascending: true });
 }
 
+export async function listScopeRates(
+  supabase: Supabase,
+  organisationId: string
+) {
+  return supabase
+    .from("scope_rates")
+    .select("*")
+    .eq("organisation_id", organisationId)
+    .order("label", { ascending: true });
+}
+
 export async function getOrganisationPricingSettings(
   supabase: Supabase,
   organisationId: string

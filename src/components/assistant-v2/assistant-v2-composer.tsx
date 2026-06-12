@@ -1,25 +1,34 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { useRouter } from "next/navigation";
 import { Loader2, Send } from "lucide-react";
 import { submitAssistantNotes } from "@/actions/assistant-v2";
+import { AssistantV2Welcome } from "@/components/assistant-v2/assistant-v2-welcome";
 import { useAssistantChat } from "@/components/assistant-v2/assistant-chat-context";
+import { useEstimateUpdate } from "@/components/projects/estimate-update-context";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 
 interface AssistantV2ComposerProps {
   projectId: string;
   disabled?: boolean;
+  showWelcome?: boolean;
 }
 
 export function AssistantV2Composer({
   projectId,
   disabled = false,
+  showWelcome = false,
 }: AssistantV2ComposerProps) {
-  const router = useRouter();
-  const { addOptimisticUserMessage, resolveOptimisticMessage } =
-    useAssistantChat();
+  const {
+    allMessages,
+    addOptimisticUserMessage,
+    addOptimisticAssistantMessage,
+    resolveOptimisticMessage,
+    syncAssistant,
+    clearOptimisticMessages,
+  } = useAssistantChat();
+  const { markSaving, markUpdating, markSaved, markIdle } = useEstimateUpdate();
   const [pending, startTransition] = useTransition();
   const [text, setText] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -31,24 +40,43 @@ export function AssistantV2Composer({
 
     setError(null);
     const optimisticId = addOptimisticUserMessage(content);
+    addOptimisticAssistantMessage("Analysing project…");
     setText("");
+    markSaving();
 
     const formData = new FormData();
     formData.set("content", content);
 
     startTransition(async () => {
-      const result = await submitAssistantNotes(projectId, {}, formData);
-      if (result.error) {
-        setError(result.error);
-        resolveOptimisticMessage(optimisticId, result.error);
-        return;
+      try {
+        markUpdating();
+        const result = await submitAssistantNotes(projectId, {}, formData);
+        if (result.error) {
+          setError(result.error);
+          resolveOptimisticMessage(optimisticId, result.error);
+          markIdle();
+          return;
+        }
+        resolveOptimisticMessage(optimisticId);
+        await syncAssistant();
+        clearOptimisticMessages();
+        markSaved({ costDelta: null, previousCompleteness: null, newCompleteness: null, changeLabel: "after new notes" });
+      } catch {
+        markIdle();
+        setError("Could not send message.");
       }
-      resolveOptimisticMessage(optimisticId);
-      router.refresh();
     });
   }
 
   return (
+    <div className="space-y-2">
+      {showWelcome && allMessages.length === 0 && (
+        <AssistantV2Welcome
+          onSuggestionClick={(chip) => {
+            setText(chip);
+          }}
+        />
+      )}
     <form onSubmit={handleSubmit} className="space-y-2">
       <div className="flex gap-2 rounded-xl border bg-background p-2 shadow-sm">
         <Textarea
@@ -83,5 +111,6 @@ export function AssistantV2Composer({
       </div>
       {error && <p className="text-xs text-destructive">{error}</p>}
     </form>
+    </div>
   );
 }

@@ -1,6 +1,8 @@
 "use client";
 
+import { useState } from "react";
 import { Check } from "lucide-react";
+import { Button } from "@/components/ui/button";
 import { AnswerChips } from "@/components/assistant-v2/answer-chips";
 import { useAssistantChat } from "@/components/assistant-v2/assistant-chat-context";
 import { formatKnownFactLabels } from "@/lib/assistant-v2/compute-information-completeness";
@@ -29,7 +31,10 @@ export function AssistantV2UnderstoodCard({
     optimisticConstraintSlugs,
     optimisticQualityLevel,
     submitQualityLevel,
+    editSiteConditions,
+    flushInFlight,
   } = useAssistantChat();
+  const [editPending, setEditPending] = useState(false);
 
   const primaryWorkArea = workAreas[0] ?? null;
 
@@ -41,7 +46,7 @@ export function AssistantV2UnderstoodCard({
   );
 
   const savedConstraints = optimisticConstraintSlugs.map((slug) => {
-    const fromDiscovery = discovery?.constraints.find((c) => c.slug === slug);
+    const fromDiscovery = discovery?.constraints?.find((c) => c.slug === slug);
     return {
       slug,
       label: fromDiscovery?.label ?? slug,
@@ -98,6 +103,21 @@ export function AssistantV2UnderstoodCard({
           />
         </li>
       </ul>
+      {confirmedScopes.length > 0 && (
+        <Button
+          type="button"
+          variant="link"
+          size="sm"
+          className="mt-2 h-auto px-0 text-xs"
+          disabled={flushInFlight || editPending}
+          onClick={() => {
+            setEditPending(true);
+            void editSiteConditions().finally(() => setEditPending(false));
+          }}
+        >
+          {editPending ? "Resetting site conditions…" : "Edit site conditions"}
+        </Button>
+      )}
     </div>
   );
 }

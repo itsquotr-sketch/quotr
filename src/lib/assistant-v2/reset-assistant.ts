@@ -24,14 +24,15 @@ export async function resetAssistantState(
   const scopeIds = (scopes ?? []).map((s) => s.id);
 
   if (scopeIds.length > 0) {
-    const { error: answersError } = await supabase
-      .from("scope_answers")
+    const { error: deleteScopesError } = await supabase
+      .from("project_scopes")
       .delete()
-      .in("project_scope_id", scopeIds);
+      .eq("project_id", projectId)
+      .eq("organisation_id", organisationId);
 
-    if (answersError) {
-      logSupabaseError("resetAssistantState.answers", answersError);
-      return { error: "Could not clear answers." };
+    if (deleteScopesError) {
+      logSupabaseError("resetAssistantState.scopes", deleteScopesError);
+      return { error: "Could not clear work areas." };
     }
   }
 
@@ -106,6 +107,23 @@ export async function resetAssistantState(
       .eq("quick_estimate_id", quickEstimate.id)
       .eq("organisation_id", organisationId);
 
+    await supabase
+      .from("quick_estimate_answers")
+      .delete()
+      .eq("quick_estimate_id", quickEstimate.id)
+      .eq("organisation_id", organisationId);
+
+    const { error: selectionsError } = await supabase
+      .from("project_constraint_selections")
+      .delete()
+      .eq("project_id", projectId)
+      .eq("organisation_id", organisationId);
+
+    if (selectionsError) {
+      logSupabaseError("resetAssistantState.selections", selectionsError);
+      return { error: "Could not clear constraints." };
+    }
+
     const { error: driversError } = await supabase
       .from("project_estimate_driver_values")
       .delete()
@@ -114,7 +132,6 @@ export async function resetAssistantState(
 
     if (driversError) {
       logSupabaseError("resetAssistantState.drivers", driversError);
-      return { error: "Could not clear constraints." };
     }
 
     const { error: estimateDriversError } = await supabase
@@ -137,6 +154,7 @@ export async function resetAssistantState(
         recommended_sell_low: null,
         recommended_sell_high: null,
         expected_margin_percent: null,
+        target_margin_percent: null,
         confidence_level: "low",
         quality_level: "unknown",
         budget_fit: "unknown",

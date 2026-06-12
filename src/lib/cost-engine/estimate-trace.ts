@@ -10,6 +10,37 @@ export type EstimateTraceAdjustment = {
   highDelta?: number;
 };
 
+export type WorkAreaAllocationBreakdown = {
+  labourPercent: number;
+  materialsPercent: number;
+  subcontractorsPercent: number;
+  allowancesPercent: number;
+  source: "scope_rate" | "template" | "fallback";
+};
+
+export type WorkAreaEstimateTrace = {
+  scopeTypeKey: string;
+  workAreaName: string;
+  workAreaTypeKey: string;
+  quantity: number;
+  unit: string;
+  rate: number;
+  rateSource: RateSource;
+  finishLevel: QualityLevel;
+  centralEstimate: number;
+  allocationBreakdown?: WorkAreaAllocationBreakdown;
+  assumptions: string[];
+};
+
+export type WorkAreaRateSourceLine = {
+  workAreaName: string;
+  workAreaTypeKey: string;
+  scopeTypeKey: string;
+  label: string;
+  rateSource: RateSource;
+  rateSourceLabel: string;
+};
+
 /** Calculation audit trail stored in snapshots and shown behind "Show calculation basis". */
 export type EstimateTrace = {
   scopeKey: string;
@@ -28,6 +59,7 @@ export type EstimateTrace = {
   finalSellRange: { low: number; high: number };
   missingCriticalFacts: string[];
   costBreakdown?: CostBreakdown;
+  workAreaTraces?: WorkAreaEstimateTrace[];
 
   /** Legacy fields kept for UI compatibility */
   workAreas?: { name: string; typeKey: string; templateKey?: string }[];
@@ -68,6 +100,7 @@ export function createEmptyTrace(): EstimateTrace {
     finalCostRange: { low: 0, high: 0 },
     finalSellRange: { low: 0, high: 0 },
     missingCriticalFacts: [],
+    workAreaTraces: [],
     workAreas: [],
     extractedFacts: [],
     missingFacts: [],

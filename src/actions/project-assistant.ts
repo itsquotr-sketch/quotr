@@ -555,6 +555,7 @@ export async function saveAssistantConstraints(
   const saved = await loadSavedProjectConstraints(
     supabase,
     organisationId,
+    projectId,
     quickEstimateId
   );
 

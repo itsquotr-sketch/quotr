@@ -85,9 +85,46 @@ export function extractDeclinedConstraintSlugs(
   const declined = new Set<string>();
   for (const message of messages) {
     const meta = message.metadata as Record<string, unknown> | null;
-    if (meta?.messageType === "constraint_declined" && meta.constraintSlug) {
+    if (meta?.messageType !== "constraint_declined") continue;
+
+    if (meta.constraintSlug) {
       declined.add(String(meta.constraintSlug));
+    }
+
+    if (Array.isArray(meta.constraintSlugs)) {
+      for (const slug of meta.constraintSlugs) {
+        declined.add(String(slug));
+      }
     }
   }
   return declined;
+}
+
+export function extractAnsweredConstraintSlugs(
+  messages: AssistantMessageRow[]
+): Set<string> {
+  const answered = new Set<string>();
+  for (const message of messages) {
+    const meta = message.metadata as Record<string, unknown> | null;
+    if (!meta) continue;
+
+    if (meta.messageType === "constraint_answer") {
+      if (meta.constraintSlug) answered.add(String(meta.constraintSlug));
+      if (Array.isArray(meta.constraintSlugs)) {
+        for (const slug of meta.constraintSlugs) {
+          answered.add(String(slug));
+        }
+      }
+    }
+
+    if (meta.messageType === "constraint_declined") {
+      if (meta.constraintSlug) answered.add(String(meta.constraintSlug));
+      if (Array.isArray(meta.constraintSlugs)) {
+        for (const slug of meta.constraintSlugs) {
+          answered.add(String(slug));
+        }
+      }
+    }
+  }
+  return answered;
 }

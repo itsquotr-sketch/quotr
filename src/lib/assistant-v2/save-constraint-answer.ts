@@ -1,6 +1,6 @@
 import { recalculateQuickEstimate } from "@/lib/cost-engine/recalculate-quick-estimate";
 import { loadSavedProjectConstraints } from "@/lib/project-constraints-load";
-import { persistProjectConstraints } from "@/lib/project-constraints-persist";
+import { upsertConstraintAssessment } from "@/lib/project-constraints-persist";
 import { getProjectById } from "@/lib/projects-data";
 import { ensureQuickEstimateForProject } from "@/lib/quick-estimate-data";
 import { insertAssistantMessage } from "@/lib/assistant-v2/assistant-messages-data";
@@ -50,37 +50,24 @@ export async function saveConstraintAnswer(
   const saved = await loadSavedProjectConstraints(
     supabase,
     params.organisationId,
+    params.projectId,
     estimate.id
   );
 
-  const currentSlugs = new Set(saved.slugs);
-  const hadSlug = currentSlugs.has(params.slug);
+  const wasApplied = saved.slugs.includes(params.slug);
+  const wasDeclined = saved.declinedSlugs.includes(params.slug);
+  const changed =
+    params.apply ? !wasApplied : !wasDeclined;
 
-  if (params.apply) {
-    currentSlugs.add(params.slug);
-  } else {
-    currentSlugs.delete(params.slug);
-  }
-
-  const changed = params.apply ? !hadSlug : hadSlug;
-
-  if (params.apply && changed) {
-    const formData = new FormData();
-    for (const slug of currentSlugs) {
-      formData.append("constraintSlugs", slug);
-      const followUp = saved.followUpValues[slug];
-      if (followUp != null) {
-        formData.set(`followUp_${slug}`, String(followUp));
-      }
-    }
-
-    const persistError = await persistProjectConstraints(supabase, {
+  if (changed) {
+    const persistError = await upsertConstraintAssessment(supabase, {
       organisationId: params.organisationId,
       projectId: params.projectId,
       quickEstimateId: estimate.id,
       userId: params.userId,
-      constraintSlugs: [...currentSlugs],
-      formData,
+      slug: params.slug,
+      apply: params.apply,
+      followUp: saved.followUpValues[params.slug],
     });
 
     if (persistError) {
@@ -108,7 +95,7 @@ export async function saveConstraintAnswer(
       content: "Got it — noted.",
       metadata: { messageType: "assistant_text", constraintSlug: params.slug },
     });
-  } else if (!params.skipThreadMessage && changed) {
+  } else if (!params.skipThreadMessage && params.apply && changed) {
     await insertAssistantMessage(supabase, {
       organisationId: params.organisationId,
       projectId: params.projectId,
@@ -134,7 +121,7 @@ export async function saveConstraintAnswer(
     });
   }
 
-  if (changed && !params.skipRecalc) {
+  if (changed && params.apply && !params.skipRecalc) {
     await recalculateQuickEstimate(
       supabase,
       params.organisationId,
@@ -143,5 +130,5 @@ export async function saveConstraintAnswer(
     );
   }
 
-  return { success: true, changed: changed || !params.apply };
+  return { success: true, changed };
 }

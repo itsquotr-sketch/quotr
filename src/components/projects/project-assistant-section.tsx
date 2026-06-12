@@ -32,6 +32,7 @@ interface ProjectAssistantSectionProps {
   discovery: DiscoveryResult | null;
   discoveryMeta: ProjectDiscoveryMeta;
   projectTrades?: ProjectTrade[];
+  isLegacy?: boolean;
 }
 
 export function ProjectAssistantSection(props: ProjectAssistantSectionProps) {
@@ -46,18 +47,20 @@ export function ProjectAssistantSection(props: ProjectAssistantSectionProps) {
               </div>
               <div>
                 <CardTitle className="normal-case tracking-normal text-lg font-semibold">
-                  Project Assistant
+                  {props.isLegacy ? "Legacy Project Assistant" : "Project Assistant"}
                 </CardTitle>
                 <CardDescription className="text-sm">
                   Scope the job naturally — your estimate updates as you go.
                 </CardDescription>
               </div>
             </div>
-            <Button asChild variant="outline" size="sm" className="shrink-0 text-xs">
-              <Link href={`/projects/${props.projectId}/assistant-v2`}>
-                Try v2
-              </Link>
-            </Button>
+            {props.isLegacy && (
+              <Button asChild variant="outline" size="sm" className="shrink-0 text-xs">
+                <Link href={`/projects/${props.projectId}`}>
+                  Current view
+                </Link>
+              </Button>
+            )}
           </div>
         </CardHeader>
 

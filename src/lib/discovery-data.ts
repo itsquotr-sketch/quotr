@@ -52,6 +52,33 @@ export async function getLatestDiscoveryEngineRun(
   return { data, error: null };
 }
 
+/** Ensures discovery arrays exist — partial DB payloads must not crash the UI. */
+export function normalizeDiscoveryResult(
+  discovery: Partial<DiscoveryResult> | null | undefined
+): DiscoveryResult | null {
+  if (!discovery || typeof discovery !== "object") {
+    return null;
+  }
+
+  return {
+    workAreas: Array.isArray(discovery.workAreas) ? discovery.workAreas : [],
+    facts: Array.isArray(discovery.facts) ? discovery.facts : [],
+    questions: Array.isArray(discovery.questions) ? discovery.questions : [],
+    constraints: Array.isArray(discovery.constraints)
+      ? discovery.constraints
+      : [],
+    trades: Array.isArray(discovery.trades) ? discovery.trades : [],
+    risks: Array.isArray(discovery.risks) ? discovery.risks : [],
+    assumptions: Array.isArray(discovery.assumptions)
+      ? discovery.assumptions
+      : [],
+    qualityLevel: discovery.qualityLevel,
+    confidence: discovery.confidence,
+    model: discovery.model ?? null,
+    promptVersion: discovery.promptVersion,
+  };
+}
+
 export function parseDiscoveryEngineRun(
   row: Database["public"]["Tables"]["discovery_runs"]["Row"] | null
 ): DiscoveryResult | null {
@@ -66,19 +93,19 @@ export function parseDiscoveryEngineRun(
     confidence?: number;
   };
 
-  return {
-    workAreas: parsed.workAreas ?? [],
-    facts: parsed.facts ?? [],
-    questions: parsed.questions ?? [],
-    constraints: parsed.constraints ?? [],
-    trades: parsed.trades ?? [],
-    risks: parsed.risks ?? [],
-    assumptions: parsed.assumptions ?? [],
+  return normalizeDiscoveryResult({
+    workAreas: parsed.workAreas,
+    facts: parsed.facts,
+    questions: parsed.questions,
+    constraints: parsed.constraints,
+    trades: parsed.trades,
+    risks: parsed.risks,
+    assumptions: parsed.assumptions,
     qualityLevel: parsed.qualityLevel,
     confidence: parsed.confidence,
     model: row.model,
     promptVersion: row.prompt_version,
-  };
+  });
 }
 
 export async function getLatestDiscoveryRun(
@@ -108,13 +135,13 @@ export function parseDiscoveryRun(
 ): DiscoveryResult | null {
   if (!row) return null;
 
-  return {
+  return normalizeDiscoveryResult({
     workAreas: parseJsonArray(row.work_areas),
     facts: parseJsonArray(row.facts),
     questions: parseJsonArray(row.questions),
     constraints: parseJsonArray(row.constraints),
     trades: parseJsonArray(row.trades),
-  };
+  });
 }
 
 /**
