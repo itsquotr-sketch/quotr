@@ -1,14 +1,12 @@
 "use client";
 
-import { useActionState, useEffect, useState } from "react";
+import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { Loader2, Send } from "lucide-react";
 import { submitAssistantNotes } from "@/actions/assistant-v2";
-import type { AssistantV2ActionState } from "@/actions/assistant-v2";
+import { useAssistantChat } from "@/components/assistant-v2/assistant-chat-context";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-
-const initialState: AssistantV2ActionState = {};
 
 interface AssistantV2ComposerProps {
   projectId: string;
@@ -20,19 +18,38 @@ export function AssistantV2Composer({
   disabled = false,
 }: AssistantV2ComposerProps) {
   const router = useRouter();
-  const boundAction = submitAssistantNotes.bind(null, projectId);
-  const [state, formAction, pending] = useActionState(boundAction, initialState);
+  const { addOptimisticUserMessage, resolveOptimisticMessage } =
+    useAssistantChat();
+  const [pending, startTransition] = useTransition();
   const [text, setText] = useState("");
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    if (state.success) {
-      setText("");
+  function handleSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    const content = text.trim();
+    if (!content || pending) return;
+
+    setError(null);
+    const optimisticId = addOptimisticUserMessage(content);
+    setText("");
+
+    const formData = new FormData();
+    formData.set("content", content);
+
+    startTransition(async () => {
+      const result = await submitAssistantNotes(projectId, {}, formData);
+      if (result.error) {
+        setError(result.error);
+        resolveOptimisticMessage(optimisticId, result.error);
+        return;
+      }
+      resolveOptimisticMessage(optimisticId);
       router.refresh();
-    }
-  }, [state.success, router]);
+    });
+  }
 
   return (
-    <form action={formAction} className="space-y-2">
+    <form onSubmit={handleSubmit} className="space-y-2">
       <div className="flex gap-2 rounded-xl border bg-background p-2 shadow-sm">
         <Textarea
           name="content"
@@ -46,12 +63,11 @@ export function AssistantV2Composer({
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
               if (text.trim()) {
-                e.currentTarget.form?.requestSubmit();
+                handleSubmit(e);
               }
             }
           }}
         />
-        <input type="hidden" name="inputType" value="typed_note" />
         <Button
           type="submit"
           size="icon"
@@ -65,9 +81,7 @@ export function AssistantV2Composer({
           )}
         </Button>
       </div>
-      {state.error && (
-        <p className="text-xs text-destructive">{state.error}</p>
-      )}
+      {error && <p className="text-xs text-destructive">{error}</p>}
     </form>
   );
 }

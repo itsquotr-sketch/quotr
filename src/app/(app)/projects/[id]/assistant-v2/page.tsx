@@ -46,6 +46,8 @@ export default async function AssistantV2Page({ params }: AssistantV2PageProps) 
       quickEstimate={data.quickEstimate}
       selectedConstraintSlugs={data.selectedConstraintSlugs}
       discovery={data.discovery}
+      chatMessages={data.chatMessages}
+      declinedConstraintSlugs={data.declinedConstraintSlugs}
       rfqCount={rfqCount}
     />
   );

@@ -7,6 +7,7 @@ import { listScopeBuilderInputs } from "@/lib/scope-builder-data";
 import { answerValueToString } from "@/lib/scope-answer-state";
 import { persistScopeAnswersBatch } from "@/lib/scope-answers-persist";
 import { ensureQuestionsForProjectScopes } from "@/lib/scope-questions-seed";
+import { insertAssistantMessage } from "@/lib/assistant-v2/assistant-messages-data";
 import { userFacingSupabaseError } from "@/lib/supabase/log-error";
 import { scopeQuestionAnswerSchema } from "@/lib/validations/project-assistant";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -26,6 +27,8 @@ export async function saveScopeAnswer(
     userId: string;
     questionId: string;
     answer: string;
+    skipRecalc?: boolean;
+    skipThreadMessage?: boolean;
   }
 ): Promise<SaveScopeAnswerResult> {
   const parsed = scopeQuestionAnswerSchema.safeParse({
@@ -141,12 +144,28 @@ export async function saveScopeAnswer(
       .eq("organisation_id", params.organisationId);
   }
 
-  await recalculateQuickEstimate(
-    supabase,
-    params.organisationId,
-    params.projectId,
-    { triggerEvent: "answer_changed" }
-  );
+  if (!params.skipThreadMessage) {
+    await insertAssistantMessage(supabase, {
+      organisationId: params.organisationId,
+      projectId: params.projectId,
+      userId: params.userId,
+      role: "user",
+      content: parsed.data.answer,
+      metadata: {
+        messageType: "answer",
+        questionId: parsed.data.questionId,
+      },
+    });
+  }
+
+  if (!params.skipRecalc) {
+    await recalculateQuickEstimate(
+      supabase,
+      params.organisationId,
+      params.projectId,
+      { triggerEvent: "answer_changed" }
+    );
+  }
 
   return { success: true, message: "Answer saved.", changed: true };
 }

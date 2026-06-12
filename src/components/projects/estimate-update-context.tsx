@@ -13,13 +13,25 @@ import {
 
 export type EstimateUpdateStatus = "idle" | "saving" | "updating" | "saved";
 
+export type EstimateChangeSummary = {
+  costDelta: number | null;
+  previousCompleteness: number | null;
+  newCompleteness: number | null;
+  changeLabel: string | null;
+};
+
 type EstimateUpdateContextValue = {
   status: EstimateUpdateStatus;
   lastUpdatedAt: Date | null;
+  lastChange: EstimateChangeSummary | null;
   markSaving: () => void;
   markUpdating: () => void;
-  markSaved: () => void;
+  markSaved: (change?: EstimateChangeSummary) => void;
   markIdle: () => void;
+  recordEstimateSnapshot: (
+    costMid: number | null,
+    completeness: number
+  ) => void;
   runGuardedRefresh: (
     fn: () => Promise<void>,
     reason: string
@@ -33,15 +45,30 @@ const EstimateUpdateContext = createContext<EstimateUpdateContextValue | null>(
 export function EstimateUpdateProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<EstimateUpdateStatus>("idle");
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
+  const [lastChange, setLastChange] = useState<EstimateChangeSummary | null>(
+    null
+  );
   const recalcInFlightRef = useRef(false);
+  const snapshotRef = useRef<{
+    costMid: number | null;
+    completeness: number;
+  } | null>(null);
 
   const markSaving = useCallback(() => setStatus("saving"), []);
   const markUpdating = useCallback(() => setStatus("updating"), []);
-  const markSaved = useCallback(() => {
+  const markSaved = useCallback((change?: EstimateChangeSummary) => {
     setStatus("saved");
     setLastUpdatedAt(new Date());
+    if (change) setLastChange(change);
   }, []);
   const markIdle = useCallback(() => setStatus("idle"), []);
+
+  const recordEstimateSnapshot = useCallback(
+    (costMid: number | null, completeness: number) => {
+      snapshotRef.current = { costMid, completeness };
+    },
+    []
+  );
 
   const runGuardedRefresh = useCallback(
     async (fn: () => Promise<void>, reason: string) => {
@@ -72,19 +99,23 @@ export function EstimateUpdateProvider({ children }: { children: ReactNode }) {
     () => ({
       status,
       lastUpdatedAt,
+      lastChange,
       markSaving,
       markUpdating,
       markSaved,
       markIdle,
+      recordEstimateSnapshot,
       runGuardedRefresh,
     }),
     [
       status,
       lastUpdatedAt,
+      lastChange,
       markSaving,
       markUpdating,
       markSaved,
       markIdle,
+      recordEstimateSnapshot,
       runGuardedRefresh,
     ]
   );

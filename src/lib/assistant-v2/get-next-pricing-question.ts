@@ -128,6 +128,73 @@ function toPricingQuestion(
   };
 }
 
+const MAX_BATCH_QUESTIONS = 3;
+
+export function getNextPricingQuestions(
+  input: {
+    scopeGroups: ScopeGroupInput[];
+    discovery: DiscoveryResult | null;
+    scopeQuestions: ScopeQuestionWithAnswers[];
+    answeredQuestionKeys?: Set<string>;
+  },
+  maxCount = MAX_BATCH_QUESTIONS
+): PricingQuestion[] {
+  const questions: PricingQuestion[] = [];
+  const answered = input.answeredQuestionKeys ?? new Set<string>();
+
+  for (const group of input.scopeGroups) {
+    const typeKey = resolveWorkAreaTypeKey(group.scopeTypeName, group.scopeName);
+    const merged = buildMergedAnswersForScope(
+      group.scopeId,
+      group.scopeName,
+      group.scopeTypeName,
+      input.scopeQuestions,
+      input.discovery
+    );
+
+    for (const question of group.questions) {
+      if (!questionBelongsInFlow(question, typeKey)) continue;
+      if (!isRequiredFact(question, typeKey)) continue;
+      const key = normalizeQuestionKey(question.question_key);
+      if (key && answered.has(key)) continue;
+      if (isKnownQuestion(question, typeKey, merged)) continue;
+      const pq = toPricingQuestion(question, group, true);
+      if (pq) questions.push(pq);
+      if (questions.length >= maxCount) return questions;
+    }
+  }
+
+  for (const group of input.scopeGroups) {
+    const typeKey = resolveWorkAreaTypeKey(group.scopeTypeName, group.scopeName);
+    const scope = getScopeByWorkAreaType(typeKey);
+    if (!scope) continue;
+
+    const merged = buildMergedAnswersForScope(
+      group.scopeId,
+      group.scopeName,
+      group.scopeTypeName,
+      input.scopeQuestions,
+      input.discovery
+    );
+
+    const highImpact = new Set(scope.confidenceRules.highImpactOptionalKeys);
+
+    for (const question of group.questions) {
+      if (!questionBelongsInFlow(question, typeKey)) continue;
+      if (isRequiredFact(question, typeKey)) continue;
+      const key = normalizeQuestionKey(question.question_key);
+      if (!key || !highImpact.has(key)) continue;
+      if (answered.has(key)) continue;
+      if (isKnownQuestion(question, typeKey, merged)) continue;
+      const pq = toPricingQuestion(question, group, false);
+      if (pq) questions.push(pq);
+      if (questions.length >= maxCount) return questions;
+    }
+  }
+
+  return questions;
+}
+
 export function getNextPricingQuestion(input: {
   scopeGroups: ScopeGroupInput[];
   discovery: DiscoveryResult | null;

@@ -63,6 +63,61 @@ export interface Database {
         };
         Relationships: [];
       };
+      assistant_messages: {
+        Row: {
+          id: string;
+          organisation_id: string;
+          project_id: string;
+          role: string;
+          content: string;
+          metadata: Json;
+          created_at: string;
+          created_by: string | null;
+        };
+        Insert: {
+          id?: string;
+          organisation_id: string;
+          project_id: string;
+          role: string;
+          content: string;
+          metadata?: Json;
+          created_at?: string;
+          created_by?: string | null;
+        };
+        Update: {
+          id?: string;
+          organisation_id?: string;
+          project_id?: string;
+          role?: string;
+          content?: string;
+          metadata?: Json;
+          created_at?: string;
+          created_by?: string | null;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "assistant_messages_organisation_id_fkey";
+            columns: ["organisation_id"];
+            isOneToOne: false;
+            referencedRelation: "organisations";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assistant_messages_project_id_fkey";
+            columns: ["project_id"];
+            isOneToOne: false;
+            referencedRelation: "projects";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "assistant_messages_created_by_fkey";
+            columns: ["created_by"];
+            isOneToOne: false;
+            referencedRelation: "profiles";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
       clients: {
         Row: {
           id: string;

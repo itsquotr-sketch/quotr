@@ -3,10 +3,17 @@
 import { requireOrganisation } from "@/lib/auth";
 import { buildMergedAnswersForScope } from "@/lib/assistant-v2/build-merged-answers";
 import { formatKnownFactLabels } from "@/lib/assistant-v2/compute-information-completeness";
+import { insertAssistantMessage } from "@/lib/assistant-v2/assistant-messages-data";
 import { loadProjectAssistantData } from "@/lib/assistant-v2/load-assistant-data";
 import { revalidateProjectAssistant } from "@/lib/assistant-v2/revalidate";
 import { resetAssistantState } from "@/lib/assistant-v2/reset-assistant";
 import { runAssistantAnalysis } from "@/lib/assistant-v2/run-assistant-analysis";
+import { saveConstraintAnswer } from "@/lib/assistant-v2/save-constraint-answer";
+import { saveQualityLevel } from "@/lib/assistant-v2/save-quality-level";
+import {
+  batchSaveConstraintAnswers,
+  batchSaveScopeAnswers,
+} from "@/lib/assistant-v2/batch-save-answers";
 import { saveScopeAnswer } from "@/lib/assistant-v2/save-scope-answer";
 import { submitProjectNotes } from "@/lib/assistant-v2/submit-notes";
 import { acceptScopeSuggestion } from "@/actions/scope-suggestions";
@@ -16,6 +23,7 @@ import { resolveWorkAreaTypeKey } from "@/lib/project-assistant-questions";
 import { getProjectById } from "@/lib/projects-data";
 import { createClient } from "@/lib/supabase/server";
 import { logSupabaseError } from "@/lib/supabase/log-error";
+import type { QualityLevel } from "@/lib/constants/quality-level";
 
 export type AssistantV2ActionState = {
   error?: string;
@@ -103,7 +111,19 @@ export async function submitAssistantNotes(
   const { user, organisationId } = await requireOrganisation();
   const supabase = await createClient();
 
-  const content = formData.get("content")?.toString() ?? "";
+  const content = formData.get("content")?.toString().trim() ?? "";
+  if (!content) {
+    return { error: "Please enter a message." };
+  }
+
+  await insertAssistantMessage(supabase, {
+    organisationId,
+    projectId,
+    userId: user.id,
+    role: "user",
+    content,
+    metadata: { messageType: "note" },
+  });
 
   const saveResult = await submitProjectNotes(supabase, {
     organisationId,
@@ -125,28 +145,91 @@ export async function submitAssistantNotes(
     userId: user.id,
   });
 
-  if (!analyseResult.success && analyseResult.error) {
-    return {
-      success: true,
-      message: "Notes saved. Add more detail, then analyse again.",
-    };
-  }
-
   const acceptResult = await acceptAllPendingSuggestions(projectId);
   if (acceptResult.error) {
-    return {
-      ...analyseResult,
-      error: acceptResult.error,
-    };
+    return { error: acceptResult.error };
   }
+
+  const assistantText = analyseResult.success
+    ? analyseResult.usedFallback
+      ? "I used basic analysis — your notes are saved and I'm building the estimate."
+      : "Got it — I'm reviewing the scope and updating your estimate."
+    : "Notes saved. Add more detail if needed.";
+
+  await insertAssistantMessage(supabase, {
+    organisationId,
+    projectId,
+    userId: user.id,
+    role: "assistant",
+    content: assistantText,
+    metadata: {
+      messageType: "assistant_text",
+      analysingMode: analyseResult.analysingMode,
+    },
+  });
 
   revalidateProjectAssistant(projectId);
   return {
     success: true,
-    message: analyseResult.message ?? "Got it — building your estimate.",
+    message: analyseResult.message ?? assistantText,
     analysingMode: analyseResult.analysingMode,
     usedFallback: analyseResult.usedFallback,
   };
+}
+
+export async function batchSaveAssistantScopeAnswers(
+  projectId: string,
+  answers: {
+    questionId: string;
+    questionKey: string;
+    answer: string;
+    label: string;
+  }[]
+): Promise<AssistantV2ActionState> {
+  const { user, organisationId } = await requireOrganisation();
+  const supabase = await createClient();
+
+  const result = await batchSaveScopeAnswers(supabase, {
+    organisationId,
+    projectId,
+    userId: user.id,
+    answers,
+  });
+
+  if (result.error) {
+    return { error: result.error };
+  }
+
+  if (result.changed) {
+    revalidateProjectAssistant(projectId);
+  }
+
+  return { success: true };
+}
+
+export async function batchSaveAssistantConstraintAnswers(
+  projectId: string,
+  selections: { slug: string; label: string; apply: boolean }[]
+): Promise<AssistantV2ActionState> {
+  const { user, organisationId } = await requireOrganisation();
+  const supabase = await createClient();
+
+  const result = await batchSaveConstraintAnswers(supabase, {
+    organisationId,
+    projectId,
+    userId: user.id,
+    selections,
+  });
+
+  if (result.error) {
+    return { error: result.error };
+  }
+
+  if (result.changed) {
+    revalidateProjectAssistant(projectId);
+  }
+
+  return { success: true };
 }
 
 export async function autoSaveScopeQuestionAnswer(
@@ -174,6 +257,60 @@ export async function autoSaveScopeQuestionAnswer(
   }
 
   return { success: true, message: result.message };
+}
+
+export async function autoSaveConstraintAnswer(
+  projectId: string,
+  slug: string,
+  label: string,
+  apply: boolean
+): Promise<AssistantV2ActionState> {
+  const { user, organisationId } = await requireOrganisation();
+  const supabase = await createClient();
+
+  const result = await saveConstraintAnswer(supabase, {
+    organisationId,
+    projectId,
+    userId: user.id,
+    slug,
+    label,
+    apply,
+  });
+
+  if ("error" in result) {
+    return { error: result.error };
+  }
+
+  if (result.changed || !apply) {
+    revalidateProjectAssistant(projectId);
+  }
+
+  return { success: true };
+}
+
+export async function autoSaveQualityLevel(
+  projectId: string,
+  qualityLevel: QualityLevel
+): Promise<AssistantV2ActionState> {
+  const { user, organisationId } = await requireOrganisation();
+  const supabase = await createClient();
+
+  const result = await saveQualityLevel(supabase, {
+    organisationId,
+    projectId,
+    userId: user.id,
+    qualityLevel,
+  });
+
+  if ("error" in result) {
+    return { error: result.error };
+  }
+
+  if (result.changed) {
+    revalidateProjectAssistant(projectId);
+  }
+
+  return { success: true, message: `Finish level set to ${result.label}.` };
 }
 
 export async function generateAssistantEstimate(

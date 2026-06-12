@@ -1,3 +1,4 @@
+import { deleteAssistantMessagesForProject } from "@/lib/assistant-v2/assistant-messages-data";
 import { logSupabaseError } from "@/lib/supabase/log-error";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database";
@@ -67,6 +68,27 @@ export async function resetAssistantState(
     return { error: "Could not clear work area suggestions." };
   }
 
+  const { error: messagesError } = await deleteAssistantMessagesForProject(
+    supabase,
+    organisationId,
+    projectId
+  );
+
+  if (messagesError) {
+    return { error: messagesError };
+  }
+
+  const { error: outputsError } = await supabase
+    .from("discovery_outputs")
+    .delete()
+    .eq("project_id", projectId)
+    .eq("organisation_id", organisationId);
+
+  if (outputsError) {
+    logSupabaseError("resetAssistantState.discoveryOutputs", outputsError);
+    return { error: "Could not clear discovery outputs." };
+  }
+
   const { data: quickEstimate } = await supabase
     .from("quick_estimates")
     .select("id")
@@ -78,6 +100,12 @@ export async function resetAssistantState(
     .maybeSingle();
 
   if (quickEstimate?.id) {
+    await supabase
+      .from("quick_estimate_snapshots")
+      .delete()
+      .eq("quick_estimate_id", quickEstimate.id)
+      .eq("organisation_id", organisationId);
+
     const { error: driversError } = await supabase
       .from("project_estimate_driver_values")
       .delete()

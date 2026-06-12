@@ -5,6 +5,11 @@ import { loadSavedProjectConstraints } from "@/lib/project-constraints-load";
 import { listScopeBuilderInputs, listScopeSuggestions } from "@/lib/scope-builder-data";
 import { ensureQuestionsForProjectScopes } from "@/lib/scope-questions-seed";
 import { ensureQuickEstimateForProject, getQuickEstimateForProject } from "@/lib/quick-estimate-data";
+import {
+  extractDeclinedConstraintSlugs,
+  listAssistantMessages,
+  type AssistantMessageRow,
+} from "@/lib/assistant-v2/assistant-messages-data";
 import { devLog } from "@/lib/dev-log";
 import { getProjectById } from "@/lib/projects-data";
 import type { DiscoveryResult } from "@/lib/ai/discovery/types";
@@ -33,6 +38,8 @@ export type ProjectAssistantData = {
   followUpValues: Record<string, string | number>;
   discovery: DiscoveryResult | null;
   discoveryMeta: ProjectDiscoveryMeta;
+  chatMessages: AssistantMessageRow[];
+  declinedConstraintSlugs: string[];
 };
 
 export async function loadProjectAssistantData(
@@ -74,6 +81,7 @@ export async function loadProjectAssistantData(
     { data: latestDiscoveryRun },
     discoveryMeta,
     { data: scopeQuestions },
+    { data: chatMessages },
   ] = await Promise.all([
     listScopeBuilderInputs(supabase, organisationId, projectId),
     listScopeSuggestions(supabase, organisationId, projectId),
@@ -82,6 +90,7 @@ export async function loadProjectAssistantData(
     getLatestDiscoveryRun(supabase, organisationId, projectId),
     getProjectDiscoveryMeta(supabase, organisationId, projectId),
     listScopeQuestionsForProject(supabase, scopeIds),
+    listAssistantMessages(supabase, organisationId, projectId),
   ]);
 
   const discovery =
@@ -120,6 +129,10 @@ export async function loadProjectAssistantData(
       followUpValues,
       discovery,
       discoveryMeta,
+      chatMessages: chatMessages ?? [],
+      declinedConstraintSlugs: [
+        ...extractDeclinedConstraintSlugs(chatMessages ?? []),
+      ],
     },
     error: null,
   };
