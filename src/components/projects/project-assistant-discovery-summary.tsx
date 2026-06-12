@@ -2,7 +2,7 @@
 
 import type { ReactNode } from "react";
 import { EstimateQualityCard } from "@/components/projects/estimate-quality-card";
-import type { DiscoveryResult } from "@/lib/discovery";
+import type { DiscoveryResult } from "@/lib/ai/discovery/types";
 import type { DiscoverySummaryConstraint } from "@/lib/project-constraints-load";
 import type { EstimateQualityFactor } from "@/lib/cost-engine/estimate-quality";
 import type { QuickEstimateConfidenceLevel } from "@/lib/constants/quick-estimate";

@@ -1,6 +1,6 @@
 "use client";
 
-import { ProjectAssistantNotesForm } from "@/components/projects/project-assistant-notes-form";
+import { BrainDumpPanel } from "@/components/projects/brain-dump-panel";
 import type { ProjectDiscoveryMeta } from "@/lib/discovery-meta";
 
 interface ProjectNotesInputProps {
@@ -14,9 +14,6 @@ export function ProjectNotesInput({
   discoveryMeta,
 }: ProjectNotesInputProps) {
   return (
-    <ProjectAssistantNotesForm
-      projectId={projectId}
-      discoveryMeta={discoveryMeta}
-    />
+    <BrainDumpPanel projectId={projectId} discoveryMeta={discoveryMeta} />
   );
 }

@@ -1,9 +1,11 @@
 import type { EstimateQualityFactor } from "@/lib/cost-engine/estimate-quality";
+import type { CostBreakdown } from "@/lib/cost-engine/build-cost-breakdown";
 import type { EstimateTrace } from "@/lib/cost-engine/estimate-trace";
 import type { RangeQuality } from "@/lib/cost-engine/range-quality";
 
 export function parseQuickEstimateSummary(notes: string | null): {
   workAreasIncluded: string[];
+  workAreasExcluded?: string[];
   questionsAnswered: number;
   questionsTotal: number;
   constraintsIncluded: string[];
@@ -38,11 +40,13 @@ export function parseQuickEstimateSummary(notes: string | null): {
   rateSourceDetail?: string;
   rangeFactor?: number | null;
   rangeChangedMessage?: string | null;
+  costBreakdown?: CostBreakdown;
 } | null {
   if (!notes) return null;
   try {
     const parsed = JSON.parse(notes) as {
       workAreasIncluded?: string[];
+      workAreasExcluded?: string[];
       questionsAnswered?: number;
       questionsTotal?: number;
       constraintsIncluded?: string[];
@@ -81,6 +85,7 @@ export function parseQuickEstimateSummary(notes: string | null): {
     if (Array.isArray(parsed.includedTrades) || Array.isArray(parsed.workAreasIncluded)) {
       return {
         workAreasIncluded: parsed.workAreasIncluded ?? [],
+        workAreasExcluded: parsed.workAreasExcluded ?? [],
         questionsAnswered: parsed.questionsAnswered ?? 0,
         questionsTotal: parsed.questionsTotal ?? 0,
         constraintsIncluded:
@@ -117,6 +122,7 @@ export function parseQuickEstimateSummary(notes: string | null): {
         rateSourceDetail: parsed.rateSourceDetail,
         rangeFactor: parsed.rangeFactor ?? null,
         rangeChangedMessage: parsed.rangeChangedMessage ?? null,
+        costBreakdown: parsed.estimateTrace?.costBreakdown,
       };
     }
   } catch {

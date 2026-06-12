@@ -1,5 +1,5 @@
-import { extractQualityLevelFromNotes } from "@/lib/discovery/quality-level-rules";
-import { ruleBasedDiscoveryProvider } from "@/lib/discovery/rule-based-provider";
+import { extractQualityLevelFromNotes } from "@/lib/ai/discovery/quality-level-rules";
+import { ruleBasedDiscoveryProvider } from "@/lib/ai/discovery/rule-based-core";
 import type { IDiscoveryProvider } from "@/lib/ai/discovery/discovery-provider";
 import type {
   DiscoveryRunContext,

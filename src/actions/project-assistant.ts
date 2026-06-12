@@ -3,10 +3,13 @@
 import { revalidateProjectAssistant } from "@/lib/assistant-v2/revalidate";
 import { requireOrganisation } from "@/lib/auth";
 import { runProjectDiscovery } from "@/lib/ai/discovery";
-import { resetAssistantState } from "@/lib/assistant-v2/reset-assistant";
+import { autosaveDevLog } from "@/lib/autosave/autosave-dev-log";
+import { hasMeaningfulChange } from "@/lib/autosave/has-meaningful-change";
 import { recalculateQuickEstimate } from "@/lib/cost-engine/recalculate-quick-estimate";
 import { devLog } from "@/lib/dev-log";
+import { loadSavedProjectConstraints } from "@/lib/project-constraints-load";
 import { persistProjectConstraints } from "@/lib/project-constraints-persist";
+import { answerValueToString } from "@/lib/scope-answer-state";
 import { persistScopeAnswersBatch } from "@/lib/scope-answers-persist";
 import { getProjectById } from "@/lib/projects-data";
 import {
@@ -99,7 +102,8 @@ async function executeProjectDiscovery(
   supabase: Awaited<ReturnType<typeof createClient>>,
   organisationId: string,
   projectId: string,
-  userId: string
+  userId: string,
+  options?: { forceRules?: boolean }
 ): Promise<ProjectAssistantActionState> {
   const combinedNotes = await getCombinedProjectNotes(
     supabase,
@@ -133,9 +137,41 @@ async function executeProjectDiscovery(
     inputText: combinedNotes,
     sourceInputId: latestInput?.id ?? null,
     quickEstimateId: estimate?.id ?? null,
+    forceRules: options?.forceRules ?? false,
   });
 
   if (discoveryResult.error) {
+    if (!options?.forceRules) {
+      const fallback = await runProjectDiscovery(supabase, {
+        organisationId,
+        projectId,
+        userId,
+        inputText: combinedNotes,
+        sourceInputId: latestInput?.id ?? null,
+        quickEstimateId: estimate?.id ?? null,
+        forceRules: true,
+      });
+      if (!fallback.error) {
+        await ensureQuestionsForProjectScopes(
+          supabase,
+          organisationId,
+          projectId
+        );
+        await recalculateQuickEstimateAction(projectId, {
+          silent: true,
+          triggerEvent: "discovery_fallback",
+        });
+        revalidateProjectAssistant(projectId);
+        return {
+          success: true,
+          message:
+            "Basic analysis complete — AI was unavailable but your notes were processed.",
+          nextStep: 2,
+          analysingMode: "rules",
+          usedFallback: true,
+        };
+      }
+    }
     return { error: discoveryResult.error };
   }
 
@@ -177,6 +213,29 @@ export async function analyseProject(
     projectId,
     user.id
   );
+}
+
+export async function analyseProjectBasic(
+  projectId: string
+): Promise<ProjectAssistantActionState> {
+  const { user, organisationId } = await requireOrganisation();
+  const supabase = await createClient();
+  return executeProjectDiscovery(
+    supabase,
+    organisationId,
+    projectId,
+    user.id,
+    { forceRules: true }
+  );
+}
+
+export async function generateDraftQuickEstimate(
+  projectId: string
+): Promise<ProjectAssistantActionState> {
+  return recalculateQuickEstimateAction(projectId, {
+    nextStep: 5,
+    triggerEvent: "generate_draft",
+  });
 }
 
 export async function saveAndAnalyseProject(
@@ -382,11 +441,32 @@ export async function saveScopeQuestionAnswers(
 
     if (!scope) continue;
 
+    const { data: existing } = await supabase
+      .from("scope_answers")
+      .select("answer, source")
+      .eq("scope_question_id", item.questionId)
+      .maybeSingle();
+
+    const existingValue =
+      answerValueToString(existing?.answer ?? null, existing?.source ?? null) ??
+      "";
+
+    if (!hasMeaningfulChange(existingValue, item.answer)) {
+      autosaveDevLog("autosave", "skipped — no value change");
+      continue;
+    }
+
+    autosaveDevLog("autosave", "saving changed value");
+
     answersToSave.push({
       scopeQuestionId: item.questionId,
       projectScopeId: question.project_scope_id,
       answer: item.answer,
     });
+  }
+
+  if (answersToSave.length === 0) {
+    return { success: true, message: "No changes." };
   }
 
   const persistError = await persistScopeAnswersBatch(
@@ -406,7 +486,7 @@ export async function saveScopeQuestionAnswers(
   await syncNotesToQuickEstimate(supabase, organisationId, projectId, user.id);
   await recalculateQuickEstimateAction(projectId, {
     silent: true,
-    triggerEvent: "answer_saved",
+    triggerEvent: "answer_changed",
   });
 
   revalidateProjectAssistant(projectId);
@@ -465,6 +545,47 @@ export async function saveAssistantConstraints(
     return { error: "Invalid budget, finish or constraints." };
   }
 
+  const { data: currentEstimate } = await supabase
+    .from("quick_estimates")
+    .select("quality_level")
+    .eq("id", quickEstimateId)
+    .eq("organisation_id", organisationId)
+    .maybeSingle();
+
+  const saved = await loadSavedProjectConstraints(
+    supabase,
+    organisationId,
+    quickEstimateId
+  );
+
+  const followUpsFromForm = Object.fromEntries(
+    parsed.data.constraintSlugs.map((slug) => [
+      slug,
+      formData.get(`followUp_${slug}`)?.toString() ?? "",
+    ])
+  );
+
+  const slugsUnchanged =
+    JSON.stringify([...saved.slugs].sort()) ===
+    JSON.stringify([...parsed.data.constraintSlugs].sort());
+  const qualityUnchanged =
+    (currentEstimate?.quality_level ?? "unknown") === parsed.data.qualityLevel;
+  const followUpsUnchanged = parsed.data.constraintSlugs.every((slug) => {
+    const savedValue = saved.followUpValues[slug];
+    const nextValue = followUpsFromForm[slug] ?? "";
+    return !hasMeaningfulChange(
+      savedValue?.toString() ?? "",
+      nextValue
+    );
+  });
+
+  if (slugsUnchanged && qualityUnchanged && followUpsUnchanged) {
+    autosaveDevLog("autosave", "skipped — no value change");
+    return { success: true, message: "No changes." };
+  }
+
+  autosaveDevLog("autosave", "saving changed value");
+
   const { error: qualityError } = await supabase
     .from("quick_estimates")
     .update({ quality_level: parsed.data.qualityLevel })
@@ -489,7 +610,10 @@ export async function saveAssistantConstraints(
     return { error: userFacingConstraintPersistError(persistError) };
   }
 
-  await recalculateQuickEstimateAction(projectId, { silent: true });
+  await recalculateQuickEstimateAction(projectId, {
+    silent: true,
+    triggerEvent: "condition_changed",
+  });
 
   revalidateProjectAssistant(projectId);
 
@@ -535,6 +659,14 @@ export async function updateQuickEstimateMargin(
     return { error: "Quick estimate not found." };
   }
 
+  const currentMargin = Number(quickEstimate.target_margin_percent ?? 0);
+  if (currentMargin === parsed.data.targetMarginPercent) {
+    autosaveDevLog("autosave", "skipped — no value change");
+    return { success: true, message: "Margin unchanged." };
+  }
+
+  autosaveDevLog("autosave", "saving changed value");
+
   const { error: updateError } = await supabase
     .from("quick_estimates")
     .update({ target_margin_percent: parsed.data.targetMarginPercent })
@@ -550,7 +682,7 @@ export async function updateQuickEstimateMargin(
     supabase,
     organisationId,
     projectId,
-    { triggerEvent: "margin_updated" }
+    { triggerEvent: "margin_changed" }
   );
 
   if (!result.success) {
@@ -590,44 +722,6 @@ async function recalculateQuickEstimateAction(
     success: true,
     message: result.message,
     ...(options?.silent ? {} : { nextStep: options?.nextStep ?? 5 }),
-  };
-}
-
-export async function resetAssistant(
-  projectId: string
-): Promise<ProjectAssistantActionState> {
-  const { organisationId } = await requireOrganisation();
-  const supabase = await createClient();
-
-  const { data: quickEstimate } = await getQuickEstimateForProject(
-    supabase,
-    organisationId,
-    projectId
-  );
-
-  if (quickEstimate?.id) {
-    await supabase
-      .from("quick_estimate_snapshots")
-      .delete()
-      .eq("quick_estimate_id", quickEstimate.id)
-      .eq("organisation_id", organisationId);
-  }
-
-  const { error } = await resetAssistantState(
-    supabase,
-    organisationId,
-    projectId
-  );
-
-  if (error) {
-    return { error };
-  }
-
-  revalidateProjectAssistant(projectId);
-  return {
-    success: true,
-    message:
-      "Assistant reset. Project, client, and saved notes are unchanged.",
   };
 }
 

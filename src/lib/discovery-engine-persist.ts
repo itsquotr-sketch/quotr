@@ -1,5 +1,5 @@
 import { createHash } from "crypto";
-import type { DiscoveryResult } from "@/lib/discovery";
+import type { DiscoveryResult } from "@/lib/ai/discovery/types";
 import { devLog } from "@/lib/dev-log";
 import { logSupabaseError } from "@/lib/supabase/log-error";
 import type { Json } from "@/types/database";

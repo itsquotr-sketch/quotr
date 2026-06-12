@@ -1,6 +1,6 @@
 import { buildQuickEstimateInput } from "@/lib/cost-engine/build-quick-estimate-input";
 import { calculateQuickEstimateV1 } from "@/lib/cost-engine/calculate-quick-estimate-v1";
-import { formatCurrencyRange } from "@/lib/project-assistant-calculate";
+import { formatCurrencyRange } from "@/lib/format-currency";
 import { logSupabaseError } from "@/lib/supabase/log-error";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database, Json } from "@/types/database";
@@ -69,6 +69,7 @@ export async function recalculateQuickEstimate(
 
   const summaryNote = JSON.stringify({
     workAreasIncluded: input.workAreas.map((w) => w.name),
+    workAreasExcluded: input.excludedWorkAreaNames ?? [],
     questionsAnswered: input.questionsAnswered,
     questionsTotal: input.questionsTotal,
     constraintsIncluded: result.constraintsApplied,

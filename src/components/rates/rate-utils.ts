@@ -1,4 +1,4 @@
-import { formatCurrency } from "@/lib/quick-estimate-calculate";
+import { formatCurrency } from "@/lib/format-currency";
 import {
   formatRateRange,
   packageCostRange,

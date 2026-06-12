@@ -74,6 +74,77 @@ export const aiDiscoveryOutputSchema = z.object({
 
 export type AiDiscoveryOutput = z.infer<typeof aiDiscoveryOutputSchema>;
 
+const discoveryWorkAreaSchema = z.object({
+  typeKey: z.string(),
+  name: z.string(),
+  description: z.string(),
+  locationArea: z.string().nullable(),
+  confidence: z.number().min(0).max(1),
+  matchedKeywords: z.array(z.string()),
+});
+
+const discoveryFactSchema = z.object({
+  key: z.string(),
+  label: z.string(),
+  value: z.string(),
+  unit: z.string().optional(),
+  workAreaTypeKey: z.string().optional(),
+  source: z.literal("notes"),
+  confidence: z.number().min(0).max(1),
+});
+
+const discoveryQuestionSchema = z.object({
+  key: z.string(),
+  text: z.string(),
+  workAreaTypeKey: z.string(),
+  workAreaName: z.string().optional(),
+  inputType: z.enum(["text", "number", "select", "boolean"]),
+  unit: z.string().optional(),
+});
+
+const discoveryConstraintSchema = z.object({
+  slug: z.string(),
+  label: z.string(),
+  workAreaTypeKey: z.string().optional(),
+  source: z.enum(["notes", "inferred"]),
+  confidence: z.number().min(0).max(1),
+});
+
+const discoveryTradeSchema = z.object({
+  name: z.string(),
+  workAreaTypeKey: z.string(),
+});
+
+/** Canonical shape persisted after AI or rule-based discovery. */
+export const discoveryResultSchema = z.object({
+  workAreas: z.array(discoveryWorkAreaSchema),
+  facts: z.array(discoveryFactSchema),
+  questions: z.array(discoveryQuestionSchema),
+  constraints: z.array(discoveryConstraintSchema),
+  trades: z.array(discoveryTradeSchema),
+  risks: z.array(riskSchema).optional(),
+  assumptions: z.array(z.string()).optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  qualityLevel: qualityLevelSchemaAi.optional(),
+  model: z.string().nullable().optional(),
+  promptVersion: z.string().optional(),
+});
+
+export type ValidatedDiscoveryResult = z.infer<typeof discoveryResultSchema>;
+
+export function validateDiscoveryResult(
+  result: unknown
+): { success: true; data: ValidatedDiscoveryResult } | { success: false; error: string } {
+  const parsed = discoveryResultSchema.safeParse(result);
+  if (!parsed.success) {
+    const message = parsed.error.issues
+      .map((issue) => `${issue.path.join(".")}: ${issue.message}`)
+      .join("; ");
+    return { success: false, error: message || "Invalid discovery result shape." };
+  }
+  return { success: true, data: parsed.data };
+}
+
 const WORK_AREA_TYPE_MAP: Record<string, string> = {
   deck: "Deck",
   bathroom: "Bathroom renovation",

@@ -1,3 +1,7 @@
+/**
+ * Placeholder calculator for the standalone quick-estimate wizard flow.
+ * Project Assistant uses calculateQuickEstimateV1 via the cost engine.
+ */
 import {
   DEFAULT_TARGET_MARGIN_PERCENT,
   PLACEHOLDER_BASE_RANGES,
@@ -103,7 +107,7 @@ function deriveBudgetFit(
   return "above_budget";
 }
 
-export function calculateQuickEstimate(
+export function calculateLegacyWizardEstimate(
   input: QuickEstimateCalculationInput
 ): QuickEstimateCalculationResult {
   const targetMarginPercent =
@@ -147,8 +151,6 @@ export function calculateQuickEstimate(
   const recommendedSellLow = Math.round(estimatedCostLow * marginMultiplier);
   const recommendedSellHigh = Math.round(estimatedCostHigh * marginMultiplier);
 
-  const expectedMarginPercent = targetMarginPercent;
-
   return {
     canCalculate: true,
     estimatedCostLow,
@@ -156,7 +158,7 @@ export function calculateQuickEstimate(
     recommendedSellLow,
     recommendedSellHigh,
     targetMarginPercent,
-    expectedMarginPercent,
+    expectedMarginPercent: targetMarginPercent,
     confidenceLevel: deriveConfidence(
       workType,
       input.answers,
@@ -168,22 +170,4 @@ export function calculateQuickEstimate(
       recommendedSellHigh
     ),
   };
-}
-
-export function formatCurrency(amount: number | null): string {
-  if (amount == null) return "—";
-  return new Intl.NumberFormat("en-AU", {
-    style: "currency",
-    currency: "AUD",
-    maximumFractionDigits: 0,
-  }).format(amount);
-}
-
-export function formatCurrencyRange(
-  low: number | null,
-  high: number | null
-): string {
-  if (low == null || high == null) return "—";
-  if (low === high) return formatCurrency(low);
-  return `${formatCurrency(low)} – ${formatCurrency(high)}`;
 }

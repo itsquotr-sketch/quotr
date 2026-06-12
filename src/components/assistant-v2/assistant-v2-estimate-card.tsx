@@ -3,7 +3,7 @@
 import type { QuickEstimateConfidenceLevel } from "@/lib/constants/quick-estimate";
 import type { EstimateQualityFactor } from "@/lib/cost-engine/estimate-quality";
 import { parseQuickEstimateSummary } from "@/lib/project-assistant-summary";
-import { formatCurrencyRange } from "@/lib/project-assistant-calculate";
+import { formatCurrencyRange } from "@/lib/format-currency";
 import {
   formatLastUpdated,
   useEstimateUpdate,

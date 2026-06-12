@@ -1,4 +1,4 @@
-import type { DiscoveryFact } from "@/lib/discovery/types";
+import type { DiscoveryFact } from "@/lib/ai/discovery/types";
 import {
   findQuestionDefByKey,
 } from "@/lib/project-assistant-questions";

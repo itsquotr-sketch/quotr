@@ -4,7 +4,7 @@ import {
   type WorkAreaCompletenessInput,
 } from "@/lib/assistant-v2/compute-information-completeness";
 import { resolveWorkAreaTypeKey } from "@/lib/project-assistant-questions";
-import type { DiscoveryResult } from "@/lib/discovery";
+import type { DiscoveryResult } from "@/lib/ai/discovery/types";
 import type {
   ProjectScope,
   ProjectScopeBuilderInput,
@@ -36,8 +36,9 @@ export function buildAssistantMessages(input: {
 }): AssistantMessage[] {
   const messages: AssistantMessage[] = [{ type: "greeting" }];
 
-  for (const note of input.inputs) {
-    messages.push({ type: "user_note", content: note.content });
+  const latestNote = input.inputs[input.inputs.length - 1];
+  if (latestNote) {
+    messages.push({ type: "user_note", content: latestNote.content });
   }
 
   if (input.inputs.length === 0) return messages;
@@ -109,18 +110,22 @@ export function buildQuestionIntro(
   return lines.join("\n");
 }
 
+const PLAIN_QUESTION_LABELS: Record<string, string> = {
+  "deck.level_type": "Is the deck ground-level or elevated?",
+  "deck.has_balustrade": "Does the deck need balustrades?",
+  "deck.has_stairs": "Are stairs included?",
+  "deck.area_m2": "What's the deck area in square metres?",
+  "deck.material": "What material is the deck?",
+  "retaining_wall.length_m": "How long is the retaining wall?",
+  "retaining_wall.height_m": "How high is the retaining wall?",
+  "retaining_wall.drainage": "Is drainage required behind the wall?",
+  "bathroom.area_m2": "What's the bathroom floor area?",
+  "bathroom.tile_extent": "How high are the tiles going?",
+  "bathroom.layout_change": "Is the layout staying the same?",
+};
+
 export function contextualQuestionText(question: PricingQuestion): string {
-  const key = question.questionKey;
-
-  if (key === "deck.level_type") {
-    return "Is the deck:";
-  }
-  if (key === "deck.has_balustrade") {
-    return "Does the deck require balustrades?";
-  }
-  if (key === "deck.has_stairs") {
-    return "Are stairs included?";
-  }
-
-  return question.questionText;
+  return (
+    PLAIN_QUESTION_LABELS[question.questionKey] ?? question.questionText
+  );
 }

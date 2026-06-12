@@ -4,12 +4,18 @@ import { useRouter } from "next/navigation";
 import { useActionState, useEffect, useState, useTransition } from "react";
 import { CheckCircle2 } from "lucide-react";
 import {
+  addAssistantWorkArea,
+  toggleWorkAreaInQuickEstimate,
+  type WorkAreaActionState,
+} from "@/actions/work-areas";
+import {
   acceptScopeSuggestion,
   acceptScopeSuggestionWithEdits,
   rejectScopeSuggestion,
 } from "@/actions/scope-suggestions";
 import { StatusBadge } from "@/components/projects/status-badge";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
 import {
   Dialog,
   DialogContent,
@@ -18,7 +24,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { formatSuggestionConfidence } from "@/lib/constants/scope-builder";
 import type { ScopeSuggestionActionState } from "@/lib/validations/scope-suggestion";
@@ -58,10 +63,16 @@ export function ProjectAssistantWorkAreas({
       {hasConfirmed && (
         <div className="space-y-3">
           {confirmedScopes.map((scope) => (
-            <ConfirmedWorkAreaCard key={scope.id} scope={scope} />
+            <ConfirmedWorkAreaCard
+              key={scope.id}
+              projectId={projectId}
+              scope={scope}
+            />
           ))}
         </div>
       )}
+
+      <AddWorkAreaSection projectId={projectId} />
 
       {pending.length > 0 && (
         <div className="space-y-3">
@@ -84,14 +95,27 @@ export function ProjectAssistantWorkAreas({
 }
 
 function ConfirmedWorkAreaCard({
+  projectId,
   scope,
 }: {
+  projectId: string;
   scope: ProjectScope & { scope_types: { name: string } | null };
 }) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  const included = scope.include_in_quick_estimate !== false;
+
   const scopeNote =
     scope.description?.trim() ||
     scope.scope_types?.name ||
     "Confirmed work area";
+
+  function handleToggle(checked: boolean) {
+    startTransition(async () => {
+      await toggleWorkAreaInQuickEstimate(projectId, scope.id, checked);
+      router.refresh();
+    });
+  }
 
   return (
     <div className="rounded-lg border border-primary/20 bg-primary/5 p-3">
@@ -100,6 +124,9 @@ function ConfirmedWorkAreaCard({
           <div className="flex flex-wrap items-center gap-2">
             <p className="font-semibold">{scope.name}</p>
             <StatusBadge label="Confirmed" />
+            {!included && (
+              <StatusBadge label="Excluded from quick estimate" />
+            )}
           </div>
           {scope.scope_types?.name && (
             <StatusBadge label={scope.scope_types.name} />
@@ -109,6 +136,20 @@ function ConfirmedWorkAreaCard({
           <CheckCircle2 className="h-3.5 w-3.5" />
           Confirmed
         </span>
+      </div>
+
+      <div className="mt-2 flex items-center justify-between gap-2 rounded-md border bg-background/60 px-2 py-1.5">
+        <Label htmlFor={`include-${scope.id}`} className="text-xs font-normal">
+          Include in estimate
+        </Label>
+        <input
+          id={`include-${scope.id}`}
+          type="checkbox"
+          className="h-4 w-4 accent-primary"
+          checked={included}
+          disabled={pending}
+          onChange={(e) => handleToggle(e.target.checked)}
+        />
       </div>
       <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
         {scopeNote}
@@ -235,6 +276,126 @@ function DetectedWorkAreaCard({
         suggestion={suggestion}
       />
     </>
+  );
+}
+
+function AddWorkAreaSection({ projectId }: { projectId: string }) {
+  const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<"template" | "custom">("template");
+  const router = useRouter();
+  const boundAction = addAssistantWorkArea.bind(null, projectId);
+  const [state, formAction, pending] = useActionState(
+    boundAction,
+    {} as WorkAreaActionState
+  );
+
+  useEffect(() => {
+    if (state.success) {
+      setOpen(false);
+      router.refresh();
+    }
+  }, [state.success, router]);
+
+  if (!open) {
+    return (
+      <Button
+        type="button"
+        size="sm"
+        variant="outline"
+        className="h-8 text-xs"
+        onClick={() => setOpen(true)}
+      >
+        Add work area
+      </Button>
+    );
+  }
+
+  return (
+    <form action={formAction} className="space-y-3 rounded-lg border p-3">
+      <div className="flex gap-2">
+        <Button
+          type="button"
+          size="sm"
+          variant={mode === "template" ? "default" : "outline"}
+          className="h-7 text-xs"
+          onClick={() => setMode("template")}
+        >
+          From template
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant={mode === "custom" ? "default" : "outline"}
+          className="h-7 text-xs"
+          onClick={() => setMode("custom")}
+        >
+          Custom
+        </Button>
+      </div>
+
+      <input type="hidden" name="mode" value={mode} />
+
+      {mode === "template" ? (
+        <div className="space-y-2">
+          <Label htmlFor="templateKey" className="text-xs">
+            Template
+          </Label>
+          <select
+            id="templateKey"
+            name="templateKey"
+            className="h-8 w-full rounded-md border bg-background px-2 text-sm"
+            defaultValue="deck"
+          >
+            <option value="deck">Deck</option>
+            <option value="retaining-wall">Retaining Wall</option>
+            <option value="bathroom-renovation">Bathroom Renovation</option>
+          </select>
+        </div>
+      ) : (
+        <>
+          <div className="space-y-1">
+            <Label htmlFor="customName" className="text-xs">
+              Name
+            </Label>
+            <Input id="customName" name="name" required className="h-8 text-sm" />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="customDescription" className="text-xs">
+              Short description
+            </Label>
+            <Textarea
+              id="customDescription"
+              name="description"
+              rows={2}
+              className="text-sm"
+            />
+          </div>
+          <div className="space-y-1">
+            <Label htmlFor="likelyTrade" className="text-xs">
+              Likely trade (optional)
+            </Label>
+            <Input id="likelyTrade" name="likelyTrade" className="h-8 text-sm" />
+          </div>
+        </>
+      )}
+
+      {state.error && <p className="text-xs text-destructive">{state.error}</p>}
+
+      <div className="flex gap-2">
+        <Button type="submit" size="sm" disabled={pending} className="h-7 text-xs">
+          {pending ? "Adding…" : "Add work area"}
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="ghost"
+          className="h-7 text-xs"
+          onClick={() => setOpen(false)}
+        >
+          Cancel
+        </Button>
+      </div>
+    </form>
   );
 }
 

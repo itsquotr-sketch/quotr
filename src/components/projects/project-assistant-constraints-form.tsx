@@ -3,6 +3,8 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { autoSaveAssistantConstraints } from "@/actions/project-assistant";
+import { autosaveDevLog } from "@/lib/autosave/autosave-dev-log";
+import { hasMeaningfulChange } from "@/lib/autosave/has-meaningful-change";
 import { useEstimateUpdate } from "@/components/projects/estimate-update-context";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -38,7 +40,7 @@ export function ProjectAssistantConstraintsForm({
   detectedQualityReason,
 }: ProjectAssistantConstraintsFormProps) {
   const router = useRouter();
-  const { markSaving, markUpdating, markSaved } = useEstimateUpdate();
+  const { runGuardedRefresh } = useEstimateUpdate();
   const [selected, setSelected] = useState<Set<string>>(
     new Set(selectedSlugs)
   );
@@ -51,7 +53,14 @@ export function ProjectAssistantConstraintsForm({
     normaliseQualityLevel(qualityLevel)
   );
   const [saveError, setSaveError] = useState<string | null>(null);
-  const skipAutoSaveRef = useRef(true);
+  const lastSavedRef = useRef(
+    JSON.stringify({
+      slugs: selectedSlugs,
+      finishLevel: normaliseQualityLevel(qualityLevel),
+      followUps: followUpValues,
+    })
+  );
+  const skipNextSaveRef = useRef(false);
 
   useEffect(() => {
     setSelected(new Set(selectedSlugs));
@@ -61,6 +70,12 @@ export function ProjectAssistantConstraintsForm({
       )
     );
     setFinishLevel(normaliseQualityLevel(qualityLevel));
+    lastSavedRef.current = JSON.stringify({
+      slugs: selectedSlugs,
+      finishLevel: normaliseQualityLevel(qualityLevel),
+      followUps: followUpValues,
+    });
+    skipNextSaveRef.current = true;
   }, [selectedSlugs, followUpValues, qualityLevel]);
 
   const savePayload = useDebounce(
@@ -74,7 +89,6 @@ export function ProjectAssistantConstraintsForm({
 
   const persist = useCallback(async () => {
     setSaveError(null);
-    markSaving();
     const result = await autoSaveAssistantConstraints(
       projectId,
       quickEstimateId,
@@ -88,28 +102,39 @@ export function ProjectAssistantConstraintsForm({
       setSaveError(result.error);
       return;
     }
-    markUpdating();
-    router.refresh();
-    markSaved();
+    if (result.message === "No changes.") {
+      return;
+    }
+    await runGuardedRefresh(async () => {
+      router.refresh();
+    }, "condition_changed");
   }, [
     projectId,
     quickEstimateId,
     savePayload,
     router,
-    markSaving,
-    markUpdating,
-    markSaved,
+    runGuardedRefresh,
   ]);
 
   const persistRef = useRef(persist);
   persistRef.current = persist;
 
   useEffect(() => {
-    if (skipAutoSaveRef.current) {
-      skipAutoSaveRef.current = false;
+    if (skipNextSaveRef.current) {
+      skipNextSaveRef.current = false;
       return;
     }
-    void persistRef.current();
+
+    const payloadKey = JSON.stringify(savePayload);
+    if (!hasMeaningfulChange(lastSavedRef.current, payloadKey)) {
+      autosaveDevLog("autosave", "skipped — no value change");
+      return;
+    }
+
+    autosaveDevLog("autosave", "saving changed value");
+    void persistRef.current().then(() => {
+      lastSavedRef.current = payloadKey;
+    });
   }, [savePayload]);
 
   function toggle(slug: string) {

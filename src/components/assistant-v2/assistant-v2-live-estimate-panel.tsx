@@ -21,7 +21,7 @@ import { DEFAULT_TARGET_MARGIN_PERCENT } from "@/lib/constants/quick-estimate";
 import type { QuickEstimateConfidenceLevel } from "@/lib/constants/quick-estimate";
 import type { ConfidenceFactor } from "@/lib/assistant-v2/compute-information-completeness";
 import { parseQuickEstimateSummary } from "@/lib/project-assistant-summary";
-import { formatCurrencyRange } from "@/lib/project-assistant-calculate";
+import { formatCurrencyRange } from "@/lib/format-currency";
 import { labelForEstimateQuality } from "@/lib/cost-engine/estimate-quality";
 import type { QuickEstimate } from "@/types/database";
 import { cn } from "@/lib/utils";

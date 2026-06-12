@@ -1,5 +1,5 @@
 import type { DiscoveryRunResult } from "@/lib/ai/discovery/types";
-import type { DiscoveryQuestion } from "@/lib/discovery/types";
+import type { DiscoveryQuestion } from "@/lib/ai/discovery/types";
 import { resolveWorkAreaTypeKey } from "@/lib/project-assistant-questions";
 import { normalizeQuestionKey } from "@/lib/question-keys";
 import { listActiveScopeSuggestionTypes } from "@/lib/scope-builder-data";

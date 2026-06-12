@@ -5,8 +5,9 @@ import { loadSavedProjectConstraints } from "@/lib/project-constraints-load";
 import { listScopeBuilderInputs, listScopeSuggestions } from "@/lib/scope-builder-data";
 import { ensureQuestionsForProjectScopes } from "@/lib/scope-questions-seed";
 import { ensureQuickEstimateForProject, getQuickEstimateForProject } from "@/lib/quick-estimate-data";
+import { devLog } from "@/lib/dev-log";
 import { getProjectById } from "@/lib/projects-data";
-import type { DiscoveryResult } from "@/lib/discovery";
+import type { DiscoveryResult } from "@/lib/ai/discovery/types";
 import type { ProjectDiscoveryMeta } from "@/lib/discovery-meta";
 import type { ScopeQuestionWithAnswers } from "@/lib/project-assistant-data";
 import type {
@@ -40,6 +41,8 @@ export async function loadProjectAssistantData(
   projectId: string,
   userId: string
 ): Promise<{ data: ProjectAssistantData | null; error: string | null }> {
+  const startedAt = Date.now();
+
   const { data: project, error: projectError } = await getProjectById(
     supabase,
     projectId,
@@ -97,6 +100,13 @@ export async function loadProjectAssistantData(
     selectedConstraintSlugs = saved.slugs;
     followUpValues = saved.followUpValues;
   }
+
+  devLog("assistant.load.timing", {
+    projectId,
+    ms: Date.now() - startedAt,
+    scopes: scopes?.length ?? 0,
+    questions: scopeQuestions?.length ?? 0,
+  });
 
   return {
     data: {

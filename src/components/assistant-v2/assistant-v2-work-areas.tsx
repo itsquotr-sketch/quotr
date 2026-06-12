@@ -12,7 +12,7 @@ import {
   formatKnownFactLabels,
 } from "@/lib/assistant-v2/compute-information-completeness";
 import { resolveWorkAreaTypeKey } from "@/lib/project-assistant-questions";
-import type { DiscoveryResult } from "@/lib/discovery";
+import type { DiscoveryResult } from "@/lib/ai/discovery/types";
 import type { ScopeQuestionWithAnswers } from "@/lib/project-assistant-data";
 import type { ProjectScope } from "@/types/database";
 import { Button } from "@/components/ui/button";

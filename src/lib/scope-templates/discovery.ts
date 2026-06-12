@@ -4,14 +4,14 @@ import type {
   DiscoveryQuestion,
   DiscoveryTrade,
   DiscoveryWorkArea,
-} from "@/lib/discovery/types";
+} from "@/lib/ai/discovery/types";
 import {
   getAllFactsForTemplate,
   getScopeTemplateByWorkAreaType,
   matchTemplatesFromNotes,
   templateQuestionToDef,
 } from "@/lib/scope-templates";
-import { extractConstraintsFromNotes } from "@/lib/discovery/constraint-rules";
+import { extractConstraintsFromNotes } from "@/lib/ai/discovery/constraint-rules";
 import { normalizeQuestionKey } from "@/lib/question-keys";
 
 function buildDescription(

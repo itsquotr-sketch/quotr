@@ -70,11 +70,21 @@ export async function buildQuickEstimateInput(
 
   const { data: scopes } = await supabase
     .from("project_scopes")
-    .select("id, name, scope_types(name)")
+    .select("id, name, include_in_quick_estimate, scope_types(name)")
     .eq("project_id", projectId)
     .eq("organisation_id", organisationId);
 
-  const scopeIds = (scopes ?? []).map((s) => s.id);
+  const allScopes = scopes ?? [];
+  const includedScopes = allScopes.filter(
+    (s) => s.include_in_quick_estimate !== false
+  );
+  const excludedWorkAreaNames = allScopes
+    .filter((s) => s.include_in_quick_estimate === false)
+    .map((s) => s.name);
+  const allWorkAreasExcluded =
+    allScopes.length > 0 && includedScopes.length === 0;
+
+  const scopeIds = allScopes.map((s) => s.id);
   const { data: questions, error: questionsError } =
     await listScopeQuestionsForProject(supabase, scopeIds);
 
@@ -110,7 +120,7 @@ export async function buildQuickEstimateInput(
   let questionsAnswered = 0;
   const scopeQuestionsForMissing: ScopeQuestionForMissing[] = [];
 
-  const workAreas = (scopes ?? []).map((s) => {
+  const workAreas = includedScopes.map((s) => {
     const workAreaTypeKey = resolveWorkAreaTypeKey(
       (s.scope_types as { name: string } | null)?.name,
       s.name
@@ -296,6 +306,8 @@ export async function buildQuickEstimateInput(
       questionsTotal: questions?.length ?? 0,
       answeredQuestionKeys,
       scopeQuestions,
+      excludedWorkAreaNames,
+      allWorkAreasExcluded,
     },
     error: null,
   };

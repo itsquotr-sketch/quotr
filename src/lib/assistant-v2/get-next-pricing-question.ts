@@ -1,5 +1,5 @@
 import { buildMergedAnswersForScope } from "@/lib/assistant-v2/build-merged-answers";
-import type { DiscoveryResult } from "@/lib/discovery";
+import type { DiscoveryResult } from "@/lib/ai/discovery/types";
 import {
   resolveQuestionDef,
   resolveWorkAreaTypeKey,

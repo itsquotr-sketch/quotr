@@ -1,4 +1,4 @@
-import type { DiscoveryQualityLevel } from "@/lib/discovery/types";
+import type { DiscoveryQualityLevel } from "@/lib/ai/discovery/types";
 import { normaliseQualityLevel } from "@/lib/constants/quality-level";
 import { logSupabaseError } from "@/lib/supabase/log-error";
 import type { SupabaseClient } from "@supabase/supabase-js";

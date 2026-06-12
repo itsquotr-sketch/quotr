@@ -1,12 +1,11 @@
-import { extractFactsFromNotes } from "@/lib/discovery/fact-rules";
-import type { DiscoveryProvider } from "@/lib/discovery/provider";
+import { extractFactsFromNotes } from "@/lib/ai/discovery/fact-rules";
 import type {
   DiscoveryFact,
   DiscoveryQuestion,
   DiscoveryResult,
   DiscoveryTrade,
   DiscoveryWorkArea,
-} from "@/lib/discovery/types";
+} from "@/lib/ai/discovery/types";
 import {
   getQuestionDefsForWorkAreaType,
   questionTextFromDef,
@@ -21,6 +20,12 @@ import {
 import { getAllScopeTemplates } from "@/lib/scope-templates";
 
 export const RULE_BASED_DISCOVERY_VERSION = "1.0.0";
+
+export interface RuleBasedDiscoveryProvider {
+  readonly id: string;
+  readonly version: string;
+  discoverProject(sourceNotes: string): DiscoveryResult;
+}
 
 function mapWorkAreas(sourceNotes: string): DiscoveryWorkArea[] {
   return generateScopeSuggestionsFromNotes(sourceNotes).map((s) => ({
@@ -86,9 +91,8 @@ function buildTradesForWorkAreas(
 
 /**
  * Rule-based discovery — keyword matching and pattern extraction.
- * No AI calls. Swap for OpenAIDiscoveryProvider when ready.
  */
-export class RuleBasedDiscoveryProvider implements DiscoveryProvider {
+export class RuleBasedDiscoveryCore implements RuleBasedDiscoveryProvider {
   readonly id = "rule-based";
   readonly version = RULE_BASED_DISCOVERY_VERSION;
 
@@ -123,4 +127,4 @@ export function buildDiscoveryQuestionsAndTrades(
   };
 }
 
-export const ruleBasedDiscoveryProvider = new RuleBasedDiscoveryProvider();
+export const ruleBasedDiscoveryProvider = new RuleBasedDiscoveryCore();

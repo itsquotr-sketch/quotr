@@ -1,4 +1,4 @@
-import type { DiscoveryResult } from "@/lib/discovery";
+import type { DiscoveryResult } from "@/lib/ai/discovery/types";
 
 export type CostConfidenceLevel = "low" | "medium" | "high";
 

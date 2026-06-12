@@ -31,8 +31,9 @@ export function AssistantV2ResetDialog({
           <DialogDescription asChild>
             <div className="space-y-3 pt-1 text-sm text-muted-foreground">
               <p>
-                This clears AI analysis, answers and draft estimate, but keeps
-                the project and client.
+                Reset assistant? This clears AI analysis, answers, site
+                conditions and draft estimate, but keeps the project, client
+                details and notes.
               </p>
               <p>It will remove:</p>
               <ul className="list-inside list-disc space-y-0.5">

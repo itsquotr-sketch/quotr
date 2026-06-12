@@ -1,11 +1,13 @@
 import { createHash } from "crypto";
 import { applyDiscoveryResults } from "@/lib/ai/discovery/apply-discovery-results";
 import { enrichDiscoveryContext } from "@/lib/ai/discovery/build-discovery-context";
-import { discoverProjectWithPreferredProvider } from "@/lib/ai/discovery/discover-project";
+import { discoverProjectWithPreferredProvider, discoverProjectWithRulesProvider } from "@/lib/ai/discovery/discover-project";
+import { validateDiscoveryResult } from "@/lib/ai/discovery/parse-discovery-output";
+import { buildRuleBasedFallbackOutcome } from "@/lib/ai/discovery/rule-based-discovery-provider";
 import { DISCOVERY_PROMPT_VERSION } from "@/lib/ai/discovery/prompts";
 import type { DiscoveryRunContext, DiscoveryRunOutcome } from "@/lib/ai/discovery/types";
 import { devLog } from "@/lib/dev-log";
-import type { DiscoveryResult } from "@/lib/discovery/types";
+import type { DiscoveryResult } from "@/lib/ai/discovery/types";
 import { logSupabaseError } from "@/lib/supabase/log-error";
 import type { Json } from "@/types/database";
 import type { SupabaseClient } from "@supabase/supabase-js";
@@ -144,6 +146,7 @@ export async function runProjectDiscovery(
     inputText: string;
     sourceInputId: string | null;
     quickEstimateId: string | null;
+    forceRules?: boolean;
   }
 ): Promise<ProjectDiscoveryRunResult> {
   const {
@@ -153,6 +156,7 @@ export async function runProjectDiscovery(
     inputText,
     sourceInputId,
     quickEstimateId,
+    forceRules = false,
   } = params;
 
   const context: DiscoveryRunContext = {
@@ -190,7 +194,44 @@ export async function runProjectDiscovery(
     context
   );
 
-  const outcome = await discoverProjectWithPreferredProvider(enrichedContext);
+  let outcome = forceRules
+    ? await discoverProjectWithRulesProvider(enrichedContext)
+    : await discoverProjectWithPreferredProvider(enrichedContext);
+
+  let validationError: string | null = null;
+  const validation = validateDiscoveryResult(outcome.result);
+
+  if (!validation.success) {
+    validationError = validation.error;
+    devLog("discovery.run.validationFailed", {
+      error: validationError,
+      provider: outcome.provider.id,
+    });
+
+    if (!forceRules) {
+      outcome = buildRuleBasedFallbackOutcome(
+        enrichedContext,
+        `AI output failed validation: ${validationError}`,
+        outcome.attemptedProviderId ?? outcome.provider.id
+      );
+    } else if (pendingRun?.id) {
+      await supabase
+        .from("discovery_runs")
+        .update({
+          status: "failed",
+          error_message: validationError,
+        })
+        .eq("id", pendingRun.id)
+        .eq("organisation_id", organisationId);
+
+      return {
+        outcome,
+        discoveryRunId: pendingRun.id,
+        error: validationError,
+        message: "Discovery failed — output did not pass validation.",
+      };
+    }
+  }
 
   devLog("discovery.run.outcome", {
     provider: outcome.provider.id,
@@ -199,12 +240,17 @@ export async function runProjectDiscovery(
     confidence: outcome.result.confidence,
     workAreas: outcome.result.workAreas.length,
     constraints: outcome.result.constraints.length,
+    validationError,
   });
 
   const parsedOutput = outcome.result as unknown as Json;
   const rawOutput = (outcome.rawOutput ?? outcome.result) as Json;
 
   if (pendingRun?.id) {
+    const runFailed =
+      (outcome.usedFallback && outcome.attemptedProviderId === "openai") ||
+      (validationError !== null && forceRules);
+
     const { error: updateError } = await supabase
       .from("discovery_runs")
       .update({
@@ -213,11 +259,10 @@ export async function runProjectDiscovery(
         prompt_version: outcome.result.promptVersion,
         raw_output: rawOutput,
         parsed_output: parsedOutput,
-        status:
-          outcome.usedFallback && outcome.attemptedProviderId === "openai"
-            ? "failed"
-            : "completed",
-        error_message: outcome.usedFallback ? outcome.fallbackReason ?? null : null,
+        status: runFailed ? "failed" : "completed",
+        error_message: outcome.usedFallback
+          ? outcome.fallbackReason ?? validationError
+          : validationError,
       })
       .eq("id", pendingRun.id)
       .eq("organisation_id", organisationId);

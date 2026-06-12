@@ -2,7 +2,7 @@ import {
   normaliseQualityLevel,
   type QualityLevel,
 } from "@/lib/constants/quality-level";
-import type { DiscoveryResult } from "@/lib/discovery";
+import type { DiscoveryResult } from "@/lib/ai/discovery/types";
 import { getAnswerValue } from "@/lib/question-keys";
 import type { QuickEstimateWorkAreaInput } from "@/lib/cost-engine/quick-estimate-input";
 

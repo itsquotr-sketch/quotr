@@ -11,10 +11,8 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { QUICK_ESTIMATE_QUESTIONS } from "@/lib/constants/quick-estimate";
-import {
-  calculateQuickEstimate,
-  formatCurrencyRange,
-} from "@/lib/quick-estimate-calculate";
+import { calculateLegacyWizardEstimate } from "@/lib/cost-engine/legacy-wizard-estimate";
+import { formatCurrencyRange } from "@/lib/format-currency";
 import type {
   EstimateDriverCategoryWithDrivers,
   ProjectEstimateDriverWithDetails,
@@ -71,7 +69,7 @@ export function QuickEstimateReviewStep({
         labour_modifier_percent: d!.labour_modifier_percent,
       })) ?? [];
 
-  const preview = calculateQuickEstimate({
+  const preview = calculateLegacyWizardEstimate({
     workType: null,
     answers,
     drivers,

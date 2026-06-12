@@ -3,7 +3,7 @@ import {
   getAllFactsForScope,
   getScopeByWorkAreaType,
 } from "@/lib/scopes/index";
-import type { ScopeFactDefinition } from "@/lib/scopes/types";
+import type { ScopeDefinition, ScopeFactDefinition } from "@/lib/scopes/types";
 import {
   isAnswered,
   isAnsweredSelect,
@@ -49,15 +49,30 @@ export function factIsAnsweredFromMap(
   answers: Record<string, string>
 ): boolean {
   const value = getAnswerValue(answers, fact.key);
-  if (!value || value === "unknown") return false;
-  if (fact.type === "number") {
-    const num = Number(value);
-    return Number.isFinite(num) && num > 0;
+  if (value === undefined || value === null) return false;
+
+  const trimmed = value.trim();
+  if (trimmed === "") return false;
+
+  // "Not sure" counts as answered (low confidence, not missing).
+  if (trimmed === "unknown") return true;
+
+  if (fact.type === "boolean") {
+    const lower = trimmed.toLowerCase();
+    return ["yes", "no", "true", "false"].includes(lower);
   }
+
   if (fact.type === "select" && fact.options?.length) {
-    return fact.options.some((o) => o.value === value);
+    return fact.options.some((o) => o.value === trimmed);
   }
-  return value.trim().length > 0;
+
+  if (fact.type === "number") {
+    const num = Number(trimmed);
+    if (!Number.isFinite(num)) return false;
+    return num > 0;
+  }
+
+  return trimmed.length > 0;
 }
 
 export function getKnownFactsForScope(
@@ -71,16 +86,30 @@ export function getKnownFactsForScope(
   );
 }
 
+/** Required scope facts minus known facts (single source of truth). */
+export function getMissingFactsForScope(
+  scope: ScopeDefinition,
+  knownFacts: Record<string, string>
+): ScopeFactDefinition[] {
+  return scope.requiredFacts.filter(
+    (fact) => !factIsAnsweredFromMap(fact, knownFacts)
+  );
+}
+
+export function getMissingFactsForWorkArea(
+  workAreaTypeKey: string,
+  knownFacts: Record<string, string>
+): ScopeFactDefinition[] {
+  const scope = getScopeByWorkAreaType(workAreaTypeKey);
+  if (!scope) return [];
+  return getMissingFactsForScope(scope, knownFacts);
+}
+
 export function getMissingRequiredFacts(
   workAreaTypeKey: string,
   answers: Record<string, string>
 ): ScopeFactDefinition[] {
-  const scope = getScopeByWorkAreaType(workAreaTypeKey);
-  if (!scope) return [];
-
-  return scope.requiredFacts.filter(
-    (fact) => !factIsAnsweredFromMap(fact, answers)
-  );
+  return getMissingFactsForWorkArea(workAreaTypeKey, answers);
 }
 
 export function getMissingOptionalHighImpact(
@@ -106,12 +135,10 @@ export function buildScopeMissingLabels(
   const missing: string[] = [];
 
   for (const area of workAreas) {
-    if (!getScopeByWorkAreaType(area.workAreaTypeKey)) continue;
+    const scope = getScopeByWorkAreaType(area.workAreaTypeKey);
+    if (!scope) continue;
 
-    for (const fact of getMissingRequiredFacts(
-      area.workAreaTypeKey,
-      area.answers
-    )) {
+    for (const fact of getMissingFactsForScope(scope, area.answers)) {
       missing.push(fact.questionText || fact.label);
     }
   }

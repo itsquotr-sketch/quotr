@@ -1,4 +1,4 @@
-import type { DiscoveryResult } from "@/lib/discovery";
+import type { DiscoveryResult } from "@/lib/ai/discovery/types";
 import { resolveWorkAreaTypeKey } from "@/lib/project-assistant-questions";
 import type { ScopeQuestionWithAnswers } from "@/lib/project-assistant-data";
 import { normalizeQuestionKey } from "@/lib/question-keys";

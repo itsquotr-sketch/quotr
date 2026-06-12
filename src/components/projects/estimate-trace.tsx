@@ -5,7 +5,7 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import type { EstimateTrace } from "@/lib/cost-engine/estimate-trace";
 import { rateSourceLabel } from "@/lib/cost-engine/rates/get-base-rate-for-scope";
 import type { RateSource } from "@/lib/cost-engine/rates/get-base-rate-for-scope";
-import { formatCurrency, formatCurrencyRange } from "@/lib/project-assistant-calculate";
+import { formatCurrency, formatCurrencyRange } from "@/lib/format-currency";
 
 interface EstimateTracePanelProps {
   trace: EstimateTrace | null | undefined;

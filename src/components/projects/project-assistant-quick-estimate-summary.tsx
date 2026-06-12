@@ -15,7 +15,7 @@ import { labelFor } from "@/lib/constants/projects";
 import {
   formatCurrency,
   formatCurrencyRange,
-} from "@/lib/quick-estimate-calculate";
+} from "@/lib/format-currency";
 import type { QuickEstimate } from "@/types/database";
 
 interface ProjectAssistantQuickEstimateSummaryProps {

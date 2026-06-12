@@ -4,7 +4,7 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { requireOrganisation } from "@/lib/auth";
 import { QUICK_ESTIMATE_QUESTIONS } from "@/lib/constants/quick-estimate";
-import { calculateQuickEstimate } from "@/lib/quick-estimate-calculate";
+import { calculateLegacyWizardEstimate } from "@/lib/cost-engine/legacy-wizard-estimate";
 import {
   getQuickEstimateById,
   getQuickEstimateForProject,
@@ -384,7 +384,7 @@ export async function finalizeQuickEstimate(
   const drivers =
     projectDrivers?.map((pd) => pd.estimate_drivers).filter(Boolean) ?? [];
 
-  const result = calculateQuickEstimate({
+  const result = calculateLegacyWizardEstimate({
     workType: null,
     answers: answers ?? [],
     drivers: drivers.map((d) => ({

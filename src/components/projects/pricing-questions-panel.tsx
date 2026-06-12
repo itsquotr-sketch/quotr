@@ -5,7 +5,7 @@ import { ProjectAssistantQuestionsForm } from "@/components/projects/project-ass
 import type { AssistantConstraint } from "@/lib/project-assistant-constraints";
 import type { ScopeQuestionWithAnswers } from "@/lib/project-assistant-data";
 import type { QualityLevel } from "@/lib/constants/quality-level";
-import type { DiscoveryResult } from "@/lib/discovery";
+import type { DiscoveryResult } from "@/lib/ai/discovery/types";
 import type { QuickEstimate } from "@/types/database";
 import { useState } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";

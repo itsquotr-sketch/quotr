@@ -14,7 +14,10 @@ import {
   autoSaveScopeQuestionAnswer,
   ensureAssistantQuestions,
 } from "@/actions/project-assistant";
+import { autosaveDevLog } from "@/lib/autosave/autosave-dev-log";
+import { hasMeaningfulChange } from "@/lib/autosave/has-meaningful-change";
 import { useEstimateUpdate } from "@/components/projects/estimate-update-context";
+import { buildKnownFactsMapForWorkArea } from "@/lib/scopes/known-facts";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useDebounce } from "@/hooks/use-debounce";
@@ -23,7 +26,7 @@ import {
   resolveQuestionDef,
   resolveWorkAreaTypeKey,
 } from "@/lib/project-assistant-questions";
-import type { DiscoveryResult } from "@/lib/discovery";
+import type { DiscoveryResult } from "@/lib/ai/discovery/types";
 import {
   getScopeByWorkAreaType,
   isFactKnownForScope,
@@ -63,25 +66,13 @@ function buildMergedAnswersForGroup(
     group.scopeTypeName,
     group.scopeName
   );
-  const answers: Record<string, string> = {};
 
-  for (const q of group.questions) {
-    const row = q.scope_answers?.[0];
-    const val = answerValueToString(row?.answer, row?.source);
-    if (q.question_key && val) answers[q.question_key] = val;
-  }
-
-  if (discovery?.facts.length) {
-    for (const fact of discovery.facts) {
-      if (fact.workAreaTypeKey && fact.workAreaTypeKey !== typeKey) continue;
-      const key = normalizeQuestionKey(fact.key);
-      if (key && !answers[key] && fact.value != null) {
-        answers[key] = String(fact.value);
-      }
-    }
-  }
-
-  return answers;
+  return buildKnownFactsMapForWorkArea({
+    scopeQuestions: group.questions,
+    scopeId: group.scopeId,
+    workAreaTypeKey: typeKey,
+    discovery,
+  });
 }
 
 function questionBelongsInMainFlow(
@@ -117,7 +108,7 @@ export function ProjectAssistantQuestionsForm({
   discovery,
 }: ProjectAssistantQuestionsFormProps) {
   const router = useRouter();
-  const { markSaving, markUpdating, markSaved } = useEstimateUpdate();
+  const { runGuardedRefresh } = useEstimateUpdate();
   const [ensuring, startEnsure] = useTransition();
   const [ensureError, setEnsureError] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
@@ -140,10 +131,14 @@ export function ProjectAssistantQuestionsForm({
   }, [projectId, router]);
 
   const handleAutoSave = useCallback(
-    async (questionId: string, answer: string) => {
+    async (questionId: string, answer: string, previousValue: string) => {
       if (!answer.trim()) return;
+      if (!hasMeaningfulChange(previousValue, answer.trim())) {
+        autosaveDevLog("autosave", "skipped — no value change");
+        return;
+      }
       setSaveError(null);
-      markSaving();
+      autosaveDevLog("autosave", "saving changed value");
       const result = await autoSaveScopeQuestionAnswer(
         projectId,
         questionId,
@@ -153,11 +148,14 @@ export function ProjectAssistantQuestionsForm({
         setSaveError(result.error);
         return;
       }
-      markUpdating();
-      router.refresh();
-      markSaved();
+      if (result.message === "No changes.") {
+        return;
+      }
+      await runGuardedRefresh(async () => {
+        router.refresh();
+      }, "answer_changed");
     },
-    [projectId, router, markSaving, markUpdating, markSaved]
+    [projectId, router, runGuardedRefresh]
   );
 
   const mergedByScopeId = useMemo(() => {
@@ -399,7 +397,7 @@ function QuestionField({
   question: ScopeQuestionWithAnswers;
   workAreaTypeKey: string;
   required?: boolean;
-  onAutoSave: (questionId: string, answer: string) => void;
+  onAutoSave: (questionId: string, answer: string, previousValue: string) => void;
 }) {
   const answerRow = question.scope_answers?.[0];
   const def = resolveQuestionDef(question, workAreaTypeKey);
@@ -435,20 +433,20 @@ function QuestionField({
         <AnswerChips
           defaultValue={existing}
           options={selectOptions}
-          onChange={(value) => onAutoSave(question.id, value)}
+          onChange={(value) => onAutoSave(question.id, value, existing)}
         />
       ) : inputType === "number" ? (
         <AutoSaveNumberInput
           defaultValue={existing}
           placeholder={def?.placeholder}
           unit={unit}
-          onSave={(value) => onAutoSave(question.id, value)}
+          onSave={(value) => onAutoSave(question.id, value, existing)}
         />
       ) : (
         <AutoSaveTextInput
           defaultValue={existing}
           placeholder={def?.placeholder}
-          onSave={(value) => onAutoSave(question.id, value)}
+          onSave={(value) => onAutoSave(question.id, value, existing)}
         />
       )}
     </div>
@@ -467,13 +465,23 @@ function AutoSaveNumberInput({
   onSave: (value: string) => void;
 }) {
   const [value, setValue] = useState(defaultValue);
+  const savedRef = useRef(defaultValue);
   const debounced = useDebounce(value, 600);
 
   useEffect(() => {
-    if (debounced && debounced !== defaultValue) {
-      onSave(debounced);
+    savedRef.current = defaultValue;
+    setValue(defaultValue);
+  }, [defaultValue]);
+
+  useEffect(() => {
+    if (!debounced.trim()) return;
+    if (!hasMeaningfulChange(savedRef.current, debounced)) {
+      autosaveDevLog("autosave", "skipped — no value change");
+      return;
     }
-  }, [debounced, defaultValue, onSave]);
+    onSave(debounced);
+    savedRef.current = debounced;
+  }, [debounced, onSave]);
 
   return (
     <div className="flex items-center gap-2">
@@ -501,13 +509,23 @@ function AutoSaveTextInput({
   onSave: (value: string) => void;
 }) {
   const [value, setValue] = useState(defaultValue);
+  const savedRef = useRef(defaultValue);
   const debounced = useDebounce(value, 600);
 
   useEffect(() => {
-    if (debounced && debounced !== defaultValue) {
-      onSave(debounced);
+    savedRef.current = defaultValue;
+    setValue(defaultValue);
+  }, [defaultValue]);
+
+  useEffect(() => {
+    if (!debounced.trim()) return;
+    if (!hasMeaningfulChange(savedRef.current, debounced)) {
+      autosaveDevLog("autosave", "skipped — no value change");
+      return;
     }
-  }, [debounced, defaultValue, onSave]);
+    onSave(debounced);
+    savedRef.current = debounced;
+  }, [debounced, onSave]);
 
   return (
     <Input

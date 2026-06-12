@@ -4,7 +4,7 @@ import type { ScopeQuestionForMissing } from "@/lib/cost-engine/build-missing-in
 import type { EstimateQualityFactor } from "@/lib/cost-engine/estimate-quality";
 import type { EstimateTrace } from "@/lib/cost-engine/estimate-trace";
 import type { RangeQuality } from "@/lib/cost-engine/range-quality";
-import type { DiscoveryResult } from "@/lib/discovery";
+import type { DiscoveryResult } from "@/lib/ai/discovery/types";
 import { getAnswerValue, normalizeQuestionKey } from "@/lib/question-keys";
 import {
   isDiscoverySource,
@@ -56,6 +56,8 @@ export type QuickEstimateInput = {
   questionsTotal: number;
   answeredQuestionKeys: Set<string>;
   scopeQuestions: ScopeQuestionForMissing[];
+  excludedWorkAreaNames?: string[];
+  allWorkAreasExcluded?: boolean;
 };
 
 export type QuickEstimateOutput = {

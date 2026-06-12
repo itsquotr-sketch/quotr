@@ -1,4 +1,4 @@
-import type { DiscoveryConstraint } from "@/lib/discovery/types";
+import type { DiscoveryConstraint } from "@/lib/ai/discovery/types";
 
 type ConstraintRule = {
   slug: string;

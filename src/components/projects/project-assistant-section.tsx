@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { ProjectAssistantWorkspace } from "@/components/projects/project-assistant-workspace";
+import { ProjectAssistantShell } from "@/components/projects/project-assistant-shell";
 import {
   Card,
   CardContent,
@@ -9,7 +9,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import type { DiscoveryResult } from "@/lib/discovery";
+import type { DiscoveryResult } from "@/lib/ai/discovery/types";
 import type { ProjectDiscoveryMeta } from "@/lib/discovery-meta";
 import type { ScopeQuestionWithAnswers } from "@/lib/project-assistant-data";
 import type {
@@ -17,6 +17,7 @@ import type {
   ProjectScopeBuilderInput,
   ProjectScopeSuggestion,
   QuickEstimate,
+  ProjectTrade,
 } from "@/types/database";
 
 interface ProjectAssistantSectionProps {
@@ -30,6 +31,7 @@ interface ProjectAssistantSectionProps {
   followUpValues: Record<string, string | number | undefined>;
   discovery: DiscoveryResult | null;
   discoveryMeta: ProjectDiscoveryMeta;
+  projectTrades?: ProjectTrade[];
 }
 
 export function ProjectAssistantSection(props: ProjectAssistantSectionProps) {
@@ -60,7 +62,7 @@ export function ProjectAssistantSection(props: ProjectAssistantSectionProps) {
         </CardHeader>
 
         <CardContent className="p-3 sm:p-4">
-          <ProjectAssistantWorkspace {...props} />
+          <ProjectAssistantShell {...props} />
         </CardContent>
       </Card>
     </section>

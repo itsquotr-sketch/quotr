@@ -24,3 +24,9 @@ export async function discoverProjectWithPreferredProvider(
 ): Promise<DiscoveryRunOutcome> {
   return getPreferredDiscoveryProvider().discoverProject(context);
 }
+
+export async function discoverProjectWithRulesProvider(
+  context: DiscoveryRunContext
+): Promise<DiscoveryRunOutcome> {
+  return ruleBasedAiDiscoveryProvider.discoverProject(context);
+}

@@ -1,5 +1,6 @@
 import type { QuickEstimateConfidenceLevel } from "@/lib/constants/quick-estimate";
 import type { QualityLevel } from "@/lib/constants/quality-level";
+import type { CostBreakdown } from "@/lib/cost-engine/build-cost-breakdown";
 import type { RateSource } from "@/lib/cost-engine/rates/get-base-rate-for-scope";
 
 export type EstimateTraceAdjustment = {
@@ -26,6 +27,7 @@ export type EstimateTrace = {
   finalCostRange: { low: number; high: number };
   finalSellRange: { low: number; high: number };
   missingCriticalFacts: string[];
+  costBreakdown?: CostBreakdown;
 
   /** Legacy fields kept for UI compatibility */
   workAreas?: { name: string; typeKey: string; templateKey?: string }[];

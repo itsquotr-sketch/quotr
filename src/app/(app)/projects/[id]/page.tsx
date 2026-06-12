@@ -39,6 +39,7 @@ import { loadSavedProjectConstraints } from "@/lib/project-constraints-load";
 import { listScopeQuestionsForProject } from "@/lib/project-assistant-data";
 import { listScopeBuilderInputs, listScopeSuggestions } from "@/lib/scope-builder-data";
 import { getQuickEstimateForProject } from "@/lib/quick-estimate-data";
+import { listProjectTrades } from "@/lib/project-trades-data";
 import { createClient } from "@/lib/supabase/server";
 
 interface ProjectDetailPageProps {
@@ -85,6 +86,7 @@ export default async function ProjectDetailPage({
     { data: latestDiscoveryRun },
     discoveryMeta,
     { data: scopeQuestions, error: scopeQuestionsError },
+    { data: projectTrades },
   ] = await Promise.all([
     listScopeBuilderInputs(supabase, organisationId, id),
     listScopeSuggestions(supabase, organisationId, id),
@@ -93,6 +95,7 @@ export default async function ProjectDetailPage({
     getLatestDiscoveryRun(supabase, organisationId, id),
     getProjectDiscoveryMeta(supabase, organisationId, id),
     listScopeQuestionsForProject(supabase, scopeIds),
+    listProjectTrades(supabase, organisationId, id),
   ]);
 
   if (scopeBuilderError) {
@@ -196,6 +199,7 @@ export default async function ProjectDetailPage({
         followUpValues={followUpValues}
         discovery={discovery}
         discoveryMeta={discoveryMeta}
+        projectTrades={projectTrades ?? []}
       />
 
       <section className="mb-6">

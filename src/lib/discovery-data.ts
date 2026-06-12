@@ -1,7 +1,7 @@
 import {
   buildDiscoveryQuestionsAndTrades,
   type DiscoveryResult,
-} from "@/lib/discovery";
+} from "@/lib/ai/discovery";
 import { logSupabaseError } from "@/lib/supabase/log-error";
 import type { Json } from "@/types/database";
 import type { SupabaseClient } from "@supabase/supabase-js";

@@ -127,27 +127,40 @@ export function formatKnownFactLabels(
   });
 }
 
+const MISSING_FACT_PROMPTS: Record<string, string> = {
+  "deck.level_type": "Is the deck ground-level or elevated?",
+  "deck.area_m2": "What's the deck area?",
+  "deck.material": "What deck material?",
+  "deck.has_balustrade": "Does the deck need balustrades?",
+  "retaining_wall.length_m": "How long is the wall?",
+  "retaining_wall.height_m": "How high is the wall?",
+  "retaining_wall.drainage": "Is drainage required?",
+  "bathroom.area_m2": "What's the bathroom floor area?",
+  "bathroom.tile_extent": "How high are the tiles?",
+};
+
+function plainMissingLabel(factKey: string, fallbackLabel: string): string {
+  return MISSING_FACT_PROMPTS[factKey] ?? `Still need: ${fallbackLabel.toLowerCase()}`;
+}
+
 export function buildMissingInformationLabels(
   workAreas: WorkAreaCompletenessInput[]
 ): string[] {
   const missing: string[] = [];
 
   for (const area of workAreas) {
-    const scope = getScopeByWorkAreaType(area.workAreaTypeKey);
-    if (!scope) continue;
-
     for (const fact of getMissingRequiredFacts(
       area.workAreaTypeKey,
       area.answers
     )) {
-      missing.push(`${fact.label} not confirmed`);
+      missing.push(plainMissingLabel(fact.key, fact.label));
     }
 
     for (const fact of getMissingOptionalHighImpact(
       area.workAreaTypeKey,
       area.answers
     )) {
-      missing.push(`${fact.label} not confirmed`);
+      missing.push(plainMissingLabel(fact.key, fact.label));
     }
   }
 

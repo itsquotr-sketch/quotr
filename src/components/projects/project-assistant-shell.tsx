@@ -2,14 +2,18 @@
 
 import { useMemo, useState, useTransition } from "react";
 import { ChevronDown, ChevronRight } from "lucide-react";
-import { resetAssistant } from "@/actions/project-assistant";
+import { useRouter } from "next/navigation";
+import { resetAssistant } from "@/actions/assistant-v2";
 import { AssistantV2ResetDialog } from "@/components/assistant-v2/assistant-v2-reset-dialog";
+import { AssistantFlowProvider, useAssistantFlow } from "@/components/projects/assistant-flow-context";
+import { AssistantNextStepCard } from "@/components/projects/assistant-next-step-card";
 import { AssistantSection } from "@/components/projects/assistant-section";
-import { DiscoveryPanel } from "@/components/projects/discovery-panel";
+import { BrainDumpPanel } from "@/components/projects/brain-dump-panel";
+import { DraftEstimatePanel } from "@/components/projects/draft-estimate-panel";
 import { EstimateUpdateProvider } from "@/components/projects/estimate-update-context";
-import { PricingQuestionsPanel } from "@/components/projects/pricing-questions-panel";
-import { QuickEstimatePanel } from "@/components/projects/quick-estimate-panel";
-import { ProjectNotesInput } from "@/components/projects/project-notes-input";
+import { MissingInformationPanel } from "@/components/projects/missing-information-panel";
+import { SiteConditionsPanel } from "@/components/projects/site-conditions-panel";
+import { WhatQuotrFoundPanel } from "@/components/projects/what-quotr-found-panel";
 import { ScopeBuilderNotesList } from "@/components/projects/scope-builder-notes-list";
 import { Button } from "@/components/ui/button";
 import { getConstraintsForUi } from "@/lib/project-constraints-load";
@@ -17,9 +21,10 @@ import {
   resolveQuestionDef,
   resolveWorkAreaTypeKey,
 } from "@/lib/project-assistant-questions";
+import { resolveAssistantNextStep } from "@/lib/project-assistant/next-step";
 import { normalizeQuestionKey } from "@/lib/question-keys";
 import { isAnswered } from "@/lib/scope-answer-state";
-import type { DiscoveryResult } from "@/lib/discovery";
+import type { DiscoveryResult } from "@/lib/ai/discovery/types";
 import type { ProjectDiscoveryMeta } from "@/lib/discovery-meta";
 import type { ScopeQuestionWithAnswers } from "@/lib/project-assistant-data";
 import type {
@@ -27,8 +32,8 @@ import type {
   ProjectScopeBuilderInput,
   ProjectScopeSuggestion,
   QuickEstimate,
+  ProjectTrade,
 } from "@/types/database";
-import { useRouter } from "next/navigation";
 
 export interface ProjectAssistantShellProps {
   projectId: string;
@@ -41,12 +46,18 @@ export interface ProjectAssistantShellProps {
   followUpValues: Record<string, string | number | undefined>;
   discovery: DiscoveryResult | null;
   discoveryMeta: ProjectDiscoveryMeta;
+  projectTrades?: ProjectTrade[];
 }
 
 export function ProjectAssistantShell(props: ProjectAssistantShellProps) {
   return (
     <EstimateUpdateProvider>
-      <ProjectAssistantShellInner {...props} />
+      <AssistantFlowProvider
+        projectId={props.projectId}
+        aiAvailable={props.discoveryMeta.aiAvailable}
+      >
+        <ProjectAssistantShellInner {...props} />
+      </AssistantFlowProvider>
     </EstimateUpdateProvider>
   );
 }
@@ -62,8 +73,10 @@ function ProjectAssistantShellInner({
   followUpValues,
   discovery,
   discoveryMeta,
+  projectTrades = [],
 }: ProjectAssistantShellProps) {
   const router = useRouter();
+  const { resetAnalysisUi } = useAssistantFlow();
   const [showNotesHistory, setShowNotesHistory] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
   const [resetPending, startResetTransition] = useTransition();
@@ -132,9 +145,34 @@ function ProjectAssistantShellInner({
     return groups;
   }, [confirmedScopes, scopeQuestions]);
 
+  const nextStep = useMemo(
+    () =>
+      resolveAssistantNextStep({
+        hasNotes: inputs.length > 0,
+        discoveryRan: Boolean(discovery || suggestions.length > 0),
+        pendingSuggestions: suggestions,
+        confirmedScopes,
+        scopeQuestions,
+        selectedConstraintSlugs,
+        answeredQuestionKeys,
+        quickEstimate,
+      }),
+    [
+      inputs.length,
+      discovery,
+      suggestions,
+      confirmedScopes,
+      scopeQuestions,
+      selectedConstraintSlugs,
+      answeredQuestionKeys,
+      quickEstimate,
+    ]
+  );
+
   function handleResetConfirm() {
     startResetTransition(async () => {
       await resetAssistant(projectId);
+      resetAnalysisUi();
       setResetOpen(false);
       router.refresh();
     });
@@ -157,12 +195,10 @@ function ProjectAssistantShellInner({
         </Button>
       </div>
 
-      <AssistantSection title="Live estimate">
-        <QuickEstimatePanel projectId={projectId} quickEstimate={quickEstimate} />
-      </AssistantSection>
+      <AssistantNextStepCard projectId={projectId} nextStep={nextStep} />
 
       <AssistantSection title="Brain dump">
-        <ProjectNotesInput projectId={projectId} discoveryMeta={discoveryMeta} />
+        <BrainDumpPanel projectId={projectId} discoveryMeta={discoveryMeta} />
         {inputs.length > 0 && (
           <div className="mt-2 border-t pt-2">
             <button
@@ -186,29 +222,42 @@ function ProjectAssistantShellInner({
         )}
       </AssistantSection>
 
-      <AssistantSection title="What Quotr knows / needs">
-        <DiscoveryPanel
+      <AssistantSection title="What Quotr found">
+        <WhatQuotrFoundPanel
           projectId={projectId}
           discovery={discovery}
           confirmedScopes={confirmedScopes}
           scopeQuestions={scopeQuestions}
           suggestions={suggestions}
+          projectTrades={projectTrades}
         />
-        {scopeGroups.length > 0 && (
-          <div className="mt-3 border-t pt-3">
-            <PricingQuestionsPanel
-              projectId={projectId}
-              scopeGroups={scopeGroups}
-              quickEstimate={quickEstimate}
-              constraints={constraints}
-              selectedConstraintSlugs={selectedConstraintSlugs}
-              followUpValues={followUpValues}
-              detectedQualityLevel={discovery?.qualityLevel?.value ?? null}
-              detectedQualityReason={discovery?.qualityLevel?.reason ?? null}
-              discovery={discovery}
-            />
-          </div>
+      </AssistantSection>
+
+      <AssistantSection title="What Quotr needs">
+        <MissingInformationPanel
+          projectId={projectId}
+          scopeGroups={scopeGroups}
+          discovery={discovery}
+        />
+        {quickEstimate && scopeGroups.length > 0 && (
+          <SiteConditionsPanel
+            projectId={projectId}
+            quickEstimateId={quickEstimate.id}
+            constraints={constraints}
+            selectedSlugs={selectedConstraintSlugs}
+            followUpValues={followUpValues}
+            qualityLevel={quickEstimate.quality_level ?? "unknown"}
+            detectedQualityLevel={discovery?.qualityLevel?.value ?? null}
+            detectedQualityReason={discovery?.qualityLevel?.reason ?? null}
+          />
         )}
+      </AssistantSection>
+
+      <AssistantSection title="Draft quick estimate">
+        <DraftEstimatePanel
+          projectId={projectId}
+          quickEstimate={quickEstimate}
+        />
       </AssistantSection>
 
       <AssistantV2ResetDialog
@@ -220,6 +269,3 @@ function ProjectAssistantShellInner({
     </div>
   );
 }
-
-/** @deprecated Use ProjectAssistantShell */
-export const ProjectAssistantWorkspace = ProjectAssistantShell;

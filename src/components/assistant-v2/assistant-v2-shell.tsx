@@ -23,7 +23,7 @@ import {
 } from "@/lib/assistant-v2/get-next-pricing-question";
 import { parseQuickEstimateSummary } from "@/lib/project-assistant-summary";
 import type { QuickEstimateConfidenceLevel } from "@/lib/constants/quick-estimate";
-import type { DiscoveryResult } from "@/lib/discovery";
+import type { DiscoveryResult } from "@/lib/ai/discovery/types";
 import type { ScopeQuestionWithAnswers } from "@/lib/project-assistant-data";
 import { resolveWorkAreaTypeKey } from "@/lib/project-assistant-questions";
 import type {
@@ -161,23 +161,23 @@ function AssistantV2ShellInner({
               inputs={inputs}
               confirmedScopes={confirmedScopes}
               suggestions={suggestions}
-              scopeQuestions={scopeQuestions}
               discovery={discovery}
               nextQuestion={nextQuestion}
               workAreas={workAreas}
               completenessPercent={completenessPercent}
             />
 
-            <div className="mt-6 space-y-6">
-              <AssistantV2WorkAreas
-                projectId={projectId}
-                confirmedScopes={confirmedScopes}
-                scopeQuestions={scopeQuestions}
-                discovery={discovery}
-              />
-
-              <AssistantV2DownstreamSections rfqCount={rfqCount} />
-            </div>
+            {process.env.NODE_ENV === "development" && (
+              <div className="mt-6 space-y-6">
+                <AssistantV2WorkAreas
+                  projectId={projectId}
+                  confirmedScopes={confirmedScopes}
+                  scopeQuestions={scopeQuestions}
+                  discovery={discovery}
+                />
+                <AssistantV2DownstreamSections rfqCount={rfqCount} />
+              </div>
+            )}
           </div>
 
           <div className="border-t bg-background px-4 py-3 lg:hidden">

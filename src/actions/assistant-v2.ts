@@ -6,7 +6,9 @@ import { formatKnownFactLabels } from "@/lib/assistant-v2/compute-information-co
 import { loadProjectAssistantData } from "@/lib/assistant-v2/load-assistant-data";
 import { revalidateProjectAssistant } from "@/lib/assistant-v2/revalidate";
 import { resetAssistantState } from "@/lib/assistant-v2/reset-assistant";
-import { saveAndAnalyseProject, generateAssistantQuickEstimate } from "@/actions/project-assistant";
+import { runAssistantAnalysis } from "@/lib/assistant-v2/run-assistant-analysis";
+import { saveScopeAnswer } from "@/lib/assistant-v2/save-scope-answer";
+import { submitProjectNotes } from "@/lib/assistant-v2/submit-notes";
 import { acceptScopeSuggestion } from "@/actions/scope-suggestions";
 import { ensureQuestionsForProjectScopes } from "@/lib/scope-questions-seed";
 import { recalculateQuickEstimate } from "@/lib/cost-engine/recalculate-quick-estimate";
@@ -14,9 +16,15 @@ import { resolveWorkAreaTypeKey } from "@/lib/project-assistant-questions";
 import { getProjectById } from "@/lib/projects-data";
 import { createClient } from "@/lib/supabase/server";
 import { logSupabaseError } from "@/lib/supabase/log-error";
-import type { ProjectAssistantActionState } from "@/actions/project-assistant";
 
-export type AssistantV2ActionState = ProjectAssistantActionState;
+export type AssistantV2ActionState = {
+  error?: string;
+  success?: boolean;
+  message?: string;
+  fieldErrors?: Record<string, string[]>;
+  analysingMode?: "ai" | "rules";
+  usedFallback?: boolean;
+};
 
 export async function resetAssistant(
   projectId: string
@@ -92,10 +100,36 @@ export async function submitAssistantNotes(
   _prev: AssistantV2ActionState,
   formData: FormData
 ): Promise<AssistantV2ActionState> {
-  const analyseResult = await saveAndAnalyseProject(projectId, {}, formData);
+  const { user, organisationId } = await requireOrganisation();
+  const supabase = await createClient();
 
-  if (analyseResult.error && !analyseResult.success) {
-    return analyseResult;
+  const content = formData.get("content")?.toString() ?? "";
+
+  const saveResult = await submitProjectNotes(supabase, {
+    organisationId,
+    projectId,
+    userId: user.id,
+    content,
+  });
+
+  if ("error" in saveResult && saveResult.error) {
+    return {
+      error: saveResult.error,
+      fieldErrors: saveResult.fieldErrors,
+    };
+  }
+
+  const analyseResult = await runAssistantAnalysis(supabase, {
+    organisationId,
+    projectId,
+    userId: user.id,
+  });
+
+  if (!analyseResult.success && analyseResult.error) {
+    return {
+      success: true,
+      message: "Notes saved. Add more detail, then analyse again.",
+    };
   }
 
   const acceptResult = await acceptAllPendingSuggestions(projectId);
@@ -115,13 +149,50 @@ export async function submitAssistantNotes(
   };
 }
 
+export async function autoSaveScopeQuestionAnswer(
+  projectId: string,
+  questionId: string,
+  answer: string
+): Promise<AssistantV2ActionState> {
+  const { user, organisationId } = await requireOrganisation();
+  const supabase = await createClient();
+
+  const result = await saveScopeAnswer(supabase, {
+    organisationId,
+    projectId,
+    userId: user.id,
+    questionId,
+    answer,
+  });
+
+  if ("error" in result) {
+    return { error: result.error };
+  }
+
+  if (result.changed) {
+    revalidateProjectAssistant(projectId);
+  }
+
+  return { success: true, message: result.message };
+}
+
 export async function generateAssistantEstimate(
   projectId: string
 ): Promise<AssistantV2ActionState> {
-  const result = await generateAssistantQuickEstimate(projectId, { silent: true });
+  const { organisationId } = await requireOrganisation();
+  const supabase = await createClient();
+
+  const result = await recalculateQuickEstimate(
+    supabase,
+    organisationId,
+    projectId,
+    { triggerEvent: "manual_recalculate" }
+  );
+
   revalidateProjectAssistant(projectId);
   return {
-    ...result,
+    success: result.success,
+    error: result.error,
     message: result.message ?? "Estimate updated.",
   };
 }

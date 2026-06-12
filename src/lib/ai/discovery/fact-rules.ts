@@ -1,4 +1,4 @@
-import type { DiscoveryFact } from "@/lib/discovery/types";
+import type { DiscoveryFact } from "@/lib/ai/discovery/types";
 import { normalizeQuestionKey } from "@/lib/question-keys";
 import { extractFactsFromTemplates } from "@/lib/scope-templates/discovery";
 

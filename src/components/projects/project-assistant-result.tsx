@@ -19,12 +19,12 @@ import {
 } from "@/lib/constants/quick-estimate";
 import { labelForQualityLevel } from "@/lib/constants/quality-level";
 import { labelFor } from "@/lib/constants/projects";
-import type { DiscoveryResult } from "@/lib/discovery";
+import type { DiscoveryResult } from "@/lib/ai/discovery/types";
 import { parseQuickEstimateSummary } from "@/lib/project-assistant-summary";
 import {
   formatCurrency,
   formatCurrencyRange,
-} from "@/lib/project-assistant-calculate";
+} from "@/lib/format-currency";
 import type { QuickEstimate } from "@/types/database";
 
 interface ProjectAssistantResultProps {

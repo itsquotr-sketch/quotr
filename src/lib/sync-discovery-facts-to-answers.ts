@@ -1,5 +1,5 @@
 import { getLatestDiscoveryRun, parseDiscoveryRun } from "@/lib/discovery-data";
-import type { DiscoveryFact } from "@/lib/discovery/types";
+import type { DiscoveryFact } from "@/lib/ai/discovery/types";
 import {
   findQuestionDefByKey,
   resolveWorkAreaTypeKey,

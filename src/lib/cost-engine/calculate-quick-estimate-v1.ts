@@ -13,6 +13,7 @@ import {
   confidenceLevelLabel,
   toLegacyConfidenceLevel,
 } from "@/lib/cost-engine/confidence/level";
+import { buildCostBreakdown } from "@/lib/cost-engine/build-cost-breakdown";
 import { buildEstimateTrace } from "@/lib/cost-engine/build-estimate-trace";
 import { createEmptyTrace } from "@/lib/cost-engine/estimate-trace";
 import { isSiteConstraintsAssessed } from "@/lib/cost-engine/estimate-quality";
@@ -134,7 +135,9 @@ export function calculateQuickEstimateV1(
   if (input.workAreas.length === 0) {
     return {
       canCalculate: false,
-      reason: "Confirm at least one work area to generate a quick estimate.",
+      reason: input.allWorkAreasExcluded
+        ? "No work areas are currently included in the quick estimate."
+        : "Confirm at least one work area to generate a quick estimate.",
       estimatedCostLow: null,
       estimatedCostHigh: null,
       estimatedCostTypical: null,
@@ -189,6 +192,11 @@ export function calculateQuickEstimateV1(
   const rateSources: RateSource[] = [];
   const allAnswers: Record<string, string> = {};
   const areaResults: AreaCalcResult[] = [];
+  const areaBreakdownInputs: {
+    name: string;
+    workAreaTypeKey: string;
+    centralEstimate: number;
+  }[] = [];
 
   for (const area of input.workAreas) {
     Object.assign(allAnswers, area.answers);
@@ -229,6 +237,11 @@ export function calculateQuickEstimateV1(
     centralEstimate += result.centralEstimate;
     if (result.usedPackage) usedPackageRates = true;
     areaResults.push(result);
+    areaBreakdownInputs.push({
+      name: area.name,
+      workAreaTypeKey: area.workAreaTypeKey,
+      centralEstimate: result.centralEstimate,
+    });
     inputsUsed.push(...result.inputs.map((i) => `${area.name}: ${i}`));
     allowances.push(...result.allowances);
     assumptions.push(
@@ -339,6 +352,18 @@ export function calculateQuickEstimateV1(
     met: !label.startsWith("⚠"),
   }));
 
+  const costBreakdown = buildCostBreakdown({
+    centralEstimate: baseCost,
+    contingencyPercent,
+    workAreas: areaBreakdownInputs.map((area) => ({
+      ...area,
+      centralEstimate:
+        baseCost > 0 && centralEstimate > 0
+          ? Math.round((area.centralEstimate / centralEstimate) * baseCost)
+          : area.centralEstimate,
+    })),
+  });
+
   const estimateTrace = buildEstimateTrace({
     workAreas: input.workAreas,
     scopeKey: primaryArea?.templateKey ?? "generic",
@@ -361,6 +386,7 @@ export function calculateQuickEstimateV1(
     sellHigh: recommendedSellHigh,
     missingCriticalFacts: missingInformation.slice(0, 5),
     finishLevel: effectiveQualityLevel,
+    costBreakdown,
   });
 
   const tightenMessage =

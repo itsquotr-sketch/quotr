@@ -3,8 +3,9 @@ import type { EstimateTrace, EstimateTraceAdjustment } from "@/lib/cost-engine/e
 import type { RateSource } from "@/lib/cost-engine/rates/get-base-rate-for-scope";
 import {
   getKnownFactsForScope,
-  getMissingRequiredFacts,
+  getMissingFactsForWorkArea,
 } from "@/lib/scopes/missing-facts";
+import type { CostBreakdown } from "@/lib/cost-engine/build-cost-breakdown";
 import { getAnswerValue } from "@/lib/question-keys";
 import type { QuickEstimateWorkAreaInput } from "@/lib/cost-engine/quick-estimate-input";
 import { computeRangeWidthPercent } from "@/lib/cost-engine/range-quality";
@@ -31,6 +32,7 @@ export function buildEstimateTrace(input: {
   sellHigh: number;
   missingCriticalFacts: string[];
   finishLevel: QualityLevel;
+  costBreakdown?: CostBreakdown;
 }): EstimateTrace {
   const extractedFacts: NonNullable<EstimateTrace["extractedFacts"]> = [];
   const missingFacts: NonNullable<EstimateTrace["missingFacts"]> = [];
@@ -51,7 +53,7 @@ export function buildEstimateTrace(input: {
       });
     }
 
-    for (const fact of getMissingRequiredFacts(
+    for (const fact of getMissingFactsForWorkArea(
       area.workAreaTypeKey,
       area.answers
     )) {
@@ -91,6 +93,7 @@ export function buildEstimateTrace(input: {
     finalCostRange: { low: input.costLow, high: input.costHigh },
     finalSellRange: { low: input.sellLow, high: input.sellHigh },
     missingCriticalFacts: input.missingCriticalFacts,
+    costBreakdown: input.costBreakdown,
     workAreas: input.workAreas.map((a) => ({
       name: a.name,
       typeKey: a.workAreaTypeKey,
