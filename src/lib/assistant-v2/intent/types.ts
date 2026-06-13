@@ -7,6 +7,7 @@ export const ASSISTANT_INTENT_VALUES = [
   "remove_allowance",
   "update_constraint",
   "update_finish_level",
+  "update_margin",
   "include_work_area",
   "exclude_work_area",
   "add_work_area",
@@ -21,7 +22,22 @@ export type AssistantIntent = (typeof ASSISTANT_INTENT_VALUES)[number];
 
 export const assistantIntentSchema = z.enum(ASSISTANT_INTENT_VALUES);
 
-export const CONFIDENCE_EXECUTE_THRESHOLD = 0.8;
+/** >= 0.85: apply directly. 0.60–0.84: confirmation. < 0.60: clarification. */
+export const CONFIDENCE_EXECUTE_THRESHOLD = 0.85;
+export const CONFIDENCE_CONFIRM_THRESHOLD = 0.6;
+
+export const ASSISTANT_RESPONSE_TYPES = [
+  "action_applied",
+  "confirmation_required",
+  "clarification_required",
+  "included_excluded_summary",
+  "confidence_explanation",
+  "sensitivity_summary",
+  "rate_source_summary",
+  "command_echo",
+] as const;
+
+export type AssistantResponseType = (typeof ASSISTANT_RESPONSE_TYPES)[number];
 
 export const updateAllowancePayloadSchema = z.object({
   allowanceKey: z.string(),
@@ -52,6 +68,14 @@ export const workAreaCommandPayloadSchema = z.object({
   permanentDelete: z.boolean().optional(),
 });
 
+export const scopeFactUpdateItemSchema = z.object({
+  factKey: z.string(),
+  factLabel: z.string(),
+  newValue: z.string(),
+  previousValue: z.string().optional(),
+  unit: z.string().optional(),
+});
+
 export const updateScopeFactPayloadSchema = z.object({
   scopeId: z.string().uuid(),
   scopeName: z.string(),
@@ -60,6 +84,7 @@ export const updateScopeFactPayloadSchema = z.object({
   newValue: z.string(),
   previousValue: z.string().optional(),
   unit: z.string().optional(),
+  additionalFacts: z.array(scopeFactUpdateItemSchema).optional(),
 });
 
 export const onlyIncludeWorkAreasPayloadSchema = z.object({
@@ -70,10 +95,21 @@ export const askQuestionPayloadSchema = z.object({
   questionType: z.enum([
     "breakdown",
     "whats_included",
+    "whats_excluded",
+    "assumptions",
+    "confidence",
+    "sensitivity",
+    "rates",
     "sharpen_estimate",
     "internal_alteration",
     "general",
   ]),
+  sensitivityMode: z.enum(["general", "cheaper", "expensive"]).optional(),
+});
+
+export const updateMarginPayloadSchema = z.object({
+  targetMarginPercent: z.number().min(0).max(100),
+  previousMarginPercent: z.number().nullable().optional(),
 });
 
 export type UpdateAllowancePayload = z.infer<typeof updateAllowancePayloadSchema>;
@@ -90,6 +126,7 @@ export type OnlyIncludeWorkAreasPayload = z.infer<
   typeof onlyIncludeWorkAreasPayloadSchema
 >;
 export type AskQuestionPayload = z.infer<typeof askQuestionPayloadSchema>;
+export type UpdateMarginPayload = z.infer<typeof updateMarginPayloadSchema>;
 
 export const askRefinementPayloadSchema = z.object({
   scopeId: z.string().uuid().optional(),
@@ -98,10 +135,13 @@ export const askRefinementPayloadSchema = z.object({
 
 export type AskRefinementPayload = z.infer<typeof askRefinementPayloadSchema>;
 
+export type ScopeFactUpdateItem = z.infer<typeof scopeFactUpdateItemSchema>;
+
 export type AssistantIntentPayload =
   | UpdateAllowancePayload
   | RemoveAllowancePayload
   | UpdateFinishLevelPayload
+  | UpdateMarginPayload
   | UpdateConstraintPayload
   | WorkAreaCommandPayload
   | UpdateScopeFactPayload
@@ -117,6 +157,8 @@ export type ClassifiedAssistantIntent = {
   requiresConfirmation: boolean;
   confirmationMessage?: string;
   confirmationOptions?: { id: string; label: string }[];
+  responseType?: AssistantResponseType;
+  commandEcho?: string;
 };
 
 export type PendingAssistantCommand = {

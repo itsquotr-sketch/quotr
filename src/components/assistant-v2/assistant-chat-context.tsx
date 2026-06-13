@@ -16,6 +16,7 @@ import {
   batchSaveAssistantScopeAnswers,
   confirmAssistantWorkAreas,
   reopenSiteConditions,
+  submitAssistantNotes,
   syncAssistantState,
   type AssistantSyncPayload,
 } from "@/actions/assistant-v2";
@@ -69,6 +70,9 @@ type AssistantChatContextValue = {
   submitWorkAreaConfirmation: (selections: WorkAreaSelection[]) => void;
   editSiteConditions: () => Promise<void>;
   submitQualityLevel: (level: string, label: string) => void;
+  submitChatMessage: (content: string) => Promise<void>;
+  prefillComposer: (text: string) => void;
+  composerPrefill: string | null;
   addOptimisticUserMessage: (content: string) => string;
   addOptimisticAssistantMessage: (content: string) => void;
   resolveOptimisticMessage: (id: string, error?: string) => void;
@@ -101,7 +105,7 @@ export function AssistantChatProvider({
   onSync?: (payload: AssistantSyncPayload) => void;
   children: ReactNode;
 }) {
-  const { markSaving, markUpdating, markSaved, markIdle } =
+  const { markSaving, markUpdating, markSaved, markIdle, requestBreakdownOpen } =
     useEstimateUpdate();
   const [persistedMessages, setPersistedMessages] =
     useState<AssistantMessageRow[]>(initialMessages);
@@ -123,6 +127,7 @@ export function AssistantChatProvider({
   const [optimisticQualityLevel, setOptimisticQualityLevel] = useState<
     string | null
   >(initialQualityLevel);
+  const [composerPrefill, setComposerPrefill] = useState<string | null>(null);
   const [workAreas, setWorkAreas] =
     useState<WorkAreaCompletenessInput[]>(initialWorkAreas);
   const [flushInFlight, setFlushInFlight] = useState(false);
@@ -604,6 +609,20 @@ export function AssistantChatProvider({
     ]
   );
 
+  const prefillComposer = useCallback((text: string) => {
+    setComposerPrefill(text);
+    requestAnimationFrame(() => {
+      const textarea = document.querySelector<HTMLTextAreaElement>(
+        'textarea[name="content"]'
+      );
+      if (textarea) {
+        textarea.value = text;
+        textarea.focus();
+        textarea.setSelectionRange(text.length, text.length);
+      }
+    });
+  }, []);
+
   const addOptimisticUserMessage = useCallback((content: string) => {
     const id = `opt-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     setOptimisticMessages((prev) => [
@@ -627,6 +646,64 @@ export function AssistantChatProvider({
       )
     );
   }, []);
+
+  const submitChatMessage = useCallback(
+    async (content: string) => {
+      const trimmed = content.trim();
+      if (!trimmed || flushInFlightRef.current) return;
+
+      const optimisticId = addOptimisticUserMessage(trimmed);
+      addOptimisticAssistantMessage("Processing…");
+      markSaving();
+      markUpdating();
+
+      try {
+        const formData = new FormData();
+        formData.set("content", trimmed);
+        const result = await submitAssistantNotes(projectId, {}, formData);
+        if (result.error) {
+          resolveOptimisticMessage(optimisticId, result.error);
+          markIdle();
+          return;
+        }
+        resolveOptimisticMessage(optimisticId);
+        const syncResult = await syncAssistantState(projectId);
+        if (syncResult.data) {
+          applySyncPayload(syncResult.data);
+          applyEstimateChangeFromPayload(syncResult.data, "after update");
+        }
+        clearOptimisticMessages();
+        if (result.openBreakdown) {
+          requestBreakdownOpen();
+        }
+        markSaved({
+          costDelta: null,
+          previousCompleteness: null,
+          newCompleteness: null,
+          changeLabel: "after update",
+        });
+      } catch (error) {
+        markIdle();
+        const message =
+          error instanceof Error ? error.message : "Could not send message.";
+        resolveOptimisticMessage(optimisticId, message);
+      }
+    },
+    [
+      projectId,
+      addOptimisticUserMessage,
+      addOptimisticAssistantMessage,
+      resolveOptimisticMessage,
+      markSaving,
+      markUpdating,
+      markSaved,
+      markIdle,
+      applySyncPayload,
+      applyEstimateChangeFromPayload,
+      clearOptimisticMessages,
+      requestBreakdownOpen,
+    ]
+  );
 
   const allMessages = useMemo(() => {
     const persisted = persistedMessages.map((m) => ({
@@ -654,6 +731,9 @@ export function AssistantChatProvider({
       submitWorkAreaConfirmation,
       editSiteConditions,
       submitQualityLevel,
+      submitChatMessage,
+      prefillComposer,
+      composerPrefill,
       addOptimisticUserMessage,
       addOptimisticAssistantMessage,
       resolveOptimisticMessage,
@@ -677,6 +757,9 @@ export function AssistantChatProvider({
       submitWorkAreaConfirmation,
       editSiteConditions,
       submitQualityLevel,
+      submitChatMessage,
+      prefillComposer,
+      composerPrefill,
       addOptimisticUserMessage,
       addOptimisticAssistantMessage,
       resolveOptimisticMessage,

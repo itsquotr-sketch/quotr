@@ -3,10 +3,23 @@ import {
   resolveFactUpdate,
   type ScopeForFactResolution,
 } from "@/lib/assistant-v2/facts/resolve-fact-update";
+import { parseMoneyAmount, parsePercentAmount } from "@/lib/assistant-v2/facts/parse-numeric-command";
 import {
   ALLOWANCE_DEFINITIONS,
   resolveAllowanceKey,
 } from "@/lib/assistant-v2/intent/allowance-keys";
+import {
+  ASSUMPTIONS_QUESTION_PATTERN,
+  COMMAND_VERB_PATTERN,
+  CONFIDENCE_QUESTION_PATTERN,
+  EXCLUDED_QUESTION_PATTERN,
+  FINISH_LEVEL_SYNONYMS,
+  INCLUDED_QUESTION_PATTERN,
+  MARGIN_UPDATE_PATTERN,
+  RATE_QUESTION_PATTERN,
+  REFINEMENT_QUESTION_PATTERN,
+  SENSITIVITY_QUESTION_PATTERN,
+} from "@/lib/assistant-v2/intent/contractor-synonyms";
 import {
   assistantIntentSchema,
   CONFIDENCE_EXECUTE_THRESHOLD,
@@ -21,6 +34,7 @@ import {
   type AskRefinementPayload,
   type UpdateScopeFactPayload,
   type OnlyIncludeWorkAreasPayload,
+  type UpdateMarginPayload,
 } from "@/lib/assistant-v2/intent/types";
 import { normaliseQualityLevel } from "@/lib/constants/quality-level";
 import { getConstraintBySlug } from "@/lib/project-assistant-constraints";
@@ -36,28 +50,38 @@ export type IntentClassificationContext = {
   scopes?: ScopeForFactResolution[];
 };
 
-const COMMAND_VERB_PATTERN =
-  /\b(?:change|update|make|remove|delete|exclude|add|include|increase|reduce|set|actually)\b/i;
+function classifyUpdateMargin(text: string): ClassifiedAssistantIntent | null {
+  if (!MARGIN_UPDATE_PATTERN.test(text)) return null;
 
-function parseMoneyAmount(text: string): number | null {
-  const patterns = [
-    /\$\s*([\d,]+(?:\.\d{1,2})?)/,
-    /(?:to|at|of|=)\s*\$?\s*([\d,]+(?:\.\d{1,2})?)/i,
-    /([\d,]+(?:\.\d{1,2})?)\s*(?:dollars?|k\b)/i,
-    /\b([\d,]+(?:\.\d{1,2})?)\b/,
-  ];
-
-  for (const pattern of patterns) {
-    const match = text.match(pattern);
-    if (!match?.[1]) continue;
-    const raw = match[1].replace(/,/g, "");
-    const num = Number(raw);
-    if (!Number.isFinite(num) || num <= 0) continue;
-    if (/\bk\b/i.test(match[0])) return num * 1000;
-    return num;
+  const percent = parsePercentAmount(text);
+  if (percent == null) {
+    return {
+      intent: "update_margin",
+      confidence: 0.55,
+      extractedPayload: null,
+      requiresConfirmation: true,
+      responseType: "clarification_required",
+      confirmationMessage: "What margin percentage should I use?",
+    };
   }
 
-  return null;
+  const confidence = /(?:make|set|change|update)\s+(?:sell\s+)?margin/i.test(text)
+    ? 0.92
+    : 0.88;
+
+  const payload: UpdateMarginPayload = { targetMarginPercent: percent };
+
+  return {
+    intent: "update_margin",
+    confidence,
+    extractedPayload: payload,
+    requiresConfirmation: confidence < CONFIDENCE_EXECUTE_THRESHOLD,
+    confirmationMessage:
+      confidence < CONFIDENCE_EXECUTE_THRESHOLD
+        ? `Do you want me to set sell margin to ${percent}%?`
+        : undefined,
+    commandEcho: `Got it — setting sell margin to ${percent}%.`,
+  };
 }
 
 function extractAllowanceSubject(text: string): string | null {
@@ -113,6 +137,7 @@ function classifyUpdateScopeFact(
     newValue: resolution.newValue,
     previousValue: resolution.currentValue,
     unit: resolution.unit,
+    additionalFacts: resolution.additionalFacts,
   };
 
   const requiresConfirmation =
@@ -140,7 +165,7 @@ function classifyRemoveAllowance(
   text: string
 ): ClassifiedAssistantIntent | null {
   const lower = text.toLowerCase();
-  if (!/(remove|delete|take out|drop|exclude)\s+/i.test(lower)) {
+  if (!/(remove|delete|take out|drop|exclude|forget|ignore)\s+/i.test(lower)) {
     return null;
   }
 
@@ -226,7 +251,7 @@ function classifyUpdateAllowance(
     const vague = /bigger|larger|smaller|more|less|increase|decrease/i.test(text);
     return {
       intent: "update_allowance",
-      confidence: vague ? 0.55 : 0.65,
+      confidence: vague ? 0.65 : 0.65,
       extractedPayload: {
         allowanceKey: def.key,
         label: def.label,
@@ -241,11 +266,16 @@ function classifyUpdateAllowance(
   }
 
   const hasExisting = context.existingAllowanceKeys?.includes(def.key);
-  const confidence = /(?:change|update|set|increase|decrease|to|from)/i.test(text)
-    ? 0.95
-    : /(?:can we|could we|make|maybe)/i.test(text)
-      ? 0.72
-      : 0.88;
+  const hasExplicitAmount = amount != null;
+  const confidence =
+    hasExplicitAmount &&
+    /(?:change|update|set|increase|decrease|make|add)\s+(?:the\s+)?/i.test(text)
+      ? 0.95
+      : /(?:change|update|set|increase|decrease|to|from)/i.test(text)
+        ? 0.95
+        : /(?:can we|could we|maybe)/i.test(text)
+          ? 0.72
+          : 0.88;
 
   const payload: UpdateAllowancePayload = {
     allowanceKey: def.key,
@@ -292,13 +322,15 @@ function classifyFinishLevel(text: string): ClassifiedAssistantIntent | null {
 
   if (
     looksLikeScopeNotes(text) &&
-    !/(make it|set to|change to|actually|update to|switch to)/i.test(lower)
+    !/(make it|set to|change to|actually|update to|switch to|size is|area is|it's|it is|keep it|go upmarket|just standard)\b/i.test(
+      lower
+    )
   ) {
     return null;
   }
 
   if (
-    !/(premium|budget|standard|basic|mid.?range|high.?end|make it|finish level|finish)/i.test(
+    !/(premium|budget|standard|basic|mid.?range|high.?end|top spec|upmarket|decent quality|cheap and cheerful|make it|finish level|finish|high-end|high end|go upmarket|keep it)/i.test(
       lower
     )
   ) {
@@ -306,11 +338,17 @@ function classifyFinishLevel(text: string): ClassifiedAssistantIntent | null {
   }
 
   let qualityLevel: "budget" | "standard" | "premium" | null = null;
-  if (/premium|high.?end|high end|luxury/i.test(lower)) {
+  if (FINISH_LEVEL_SYNONYMS.premium.test(lower) || /go\s+upmarket/i.test(lower)) {
     qualityLevel = "premium";
-  } else if (/budget|basic|economy/i.test(lower)) {
+  } else if (
+    FINISH_LEVEL_SYNONYMS.budget.test(lower) ||
+    /keep\s+it\s+budget/i.test(lower)
+  ) {
     qualityLevel = "budget";
-  } else if (/standard|mid.?range|mid range/i.test(lower)) {
+  } else if (
+    FINISH_LEVEL_SYNONYMS.standard.test(lower) ||
+    /just\s+standard/i.test(lower)
+  ) {
     qualityLevel = "standard";
   } else if (/make it premium|actually premium/i.test(lower)) {
     qualityLevel = "premium";
@@ -427,7 +465,7 @@ function classifyWorkAreaCommand(
   );
 
   const excludePattern =
-    /(?:no longer wants|doesn't want|don't want|do not want|not want|remove|exclude|delete|take out|take the .+ out|drop)/i;
+    /(?:no longer wants|doesn't want|don't want|do not want|not want|client no longer wants|remove|exclude|delete|take out|take the .+ out|drop|forget|ignore|don'?t include|price\s+(?:it\s+)?without)/i;
 
   if (excludePattern.test(lower)) {
     if (
@@ -441,17 +479,22 @@ function classifyWorkAreaCommand(
       return null;
     }
 
-    const noLongerWantsMatch = /(?:no longer wants|doesn't want|don't want)\s+(?:a\s+|an\s+|the\s+)?(.+?)(?:,|\s+remove|\s+from|\s*$)/i.exec(
+    const priceWithoutMatch = /price\s+(?:it\s+)?without\s+(?:the\s+)?(.+?)(?:\.|$)/i.exec(
+      text
+    );
+
+    const noLongerWantsMatch = /(?:no longer wants|doesn't want|don't want|forget|ignore|client no longer wants)\s+(?:a\s+|an\s+|the\s+)?(.+?)(?:,|\s+remove|\s+from|\s*$)/i.exec(
       text
     );
 
     const extractedRemove = extractWorkAreaName(
       text,
-      "remove|exclude|delete|take out|take the"
+      "remove|exclude|delete|take out|take the|forget|ignore|drop|price without"
     );
 
     const trivialNames = new Set(["it", "this", "that", "them"]);
     const name =
+      priceWithoutMatch?.[1]?.trim() ??
       noLongerWantsMatch?.[1]?.trim() ??
       (extractedRemove && !trivialNames.has(extractedRemove.toLowerCase())
         ? extractedRemove
@@ -498,14 +541,17 @@ function classifyWorkAreaCommand(
   }
 
   if (
-    /(?:also include|add back|include back|add .+ back in)/i.test(lower) ||
+    /(?:also include|add back|include back|there is also|client also wants|we need to include|include pricing for|add .+ back in)/i.test(
+      lower
+    ) ||
     /^add\s+/i.test(lower.trim())
   ) {
-    const verbPattern = /(?:also include|add back|include back|add)\s+(?:back\s+in\s+)?/i.test(
-      lower
-    )
-      ? "also include|add back|include back|add back in|add"
-      : "add";
+    const verbPattern =
+      /(?:there is also|client also wants|we need to include|include pricing for|also include|add back|include back|add)\s+(?:back\s+in\s+)?/i.test(
+        lower
+      )
+        ? "there is also|client also wants|we need to include|include pricing for|also include|add back|include back|add back in|add"
+        : "add";
     const name = extractWorkAreaName(text, verbPattern);
     if (!name) return null;
 
@@ -581,7 +627,23 @@ function classifyConstraint(text: string): ClassifiedAssistantIntent | null {
   const wordCount = lower.split(/\s+/).length;
   const isCommandPhrase =
     wordCount <= 8 ||
-    /\b(applies|required|needed)\b/i.test(lower);
+    /\b(applies|required|needed|fine|available)\b/i.test(lower);
+
+  if (/access\s+is\s+fine|no\s+tight\s+access/i.test(lower)) {
+    const constraint = getConstraintBySlug("tight-access");
+    const payload: UpdateConstraintPayload = {
+      slug: "tight-access",
+      label: constraint?.label ?? "Tight access",
+      apply: false,
+    };
+    return {
+      intent: "update_constraint",
+      confidence: 0.9,
+      extractedPayload: payload,
+      requiresConfirmation: false,
+      commandEcho: "Got it — removing tight access constraint.",
+    };
+  }
 
   if (!isCommandPhrase) {
     return null;
@@ -631,8 +693,7 @@ function classifyConstraint(text: string): ClassifiedAssistantIntent | null {
   return null;
 }
 
-const REFINEMENT_QUESTION_PATTERN =
-  /what details do you need|what other information do you need|what information would help|how can i refine|how can i make this more accurate|what would sharpen the estimate|why is this still rough|how do i improve confidence|what questions are missing|what do you still need from me|how can i make|what info would sharpen|what else do you need|what would make the range|make this more accurate|sharpen this estimate|tighten the estimate|more accurate|what other information|what else can i give|how do i sharpen|what information do you need|refine pricing|refine the pricing|what details would help|what info do you need|what information do you still need|what would help|what details are missing|what details would improve|improve confidence/i;
+const REFINEMENT_QUESTION_PATTERN_LOCAL = REFINEMENT_QUESTION_PATTERN;
 
 function extractRefinementScopeName(
   text: string,
@@ -667,7 +728,7 @@ function classifyRefinementQuestion(
 ): ClassifiedAssistantIntent | null {
   const lower = text.toLowerCase().trim();
 
-  if (!REFINEMENT_QUESTION_PATTERN.test(lower)) {
+  if (!REFINEMENT_QUESTION_PATTERN_LOCAL.test(lower)) {
     return null;
   }
 
@@ -685,6 +746,41 @@ function classifyRefinementQuestion(
 function classifyAskQuestion(text: string): ClassifiedAssistantIntent | null {
   const lower = text.toLowerCase();
 
+  if (CONFIDENCE_QUESTION_PATTERN.test(lower)) {
+    return {
+      intent: "ask_question",
+      confidence: 0.95,
+      extractedPayload: { questionType: "confidence" } satisfies AskQuestionPayload,
+      requiresConfirmation: false,
+      responseType: "confidence_explanation",
+    };
+  }
+
+  if (SENSITIVITY_QUESTION_PATTERN.test(lower)) {
+    const cheaper = /cheaper/i.test(lower);
+    const expensive = /more expensive|cost drivers/i.test(lower);
+    return {
+      intent: "ask_question",
+      confidence: 0.95,
+      extractedPayload: {
+        questionType: "sensitivity",
+        sensitivityMode: cheaper ? "cheaper" : expensive ? "expensive" : "general",
+      } satisfies AskQuestionPayload,
+      requiresConfirmation: false,
+      responseType: "sensitivity_summary",
+    };
+  }
+
+  if (RATE_QUESTION_PATTERN.test(lower)) {
+    return {
+      intent: "ask_question",
+      confidence: 0.95,
+      extractedPayload: { questionType: "rates" } satisfies AskQuestionPayload,
+      requiresConfirmation: false,
+      responseType: "rate_source_summary",
+    };
+  }
+
   if (/show.*breakdown|cost breakdown|break down|breakdown/i.test(lower)) {
     return {
       intent: "ask_question",
@@ -694,11 +790,29 @@ function classifyAskQuestion(text: string): ClassifiedAssistantIntent | null {
     };
   }
 
-  if (
-    /what.*included|what's included|what is included|included in this estimate/i.test(
-      lower
-    )
-  ) {
+  if (EXCLUDED_QUESTION_PATTERN.test(lower)) {
+    return {
+      intent: "ask_question",
+      confidence: 0.95,
+      extractedPayload: {
+        questionType: "whats_excluded",
+      } satisfies AskQuestionPayload,
+      requiresConfirmation: false,
+    };
+  }
+
+  if (ASSUMPTIONS_QUESTION_PATTERN.test(lower)) {
+    return {
+      intent: "ask_question",
+      confidence: 0.95,
+      extractedPayload: {
+        questionType: "assumptions",
+      } satisfies AskQuestionPayload,
+      requiresConfirmation: false,
+    };
+  }
+
+  if (INCLUDED_QUESTION_PATTERN.test(lower)) {
     return {
       intent: "ask_question",
       confidence: 0.95,
@@ -707,6 +821,14 @@ function classifyAskQuestion(text: string): ClassifiedAssistantIntent | null {
       } satisfies AskQuestionPayload,
       requiresConfirmation: false,
     };
+  }
+
+  if (
+    /what rate are you using|which rate|use my rate|add my rate|change rate/i.test(
+      lower
+    )
+  ) {
+    return null;
   }
 
   if (
@@ -815,21 +937,24 @@ function ruleBasedClassify(
   const commandClassifiers = [
     () => classifyRefinementQuestion(trimmed, context),
     () => classifyAskQuestion(trimmed),
+    () => classifyFinishLevel(trimmed),
     () => classifyUpdateScopeFact(trimmed, context),
     () => classifyRemoveAllowance(trimmed),
     () => classifyConstraint(trimmed),
     () => classifyUpdateAllowance(trimmed, context),
-    () => classifyFinishLevel(trimmed),
+    () => classifyUpdateMargin(trimmed),
     () => classifyWorkAreaCommand(trimmed, context),
   ];
 
   const discoveryClassifiers = [
+    () => classifyFinishLevel(trimmed),
+    () => classifyUpdateScopeFact(trimmed, context),
     () => classifyRemoveAllowance(trimmed),
     () => classifyRefinementQuestion(trimmed, context),
     () => classifyAskQuestion(trimmed),
     () => classifyConstraint(trimmed),
     () => classifyUpdateAllowance(trimmed, context),
-    () => classifyFinishLevel(trimmed),
+    () => classifyUpdateMargin(trimmed),
     () => classifyWorkAreaCommand(trimmed, context),
   ];
 
@@ -841,6 +966,12 @@ function ruleBasedClassify(
   }
 
   if (looksLikeScopeNotes(trimmed) && !commandFirst) {
+    const workAreaAttempt = classifyWorkAreaCommand(trimmed, context);
+    if (workAreaAttempt) return workAreaAttempt;
+
+    const factAttempt = classifyUpdateScopeFact(trimmed, context);
+    if (factAttempt) return factAttempt;
+
     return {
       intent: "new_scope_notes",
       confidence: 0.85,

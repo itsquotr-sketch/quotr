@@ -18,7 +18,7 @@ const CONSTRAINT_PERCENT: Record<string, number> = {
 
 const ENGINEERING_ALLOWANCE: Record<"low" | "typical" | "high", number> = {
   low: 1500,
-  typical: 3000,
+  typical: 2500,
   high: 6000,
 };
 
@@ -26,6 +26,12 @@ const RUBBISH_ALLOWANCE: Record<"low" | "typical" | "high", number> = {
   low: 500,
   typical: 1000,
   high: 1500,
+};
+
+const ASBESTOS_ALLOWANCE: Record<"low" | "typical" | "high", number> = {
+  low: 1000,
+  typical: 2000,
+  high: 4000,
 };
 
 function parseNumber(value: string | undefined): number | null {
@@ -132,6 +138,19 @@ export function applyConstraintsToCentral(
         formatConstraintSummaryLine(
           { ...constraint, severity },
           `+${formatCurrency(allowance)}`
+        )
+      );
+      continue;
+    }
+
+    if (constraint.slug === "bathroom-asbestos-risk") {
+      const severity = resolveSeverity(constraint);
+      const allowance = ASBESTOS_ALLOWANCE[severity];
+      current += allowance;
+      constraintsApplied.push(
+        formatConstraintSummaryLine(
+          { ...constraint, severity },
+          `+${formatCurrency(allowance)} asbestos risk allowance`
         )
       );
     }

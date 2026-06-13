@@ -341,6 +341,7 @@ function AssistantV2ShellInner({
     breakdownOpenRequest,
     benchmarkScopesForOnboarding:
       estimateSummary?.benchmarkScopesForOnboarding ?? [],
+    rangeWidthPercent: estimateSummary?.rangeWidthPercent ?? null,
     onEstimateSync: handleAssistantSync,
   };
 

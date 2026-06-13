@@ -1,10 +1,18 @@
 import { insertAssistantMessage } from "@/lib/assistant-v2/assistant-messages-data";
-import type { AskQuestionPayload } from "@/lib/assistant-v2/intent/types";
-import type { CommandResult } from "@/lib/assistant-v2/commands/update-allowance";
+import {
+  buildCheaperSensitivitySummary,
+  buildConfidenceExplanation,
+  buildExpensiveSensitivitySummary,
+  buildRateSourceSummary,
+  buildSensitivitySummary,
+} from "@/lib/assistant-v2/commands/build-question-responses";
+import type { AskQuestionPayload } from "@/lib/assistant-v2/intent/types";import type { CommandResult } from "@/lib/assistant-v2/commands/update-allowance";
+import { contractorRateSourceLabel } from "@/lib/cost-engine/contractor-rate-source-label";
 import { parseQuickEstimateSummary } from "@/lib/project-assistant-summary";
 import { getQuickEstimateForProject } from "@/lib/quick-estimate-data";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database";
+import type { RateSource } from "@/lib/cost-engine/rates/get-base-rate-for-scope";
 
 type Supabase = SupabaseClient<Database>;
 
@@ -37,55 +45,91 @@ function formatBreakdownResponse(
   return lines.join("\n");
 }
 
-function formatWhatsIncludedResponse(
+function formatStructuredEstimateResponse(
   scopes: { name: string; included: boolean }[],
   summary: ReturnType<typeof parseQuickEstimateSummary>,
   constraints: string[],
-  allowances: string[]
+  allowances: string[],
+  mode: "included" | "excluded" | "assumptions" | "all"
 ): string {
-  const included = scopes.filter((s) => s.included).map((s) => s.name);
-  const excluded = scopes.filter((s) => !s.included).map((s) => s.name);
+  const includedScopes = scopes.filter((s) => s.included).map((s) => s.name);
+  const excludedScopes = scopes.filter((s) => !s.included).map((s) => s.name);
+  const missing = summary?.missingInformation ?? [];
+  const assumptions = summary?.assumptions ?? [];
+  const rateLines = summary?.rateSourceLines ?? [];
 
-  const lines = ["Here's what's in this estimate:", ""];
+  const lines: string[] = [];
 
-  if (included.length > 0) {
-    lines.push("Work areas:");
-    for (const name of included) {
-      lines.push(`• ${name}`);
+  if (mode === "all" || mode === "included") {
+    lines.push("Included:");
+    if (includedScopes.length > 0) {
+      for (const name of includedScopes) {
+        lines.push(`- ${name}`);
+      }
     }
-  } else {
-    lines.push("No work areas confirmed yet.");
-  }
-
-  if (summary?.qualityLevel && summary.qualityLevel !== "unknown") {
-    lines.push("", `Finish level: ${summary.qualityLevelNote ?? summary.qualityLevel}`);
-  }
-
-  if (constraints.length > 0) {
-    lines.push("", "Site conditions:");
-    for (const c of constraints) {
-      lines.push(`• ${c}`);
+    for (const c of constraints.slice(0, 6)) {
+      if (/allowance|access|rubbish|removal/i.test(c)) {
+        lines.push(`- ${c}`);
+      }
     }
-  }
-
-  if (allowances.length > 0) {
-    lines.push("", "Allowances:");
-    for (const a of allowances) {
-      lines.push(`• ${a}`);
+    for (const a of allowances.slice(0, 6)) {
+      lines.push(`- ${a}`);
     }
-  }
-
-  if (excluded.length > 0) {
-    lines.push("", "Not included:");
-    for (const name of excluded) {
-      lines.push(`• ${name}`);
+    if (
+      lines.length === 1 &&
+      includedScopes.length === 0 &&
+      constraints.length === 0 &&
+      allowances.length === 0
+    ) {
+      lines.push("- No work areas confirmed yet");
     }
   }
 
-  if (summary?.assumptions?.length) {
-    lines.push("", "Key assumptions:");
-    for (const assumption of summary.assumptions.slice(0, 4)) {
-      lines.push(`• ${assumption}`);
+  if (mode === "all" || mode === "excluded") {
+    if (lines.length > 0) lines.push("");
+    lines.push("Excluded / not confirmed:");
+    const excludedItems = [
+      ...excludedScopes.map((name) => `${name} excluded from estimate`),
+      ...missing.slice(0, 8).map((item) => {
+        const normalized = item.replace(/^Missing:\s*/i, "");
+        return normalized.endsWith(" not confirmed")
+          ? normalized
+          : `${normalized} not confirmed`;
+      }),
+    ];
+    if (excludedItems.length === 0) {
+      lines.push("- Nothing explicitly excluded");
+    } else {
+      for (const item of excludedItems.slice(0, 8)) {
+        lines.push(`- ${item}`);
+      }
+    }
+  }
+
+  if (mode === "all" || mode === "assumptions") {
+    if (lines.length > 0) lines.push("");
+    lines.push("Assumptions:");
+    const assumptionItems = [
+      ...assumptions.slice(0, 6),
+      ...(summary?.qualityLevel && summary.qualityLevel !== "unknown"
+        ? [`${summary.qualityLevelNote ?? summary.qualityLevel} finish assumed`]
+        : []),
+      ...rateLines
+        .filter((line) =>
+          ["template_benchmark", "regional_fallback", "placeholder"].includes(
+            line.rateSource
+          )
+        )
+        .map(
+          (line) =>
+            `${contractorRateSourceLabel(line.rateSource as RateSource, {
+              scopeLabel: line.label,
+            })} used for ${line.workAreaName}`
+        ),
+      "Site verification required",
+    ];
+    for (const item of [...new Set(assumptionItems)].slice(0, 8)) {
+      lines.push(`- ${item}`);
     }
   }
 
@@ -124,16 +168,38 @@ export async function executeAskQuestion(
   let openBreakdown = false;
 
   switch (params.payload.questionType) {
+    case "confidence":
+      message = buildConfidenceExplanation(summary);
+      break;
+    case "sensitivity":
+      if (params.payload.sensitivityMode === "cheaper") {
+        message = buildCheaperSensitivitySummary(summary);
+      } else if (params.payload.sensitivityMode === "expensive") {
+        message = buildExpensiveSensitivitySummary(summary);
+      } else {
+        message = buildSensitivitySummary(summary);
+      }
+      break;
+    case "rates":
+      message = buildRateSourceSummary(summary);
+      break;
     case "breakdown":
       message = formatBreakdownResponse(summary);
       openBreakdown = true;
       break;
     case "whats_included":
-      message = formatWhatsIncludedResponse(
+    case "whats_excluded":
+    case "assumptions":
+      message = formatStructuredEstimateResponse(
         scopeRows,
         summary,
         summary?.constraintsApplied ?? [],
-        summary?.allowances ?? []
+        summary?.allowances ?? [],
+        params.payload.questionType === "whats_included"
+          ? "all"
+          : params.payload.questionType === "whats_excluded"
+            ? "excluded"
+            : "assumptions"
       );
       break;
     case "sharpen_estimate":
@@ -172,10 +238,36 @@ export async function executeAskQuestion(
       return { success: true, message, estimateRecalculated: false };
     }
     default: {
-      message =
-        "I can help with the estimate breakdown, what's included, or what details would sharpen the range. What would you like to know?";
+      if (summary?.rateSourceLines?.length) {
+        const rateDetail = summary.rateSourceLines
+          .map(
+            (line) =>
+              `${line.workAreaName}: ${contractorRateSourceLabel(
+                line.rateSource as RateSource,
+                { scopeLabel: line.label }
+              )}`
+          )
+          .join("\n");
+        message = `Here's what rates this estimate is using:\n\n${rateDetail}`;
+      } else {
+        message =
+          "I can help with the estimate breakdown, what's included, or what details would sharpen the range. What would you like to know?";
+      }
     }
   }
+
+  const responseType =
+    params.payload.questionType === "confidence"
+      ? "confidence_explanation"
+      : params.payload.questionType === "sensitivity"
+        ? "sensitivity_summary"
+        : params.payload.questionType === "rates"
+          ? "rate_source_summary"
+          : ["whats_included", "whats_excluded", "assumptions"].includes(
+                params.payload.questionType
+              )
+            ? "included_excluded_summary"
+            : "action_applied";
 
   await insertAssistantMessage(supabase, {
     organisationId: params.organisationId,
@@ -185,6 +277,7 @@ export async function executeAskQuestion(
     content: message,
     metadata: {
       messageType: "assistant_text",
+      responseType,
       commandIntent: "ask_question",
       questionType: params.payload.questionType,
       openBreakdown,

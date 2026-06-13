@@ -130,6 +130,9 @@ export function AssistantV2Composer({
         </Button>
       </div>
       {error && <p className="text-xs text-destructive">{error}</p>}
+      <p className="text-[10px] text-muted-foreground/70">
+        Try: &lsquo;make it premium&rsquo;, &lsquo;remove retaining wall&rsquo;, &lsquo;what&rsquo;s included?&rsquo;, &lsquo;update deck to 60m²&rsquo;
+      </p>
     </form>
     </div>
   );

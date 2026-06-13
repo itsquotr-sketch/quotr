@@ -1,12 +1,13 @@
 "use client";
 
-import { useState, useTransition, useEffect } from "react";
+import { useState, useTransition, useEffect, useMemo } from "react";
 import { Check, ChevronDown, TrendingDown, TrendingUp, X } from "lucide-react";
 import {
   exportScopeSummary,
   type AssistantSyncPayload,
 } from "@/actions/assistant-v2";
 import { AssistantV2MarginEditor } from "@/components/assistant-v2/assistant-v2-margin-editor";
+import { AnswerChips } from "@/components/assistant-v2/answer-chips";
 import {
   formatLastUpdated,
   useEstimateUpdate,
@@ -18,7 +19,12 @@ import {
   type EstimateQualityTier,
 } from "@/lib/cost-engine/estimate-quality";
 import type { CostBreakdown } from "@/lib/cost-engine/build-cost-breakdown";
+import {
+  buildScopeBreakdown,
+  type ScopeBreakdownItem,
+} from "@/lib/cost-engine/build-scope-breakdown";
 import type { EstimateChangeEvent } from "@/lib/cost-engine/recalculate-quick-estimate";
+import { resolveRateSourceBanner } from "@/lib/cost-engine/resolve-rate-source-banner";
 import { formatCurrencyRange } from "@/lib/format-currency";
 import type { QuickEstimate } from "@/types/database";
 import { cn } from "@/lib/utils";
@@ -29,8 +35,16 @@ import {
   type BenchmarkScopeForOnboarding,
 } from "@/components/assistant-v2/scope-rate-onboarding-dialog";
 import type { WorkAreaRateSourceLine } from "@/lib/cost-engine/estimate-trace";
+import type { EstimateTrace } from "@/lib/cost-engine/estimate-trace";
 import { isBenchmarkRateSource } from "@/lib/cost-engine/rates/get-base-rate-for-scope";
 import { AddMoreDetailButton } from "@/components/assistant-v2/assistant-refinement-trigger";
+import type { CurrentMissingItem } from "@/lib/assistant-v2/missing/get-current-missing-items";
+import {
+  buildMissingItemPrompt,
+  type MissingItemPrompt,
+} from "@/lib/assistant-v2/missing/build-missing-item-prompt";
+import type { QualityLevel } from "@/lib/constants/quality-level";
+import { QUALITY_LEVEL_OPTIONS } from "@/lib/constants/quality-level";
 
 interface AssistantV2LiveEstimatePanelProps {
   projectId: string;
@@ -57,6 +71,14 @@ interface AssistantV2LiveEstimatePanelProps {
   benchmarkScopesForOnboarding?: BenchmarkScopeForOnboarding[];
   compact?: boolean;
   onEstimateSync?: (payload: AssistantSyncPayload) => void;
+  qualityLevelRaw?: QualityLevel;
+  rangeWidthPercent?: number | null;
+  estimateTrace?: EstimateTrace | null;
+  actionableMissingItems?: CurrentMissingItem[];
+  workAreaTypeKeys?: Record<string, string>;
+  onMissingItemClick?: (item: CurrentMissingItem, prompt: MissingItemPrompt) => void;
+  onMissingItemAnswer?: (item: CurrentMissingItem, value: string, label: string) => void;
+  onQualityLevelSelect?: (level: QualityLevel, label: string) => void;
 }
 
 function tierStyles(tier: EstimateQualityTier): string {
@@ -152,15 +174,22 @@ export function AssistantV2LiveEstimatePanel({
   constraintsIncluded = [],
   allowancesIncluded = [],
   rateSourceLines = [],
-  rateSourceDetail,
-  stagedRatePrompt,
   breakdownOpenRequest = 0,
   benchmarkScopesForOnboarding = [],
   compact = false,
   onEstimateSync,
+  qualityLevelRaw = "unknown",
+  rangeWidthPercent = null,
+  estimateTrace = null,
+  actionableMissingItems = [],
+  workAreaTypeKeys = {},
+  onMissingItemClick,
+  onMissingItemAnswer,
+  onQualityLevelSelect,
 }: AssistantV2LiveEstimatePanelProps) {
   const { status, lastUpdatedAt } = useEstimateUpdate();
   const [breakdownOpen, setBreakdownOpen] = useState(false);
+  const [scopeBreakdownOpen, setScopeBreakdownOpen] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
 
   useEffect(() => {
@@ -175,6 +204,29 @@ export function AssistantV2LiveEstimatePanel({
     quickEstimate != null &&
     quickEstimate.estimated_cost_low != null &&
     quickEstimate.estimated_cost_high != null;
+
+  const scopeBreakdownItems: ScopeBreakdownItem[] = useMemo(() => {
+    const traces = estimateTrace?.workAreaTraces ?? [];
+    if (traces.length === 0 || !quickEstimate) return [];
+    return buildScopeBreakdown({
+      workAreaTraces: traces,
+      rateSourceLines,
+      confidenceScore,
+      targetMarginPercent: Number(quickEstimate.target_margin_percent ?? 5),
+      contingencyPercent: estimateTrace?.contingencyPercent ?? 5,
+      missingItems: actionableMissingItems,
+      globalAllowances: allowancesIncluded,
+      globalConstraints: constraintsIncluded,
+    });
+  }, [
+    estimateTrace,
+    rateSourceLines,
+    confidenceScore,
+    quickEstimate,
+    actionableMissingItems,
+    allowancesIncluded,
+    constraintsIncluded,
+  ]);
 
   if (!quickEstimate || !hasResults) {
     return (
@@ -218,6 +270,11 @@ export function AssistantV2LiveEstimatePanel({
   const usesBenchmarkRates =
     rateSourceLines.some((line) => isBenchmarkRateSource(line.rateSource)) ||
     benchmarkScopesForOnboarding.length > 0;
+
+  const rateSourceBanner = resolveRateSourceBanner(rateSourceLines);
+  const isQualityUnknown = qualityLevelRaw === "unknown";
+  const isRangeTooWide =
+    rangeWidthPercent != null && rangeWidthPercent > 40;
 
   const primaryOnboardingScope = benchmarkScopesForOnboarding[0] ?? null;
 
@@ -265,13 +322,75 @@ export function AssistantV2LiveEstimatePanel({
             })}
           {statusLabel ? ` · ${statusLabel}` : ""}
         </p>
-        {finishLevel && (
+        {finishLevel && !isQualityUnknown && (
           <p className="text-xs text-muted-foreground">
             Finish level:{" "}
             <span className="font-medium text-foreground">{finishLevel}</span>
           </p>
         )}
       </div>
+
+      {rateSourceBanner && !compact && (
+        <div
+          className={cn(
+            "mt-3 rounded-lg border px-3 py-2 text-xs",
+            rateSourceBanner.kind === "all_saved"
+              ? "border-primary/30 bg-primary/5"
+              : "border-amber-500/40 bg-amber-500/10"
+          )}
+        >
+          <p
+            className={cn(
+              "font-medium",
+              rateSourceBanner.kind === "all_saved"
+                ? "text-primary"
+                : "text-amber-800 dark:text-amber-300"
+            )}
+          >
+            {rateSourceBanner.message}
+          </p>
+          {rateSourceBanner.perScopeLines.length > 0 && (
+            <ul className="mt-1.5 space-y-0.5 text-muted-foreground">
+              {rateSourceBanner.perScopeLines.map((line) => (
+                <li key={line.scopeName}>
+                  <span className="font-medium text-foreground">
+                    {line.scopeName}:
+                  </span>{" "}
+                  {line.label}
+                </li>
+              ))}
+            </ul>
+          )}
+          {usesBenchmarkRates && primaryOnboardingScope && (
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              className="mt-2 h-7 text-xs"
+              onClick={() => openOnboarding()}
+            >
+              Add my rate
+            </Button>
+          )}
+        </div>
+      )}
+
+      {isRangeTooWide && !compact && (
+        <div className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs">
+          <p className="font-medium text-amber-800 dark:text-amber-300">
+            This range is too wide to quote confidently.
+          </p>
+          <p className="mt-1 text-muted-foreground">Top actions:</p>
+          <ul className="mt-1 space-y-0.5 text-muted-foreground">
+            {isQualityUnknown && <li>• Choose finish level</li>}
+            {(criticalMissing.length > 0 || missingInformation.length > 0) && (
+              <li>• Answer missing dimensions</li>
+            )}
+            {usesBenchmarkRates && <li>• Add your rates</li>}
+            <li>• Confirm materials / client-supplied items</li>
+          </ul>
+        </div>
+      )}
 
       <div className={cn("space-y-4", compact ? "mt-3" : "mt-4")}>
           <div>
@@ -292,7 +411,7 @@ export function AssistantV2LiveEstimatePanel({
             </p>
           </div>
 
-          {!compact && quickEstimate.recommended_sell_low != null && (
+          {!compact && !isQualityUnknown && quickEstimate.recommended_sell_low != null && (
             <div>
               <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
                 Recommended Sell
@@ -311,59 +430,49 @@ export function AssistantV2LiveEstimatePanel({
             </div>
           )}
 
+          {!compact && isQualityUnknown && (
+            <div className="rounded-lg border bg-muted/20 px-3 py-2 text-xs">
+              <p className="font-medium text-foreground">
+                Choose a finish level to see a more useful sell price.
+              </p>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {QUALITY_LEVEL_OPTIONS.filter((o) => o.value !== "unknown").map(
+                  (option) => (
+                    <Button
+                      key={option.value}
+                      type="button"
+                      size="sm"
+                      variant="secondary"
+                      className="h-7 text-xs"
+                      onClick={() =>
+                        onQualityLevelSelect?.(option.value, option.label)
+                      }
+                    >
+                      {option.label.split(" / ")[0]}
+                    </Button>
+                  )
+                )}
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs"
+                  onClick={() =>
+                    onQualityLevelSelect?.("unknown", "Not sure")
+                  }
+                >
+                  Not sure
+                </Button>
+              </div>
+            </div>
+          )}
+
           {!compact && (
             <AssistantV2MarginEditor
               projectId={projectId}
               defaultMargin={Number(quickEstimate.target_margin_percent ?? 5)}
               onEstimateSync={onEstimateSync}
             />
-          )}
-
-          {!compact && (rateSourceLines.length > 0 || rateSourceDetail) && (
-            <div className="rounded-lg border bg-muted/20 px-3 py-2 text-xs">
-              <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                Rate detail
-              </p>
-              {rateSourceLines.length > 1 ? (
-                <ul className="mt-1.5 space-y-0.5">
-                  {rateSourceLines.map((line) => (
-                    <li key={line.workAreaName} className="text-foreground">
-                      <span className="font-medium">{line.label}:</span>{" "}
-                      {line.rateSourceLabel}
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <p className="mt-1 font-medium text-foreground">
-                  {rateSourceDetail ?? rateSourceLines[0]?.rateSourceLabel}
-                </p>
-              )}
-              {stagedRatePrompt && (
-                <p className="mt-2 text-muted-foreground">{stagedRatePrompt}</p>
-              )}
-              {usesBenchmarkRates && (
-                <div className="mt-2 space-y-2 border-t border-border/60 pt-2">
-                  <p className="text-muted-foreground">
-                    This estimate uses Quotr benchmark rates.
-                  </p>
-                  {primaryOnboardingScope ? (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="secondary"
-                      className="h-7 text-xs"
-                      onClick={() => openOnboarding()}
-                    >
-                      Add my rate
-                    </Button>
-                  ) : (
-                    <p className="text-muted-foreground">
-                      Add your own rates to improve accuracy.
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
           )}
 
           {changeDisplay && (
@@ -415,6 +524,78 @@ export function AssistantV2LiveEstimatePanel({
                       <li key={item}>• {item}</li>
                     ))}
                   </ul>
+                </div>
+              )}
+            </div>
+          )}
+
+          {scopeBreakdownItems.length > 0 && !compact && (
+            <div className="border-t pt-3">
+              <button
+                type="button"
+                onClick={() => setScopeBreakdownOpen((open) => !open)}
+                className="flex w-full items-center justify-between text-left"
+              >
+                <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Breakdown by scope
+                </span>
+                <ChevronDown
+                  className={cn(
+                    "h-4 w-4 text-muted-foreground transition-transform",
+                    scopeBreakdownOpen && "rotate-180"
+                  )}
+                />
+              </button>
+              {scopeBreakdownOpen && (
+                <div className="mt-3 space-y-3 text-xs">
+                  {scopeBreakdownItems.map((scope) => (
+                    <div
+                      key={scope.scopeName}
+                      className="rounded-lg border bg-muted/20 px-3 py-2"
+                    >
+                      <p className="font-medium text-foreground">
+                        {scope.scopeName}
+                      </p>
+                      <p className="mt-1 text-muted-foreground">
+                        Cost:{" "}
+                        <span className="font-medium text-foreground">
+                          {formatCurrencyRange(scope.costLow, scope.costHigh)}
+                        </span>
+                      </p>
+                      {!isQualityUnknown && (
+                        <p className="mt-0.5 text-muted-foreground">
+                          Sell:{" "}
+                          <span className="font-medium text-foreground">
+                            {formatCurrencyRange(scope.sellLow, scope.sellHigh)}
+                          </span>
+                        </p>
+                      )}
+                      <p className="mt-0.5 text-muted-foreground">
+                        Rate source:{" "}
+                        <span className="text-foreground">
+                          {scope.rateSourceLabel}
+                        </span>
+                      </p>
+                      {scope.quantityLabel && (
+                        <p className="mt-0.5 text-muted-foreground">
+                          Quantity:{" "}
+                          <span className="text-foreground">
+                            {scope.quantityLabel}
+                          </span>
+                        </p>
+                      )}
+                      {scope.includes.length > 0 && (
+                        <p className="mt-1 text-muted-foreground">
+                          Includes: {scope.includes.join(", ")}
+                        </p>
+                      )}
+                      {scope.missing.length > 0 && (
+                        <p className="mt-0.5 text-muted-foreground">
+                          {scope.missing.join("; ")}
+                        </p>
+                      )}
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
@@ -524,26 +705,79 @@ export function AssistantV2LiveEstimatePanel({
                 </li>
               ))}
             </ul>
-            {criticalMissing.length > 0 || missingInformation.length > 0 ? (
+            {criticalMissing.length > 0 ||
+            missingInformation.length > 0 ||
+            actionableMissingItems.length > 0 ? (
               <>
                 <p className="mt-2 text-xs text-muted-foreground">
                   Missing information:
                 </p>
-                <ul className="mt-1 space-y-0.5">
-                  {(criticalMissing.length > 0
-                    ? criticalMissing
-                    : missingInformation
+                <ul className="mt-1 space-y-1">
+                  {(actionableMissingItems.length > 0
+                    ? actionableMissingItems.filter(
+                        (item) =>
+                          item.status === "missing" &&
+                          (item.importance === "critical" ||
+                            item.importance === "useful")
+                      )
+                    : (criticalMissing.length > 0
+                        ? criticalMissing
+                        : missingInformation
+                      ).map((label) => ({ label, factKey: label, scopeLabel: "", status: "missing" as const, importance: "critical" as const, affectsEstimate: true }))
                   )
                     .slice(0, 6)
-                    .map((item) => (
-                      <li
-                        key={item}
-                        className="flex items-start gap-1.5 text-xs text-muted-foreground"
-                      >
-                        <X className="mt-0.5 h-3 w-3 shrink-0" />
-                        <span>{item}</span>
-                      </li>
-                    ))}
+                    .map((item) => {
+                      const missingItem =
+                        "factKey" in item && item.factKey !== item.label
+                          ? (item as CurrentMissingItem)
+                          : null;
+                      const label =
+                        missingItem?.label ??
+                        (typeof item === "string" ? item : item.label);
+                      const typeKey = missingItem?.scopeId
+                        ? workAreaTypeKeys[missingItem.scopeId]
+                        : undefined;
+                      const prompt =
+                        missingItem && typeKey
+                          ? buildMissingItemPrompt(missingItem, typeKey)
+                          : null;
+
+                      return (
+                        <li key={label} className="text-xs">
+                          <button
+                            type="button"
+                            className="flex w-full items-start gap-1.5 rounded-md px-1 py-0.5 text-left text-muted-foreground hover:bg-muted/50 hover:text-foreground"
+                            onClick={() => {
+                              if (missingItem && prompt) {
+                                onMissingItemClick?.(missingItem, prompt);
+                              }
+                            }}
+                          >
+                            <X className="mt-0.5 h-3 w-3 shrink-0" />
+                            <span>{label}</span>
+                          </button>
+                          {prompt &&
+                            prompt.options.length > 0 &&
+                            missingItem && (
+                              <div className="ml-4 mt-1">
+                                <AnswerChips
+                                  options={prompt.options}
+                                  onSelect={(value) => {
+                                    const option = prompt.options.find(
+                                      (o) => o.value === value
+                                    );
+                                    onMissingItemAnswer?.(
+                                      missingItem,
+                                      value,
+                                      option?.label ?? value
+                                    );
+                                  }}
+                                />
+                              </div>
+                            )}
+                        </li>
+                      );
+                    })}
                 </ul>
               </>
             ) : optionalMissing.length > 0 ? null : (

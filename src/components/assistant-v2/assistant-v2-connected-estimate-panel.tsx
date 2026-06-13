@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { AssistantV2LiveEstimatePanel } from "@/components/assistant-v2/assistant-v2-live-estimate-panel";
 import { useAssistantChat } from "@/components/assistant-v2/assistant-chat-context";
 import type { ComponentProps } from "react";
@@ -9,6 +9,7 @@ import {
   getCurrentMissingItems,
   getOptionalMissing,
 } from "@/lib/assistant-v2/missing/get-current-missing-items";
+import { buildMissingItemPrompt } from "@/lib/assistant-v2/missing/build-missing-item-prompt";
 import {
   describeEstimateQualityTier,
   resolveEstimateQualityTier,
@@ -24,6 +25,13 @@ type BasePanelProps = Omit<
   | "optionalOnlyMissing"
   | "estimateQualityTier"
   | "qualityTierDescription"
+  | "actionableMissingItems"
+  | "workAreaTypeKeys"
+  | "onMissingItemClick"
+  | "onMissingItemAnswer"
+  | "onQualityLevelSelect"
+  | "qualityLevelRaw"
+  | "rangeWidthPercent"
 > & {
   qualityLevel: QualityLevel;
   confidenceLevel: QuickEstimateConfidenceLevel;
@@ -31,6 +39,7 @@ type BasePanelProps = Omit<
   workAreasConfirmed: boolean;
   siteConstraintsAssessed: boolean;
   estimateTrace?: import("@/lib/cost-engine/estimate-trace").EstimateTrace | null;
+  rangeWidthPercent?: number | null;
 };
 
 export function AssistantV2ConnectedEstimatePanel({
@@ -41,9 +50,16 @@ export function AssistantV2ConnectedEstimatePanel({
   workAreasConfirmed,
   siteConstraintsAssessed,
   estimateTrace,
+  rangeWidthPercent = null,
   ...panelProps
 }: BasePanelProps) {
-  const { workAreas, optimisticAnswers } = useAssistantChat();
+  const {
+    workAreas,
+    optimisticAnswers,
+    submitChatMessage,
+    prefillComposer,
+    submitQualityLevel,
+  } = useAssistantChat();
 
   const mergedWorkAreas = useMemo(
     () =>
@@ -79,6 +95,16 @@ export function AssistantV2ConnectedEstimatePanel({
   const optionalOnlyMissing =
     criticalMissing.length === 0 && optionalMissing.length > 0;
 
+  const workAreaTypeKeys = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const area of mergedWorkAreas) {
+      if (area.scopeId) {
+        map[area.scopeId] = area.workAreaTypeKey;
+      }
+    }
+    return map;
+  }, [mergedWorkAreas]);
+
   const estimateQualityTier = useMemo(
     () =>
       resolveEstimateQualityTier({
@@ -112,6 +138,39 @@ export function AssistantV2ConnectedEstimatePanel({
 
   const missingInformation = criticalMissing.map((item) => item.label);
 
+  const handleMissingItemClick = useCallback(
+    (
+      item: (typeof allMissingItems)[number],
+      prompt: ReturnType<typeof buildMissingItemPrompt>
+    ) => {
+      if (!prompt) return;
+      prefillComposer(prompt.questionText);
+    },
+    [prefillComposer]
+  );
+
+  const handleMissingItemAnswer = useCallback(
+    (
+      item: (typeof allMissingItems)[number],
+      value: string,
+      label: string
+    ) => {
+      const scopeName = item.scopeLabel;
+      const factLabel = item.label
+        .replace(`${scopeName}: `, "")
+        .replace(/ not confirmed$/i, "");
+      void submitChatMessage(`${scopeName} ${factLabel}: ${label}`);
+    },
+    [submitChatMessage]
+  );
+
+  const handleQualityLevelSelect = useCallback(
+    (level: QualityLevel, label: string) => {
+      submitQualityLevel(level, label);
+    },
+    [submitQualityLevel]
+  );
+
   return (
     <AssistantV2LiveEstimatePanel
       {...panelProps}
@@ -122,6 +181,14 @@ export function AssistantV2ConnectedEstimatePanel({
       criticalMissing={criticalMissing.map((item) => item.label)}
       optionalMissing={optionalMissing.map((item) => item.label)}
       optionalOnlyMissing={optionalOnlyMissing}
+      qualityLevelRaw={qualityLevel}
+      rangeWidthPercent={rangeWidthPercent}
+      estimateTrace={estimateTrace}
+      actionableMissingItems={allMissingItems}
+      workAreaTypeKeys={workAreaTypeKeys}
+      onMissingItemClick={handleMissingItemClick}
+      onMissingItemAnswer={handleMissingItemAnswer}
+      onQualityLevelSelect={handleQualityLevelSelect}
     />
   );
 }

@@ -16,6 +16,17 @@ export const factUpdateResolutionSchema = z.object({
   unit: z.string().optional(),
   requiresConfirmation: z.boolean(),
   confirmationMessage: z.string().optional(),
+  additionalFacts: z
+    .array(
+      z.object({
+        factKey: z.string(),
+        factLabel: z.string(),
+        newValue: z.string(),
+        previousValue: z.string().optional(),
+        unit: z.string().optional(),
+      })
+    )
+    .optional(),
 });
 
 export type FactUpdateResolution = z.infer<typeof factUpdateResolutionSchema>;
@@ -27,11 +38,15 @@ export type ScopeForFactResolution = {
   answers: Record<string, string>;
 };
 
-const COMMAND_VERB_PATTERN =
-  /\b(?:change|update|make|remove|delete|exclude|add|include|increase|reduce|set|actually|correction|correct)\b/i;
+import { COMMAND_VERB_PATTERN } from "@/lib/assistant-v2/intent/contractor-synonyms";
+import {
+  parseBareScopeNumber,
+  parseDimensions,
+  parseNumericForFact,
+} from "@/lib/assistant-v2/facts/parse-numeric-command";
 
 const IMPLICIT_CORRECTION_PATTERN =
-  /\b(?:actually|correction|it's|it is|the .+ is)\b/i;
+  /\b(?:actually|correction|it's|it is|the .+ is|size is|area is|make it|change to|update to)\b/i;
 
 const AREA_UNIT_PATTERN =
   /(\d+(?:\.\d+)?)\s*(?:m²|m2|sqm|square\s*met(?:re|er)s?)/i;
@@ -187,11 +202,15 @@ const FACT_PHRASES: FactPhrase[] = [
   {
     patterns: [
       /client\s+(?:is\s+)?suppl(?:y|ying|ied)/i,
+      /owner\s+suppl(?:y|ying|ied)/i,
+      /supplied by client/i,
       /(?:we are|we're)\s+labour\s+only/i,
       /labour\s+only/i,
       /exclude\s+materials/i,
       /supply\s+and\s+install/i,
       /include\s+materials/i,
+      /client supplies/i,
+      /client\s+has\s+their\s+own/i,
     ],
     factKeySuffix: "material_supply",
     scopeHint: /deck/i,
@@ -346,6 +365,54 @@ function detectFinishLevelUpdate(
   return matches;
 }
 
+function detectMultiDimensionFacts(
+  text: string,
+  scopes: ScopeForFactResolution[]
+): {
+  factKey: string;
+  fact: ScopeFactDefinition;
+  scope: ScopeForFactResolution;
+  newValue: string;
+}[] {
+  const dimensions = parseDimensions(text);
+  const lengthDim = dimensions.find((d) => d.kind === "length_m");
+  const heightDim = dimensions.find((d) => d.kind === "height_m");
+  if (!lengthDim || !heightDim) return [];
+
+  const candidateScopes = findScopeByHint(scopes, /retaining|wall/i, text);
+  if (candidateScopes.length !== 1) return [];
+
+  const scope = candidateScopes[0]!;
+  const results: {
+    factKey: string;
+    fact: ScopeFactDefinition;
+    scope: ScopeForFactResolution;
+    newValue: string;
+  }[] = [];
+
+  const lengthFact = resolveFactForScope(scope, "length_m");
+  const heightFact = resolveFactForScope(scope, "height_m");
+
+  if (lengthFact) {
+    results.push({
+      factKey: lengthFact.key,
+      fact: lengthFact,
+      scope,
+      newValue: String(lengthDim.value),
+    });
+  }
+  if (heightFact) {
+    results.push({
+      factKey: heightFact.key,
+      fact: heightFact,
+      scope,
+      newValue: String(heightDim.value),
+    });
+  }
+
+  return results;
+}
+
 function detectFactKey(
   text: string,
   scopes: ScopeForFactResolution[]
@@ -401,20 +468,12 @@ function detectFactKey(
 }
 
 function parseNumericValue(text: string, fact: ScopeFactDefinition): string | null {
-  if (fact.unit === "m²" || fact.key.includes("area")) {
-    const match = text.match(AREA_UNIT_PATTERN);
-    if (match?.[1]) return match[1];
-  }
+  const parsed = parseNumericForFact(text, fact.key, fact.unit);
+  if (parsed) return parsed;
 
-  if (fact.unit === "m" || fact.key.includes("_m")) {
-    const match = text.match(LENGTH_UNIT_PATTERN);
-    if (match?.[1]) return match[1];
-  }
-
-  const bareNumber = text.match(
-    /(?:to|at|is|=|about|around|approximately)\s*(\d+(?:\.\d+)?)/i
-  );
-  if (bareNumber?.[1] && fact.type === "number") return bareNumber[1];
+  const scopeMentioned = /deck|wall|retaining|bathroom/i.test(text);
+  const bare = parseBareScopeNumber(text, scopeMentioned);
+  if (bare && fact.type === "number") return bare;
 
   return null;
 }
@@ -503,6 +562,21 @@ function parseSelectValue(
     }
   }
 
+  if (
+    fact.key.includes("has_pergola") ||
+    fact.key.includes("has_stairs") ||
+    fact.key.includes("has_balustrade")
+  ) {
+    if (/^add\s+/i.test(text.trim())) return "yes";
+    if (/^remove\s+/i.test(text.trim())) return "no";
+  }
+
+  if (fact.key.includes("machine_access")) {
+    const lower = text.toLowerCase();
+    if (/no\s+machine\s+access/i.test(lower)) return "no";
+    if (/machine\s+access\s+(?:is\s+)?available/i.test(lower)) return "yes";
+  }
+
   const yesNo = text.match(YES_NO_PATTERN);
   if (yesNo) {
     const token = yesNo[1].toLowerCase();
@@ -512,11 +586,17 @@ function parseSelectValue(
     }
   }
 
-  if (/^no\s+\w/i.test(text.trim()) && fact.type === "select") {
+  if (/^no\s+/i.test(text.trim()) && fact.type === "select") {
     return "no";
   }
   if (/^yes\s+\w/i.test(text.trim()) && fact.type === "select") {
     return "yes";
+  }
+  if (/^include\s+/i.test(text.trim()) && fact.type === "select") {
+    return "yes";
+  }
+  if (/^exclude\s+/i.test(text.trim()) && fact.type === "select") {
+    return "no";
   }
 
   return null;
@@ -555,13 +635,14 @@ function looksLikeFactUpdate(text: string): boolean {
     return true;
   }
   if (
-    /\b(?:the\s+)?(?:deck|bathroom|retaining\s*wall)\s+is\s+\d+/i.test(trimmed)
+    /\b(?:the\s+)?(?:deck|bathroom|retaining\s*wall)\s+is\s+\d+/i.test(trimmed) ||
+    /\b(?:deck|bathroom|retaining\s*wall)\s+(?:size|area)\s+is\s+\d+/i.test(trimmed)
   ) {
     return true;
   }
   if (/^(no|yes|none)\s+[a-z]/i.test(trimmed)) return true;
   if (
-    /client\s+(?:is\s+)?suppl|labour\s+only|exclude\s+materials|supply\s+and\s+install|install\s+only/i.test(
+    /client\s+(?:is\s+)?suppl|labour\s+only|exclude\s+materials|supply\s+and\s+install|client\s+has\s+their\s+own/i.test(
       trimmed
     )
   ) {
@@ -610,7 +691,25 @@ function detectClientSupplyUpdate(
   const bathroom = scopes.find(
     (s) => s.workAreaTypeKey === "Bathroom renovation"
   );
-  if (bathroom && /client\s+(?:is\s+)?suppl/i.test(lower)) {
+  if (bathroom && /client\s+has\s+their\s+own/i.test(lower) && /\bvanity\b/i.test(lower)) {
+    const fact = resolveFactForScope(bathroom, "fixtures_client_supplied");
+    if (fact) {
+      return {
+        matched: true,
+        confidence: 0.9,
+        scopeId: bathroom.scopeId,
+        scopeTypeKey: bathroom.workAreaTypeKey,
+        scopeName: bathroom.scopeName,
+        factKey: fact.key,
+        factLabel: fact.label,
+        currentValue: bathroom.answers[fact.key],
+        newValue: "yes",
+        requiresConfirmation: false,
+      };
+    }
+  }
+
+  if (bathroom && /client\s+(?:is\s+)?suppl|client\s+has\s+their\s+own/i.test(lower)) {
     const hasTiles = /\btiles?\b/i.test(lower);
     const hasFixtures = /\bvanity|toilet|fixtures|basin\b/i.test(lower);
 
@@ -670,12 +769,14 @@ function detectClientSupplyUpdate(
   }
 
   const deck = scopes.find((s) => s.workAreaTypeKey === "Deck");
-  if (deck && /labour\s+only|exclude\s+materials|client\s+suppl/i.test(lower)) {
+  if (deck && /labour\s+only|exclude\s+materials|client\s+suppl|supply\s+and\s+install/i.test(lower)) {
     const fact = resolveFactForScope(deck, "material_supply");
     if (fact) {
       const newValue = /labour\s+only|exclude\s+materials/i.test(lower)
         ? "labour_only"
-        : "client_supplied";
+        : /supply\s+and\s+install/i.test(lower)
+          ? "supply_and_install"
+          : "client_supplied";
       return {
         matched: true,
         confidence: 0.88,
@@ -714,6 +815,53 @@ export function resolveFactUpdate(
     };
   }
 
+  const deckSizeMatch = text.match(/\bdeck\s+size\s+is\s+(\d+(?:\.\d+)?)/i);
+  if (deckSizeMatch?.[1]) {
+    const deck = scopes.find((s) => s.workAreaTypeKey === "Deck");
+    if (deck) {
+      const fact = resolveFactForScope(deck, "area_m2");
+      if (fact) {
+        return {
+          matched: true,
+          confidence: 0.92,
+          scopeId: deck.scopeId,
+          scopeTypeKey: deck.workAreaTypeKey,
+          scopeName: deck.scopeName,
+          factKey: fact.key,
+          factLabel: fact.label,
+          currentValue: deck.answers[fact.key],
+          newValue: deckSizeMatch[1],
+          unit: fact.unit,
+          requiresConfirmation: false,
+        };
+      }
+    }
+  }
+
+  const vanityMatch = /client\s+has\s+their\s+own\s+vanity/i.test(text);
+  if (vanityMatch) {
+    const bathroom = scopes.find(
+      (s) => s.workAreaTypeKey === "Bathroom renovation"
+    );
+    if (bathroom) {
+      const fact = resolveFactForScope(bathroom, "fixtures_client_supplied");
+      if (fact) {
+        return {
+          matched: true,
+          confidence: 0.9,
+          scopeId: bathroom.scopeId,
+          scopeTypeKey: bathroom.workAreaTypeKey,
+          scopeName: bathroom.scopeName,
+          factKey: fact.key,
+          factLabel: fact.label,
+          currentValue: bathroom.answers[fact.key],
+          newValue: "yes",
+          requiresConfirmation: false,
+        };
+      }
+    }
+  }
+
   if (!looksLikeFactUpdate(text)) {
     return { matched: false, confidence: 0, requiresConfirmation: false };
   }
@@ -721,6 +869,33 @@ export function resolveFactUpdate(
   const clientSupply = detectClientSupplyUpdate(text, scopes);
   if (clientSupply) {
     return clientSupply;
+  }
+
+  const multiDims = detectMultiDimensionFacts(text, scopes);
+  if (multiDims.length >= 2) {
+    const primary = multiDims[0]!;
+    const additionalFacts = multiDims.slice(1).map((m) => ({
+      factKey: m.factKey,
+      factLabel: m.fact.label,
+      newValue: m.newValue,
+      previousValue: m.scope.answers[m.factKey],
+      unit: m.fact.unit,
+    }));
+
+    return {
+      matched: true,
+      confidence: 0.92,
+      scopeId: primary.scope.scopeId,
+      scopeTypeKey: primary.scope.workAreaTypeKey,
+      scopeName: primary.scope.scopeName,
+      factKey: primary.factKey,
+      factLabel: primary.fact.label,
+      currentValue: primary.scope.answers[primary.factKey],
+      newValue: primary.newValue,
+      unit: primary.fact.unit,
+      additionalFacts,
+      requiresConfirmation: false,
+    };
   }
 
   const factMatches = detectFactKey(text, scopes);
@@ -736,6 +911,39 @@ export function resolveFactUpdate(
   const uniqueMatches = [...uniqueByScopeFact.values()];
 
   if (uniqueMatches.length > 1) {
+    const textLower = text.toLowerCase();
+    const scopeHinted = uniqueMatches.filter((m) => {
+      const name = m.scope.scopeName.toLowerCase();
+      const typeKey = m.scope.workAreaTypeKey.toLowerCase();
+      return (
+        textLower.includes(name) ||
+        (textLower.includes("deck") && typeKey === "deck") ||
+        (textLower.includes("wall") && typeKey.includes("retaining")) ||
+        (textLower.includes("bathroom") && typeKey.includes("bathroom"))
+      );
+    });
+    if (scopeHinted.length === 1) {
+      const { scope, fact, factKey } = scopeHinted[0]!;
+      const newValue = parseNewValue(text, fact);
+      if (newValue) {
+        const hasExplicitVerb = COMMAND_VERB_PATTERN.test(text);
+        const confidence = hasExplicitVerb ? 0.92 : 0.86;
+        return {
+          matched: true,
+          confidence,
+          scopeId: scope.scopeId,
+          scopeTypeKey: scope.workAreaTypeKey,
+          scopeName: scope.scopeName,
+          factKey,
+          factLabel: fact.label,
+          currentValue: scope.answers[factKey],
+          newValue,
+          unit: fact.unit,
+          requiresConfirmation: confidence < 0.85,
+        };
+      }
+    }
+
     const areaFacts = uniqueMatches.filter((m) => m.fact.key.includes("area"));
     if (areaFacts.length > 1) {
       return {
@@ -788,11 +996,15 @@ export function resolveFactUpdate(
   }
 
   const currentValue = scope.answers[factKey];
-  const hasExplicitVerb = COMMAND_VERB_PATTERN.test(text);
+  const hasExplicitVerb =
+    COMMAND_VERB_PATTERN.test(text) ||
+    /machine\s+access|no\s+machine\s+access|no\s+stairs|include\s+stairs|exclude\s+/i.test(
+      text
+    );
   const confidence = hasExplicitVerb ? 0.92 : 0.82;
 
   const requiresConfirmation =
-    confidence < 0.8 ||
+    confidence < 0.85 ||
     (currentValue != null && currentValue !== newValue && !hasExplicitVerb);
 
   let confirmationMessage: string | undefined;

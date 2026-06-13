@@ -12,6 +12,9 @@ import type {
 } from "@/lib/assistant-v2/item-resolution/types";
 import { parseQuickEstimateSummary } from "@/lib/project-assistant-summary";
 import { getQuickEstimateForProject } from "@/lib/quick-estimate-data";
+import {
+  CONFIDENCE_EXECUTE_THRESHOLD,
+} from "@/lib/assistant-v2/intent/types";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database";
 
@@ -172,7 +175,7 @@ function buildResultFromMatch(
   const intent = params.commandIntent ?? "update";
 
   if (intent === "remove") {
-    if (confidence >= 0.8) {
+    if (confidence >= CONFIDENCE_EXECUTE_THRESHOLD) {
       return {
         matched: true,
         confidence,
@@ -212,7 +215,7 @@ function buildResultFromMatch(
   }
 
   // update / add
-  if (confidence >= 0.8) {
+  if (confidence >= CONFIDENCE_EXECUTE_THRESHOLD) {
     return {
       matched: true,
       confidence,

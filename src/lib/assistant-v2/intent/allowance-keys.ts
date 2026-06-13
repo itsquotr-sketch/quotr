@@ -44,9 +44,22 @@ export const ALLOWANCE_DEFINITIONS: AllowanceKeyDefinition[] = [
   },
   {
     key: "engineering_allowance",
-    label: "Engineering allowance",
-    aliases: ["engineering", "engineering allowance", "engineering fee"],
+    label: "Engineering / consent risk",
+    aliases: [
+      "engineering",
+      "engineering allowance",
+      "engineering fee",
+      "consent",
+      "consent allowance",
+      "engineering/consent",
+    ],
     suppressesConstraintSlugs: ["retaining-engineering-risk"],
+  },
+  {
+    key: "asbestos_allowance",
+    label: "Asbestos risk allowance",
+    aliases: ["asbestos", "asbestos risk", "asbestos allowance"],
+    suppressesConstraintSlugs: ["bathroom-asbestos-risk"],
   },
   {
     key: "delivery_cartage",

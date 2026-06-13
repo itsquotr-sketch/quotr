@@ -87,32 +87,51 @@ export async function executeUpdateScopeFact(
     params.projectId
   );
 
-  const { data: question } = await supabase
-    .from("scope_questions")
-    .select("id, project_scope_id, question_key")
-    .eq("project_scope_id", params.payload.scopeId)
-    .eq("organisation_id", params.organisationId)
-    .eq("question_key", params.payload.factKey)
-    .maybeSingle();
+  const allUpdates = [
+    {
+      factKey: params.payload.factKey,
+      factLabel: params.payload.factLabel,
+      newValue: params.payload.newValue,
+      previousValue: params.payload.previousValue,
+      unit: params.payload.unit,
+    },
+    ...(params.payload.additionalFacts ?? []),
+  ];
 
-  if (!question) {
-    return {
-      success: false,
-      message: "",
-      error: `I couldn't find the question for ${params.payload.factLabel.toLowerCase()}. Try editing the work area directly.`,
-    };
+  const batchAnswers: {
+    scopeQuestionId: string;
+    projectScopeId: string;
+    answer: string;
+  }[] = [];
+
+  for (const update of allUpdates) {
+    const { data: question } = await supabase
+      .from("scope_questions")
+      .select("id, project_scope_id, question_key")
+      .eq("project_scope_id", params.payload.scopeId)
+      .eq("organisation_id", params.organisationId)
+      .eq("question_key", update.factKey)
+      .maybeSingle();
+
+    if (!question) {
+      return {
+        success: false,
+        message: "",
+        error: `I couldn't find the question for ${update.factLabel.toLowerCase()}. Try editing the work area directly.`,
+      };
+    }
+
+    batchAnswers.push({
+      scopeQuestionId: question.id,
+      projectScopeId: question.project_scope_id,
+      answer: update.newValue,
+    });
   }
 
   const persistError = await persistScopeAnswersBatch(
     supabase,
     params.organisationId,
-    [
-      {
-        scopeQuestionId: question.id,
-        projectScopeId: question.project_scope_id,
-        answer: params.payload.newValue,
-      },
-    ]
+    batchAnswers
   );
 
   if (persistError) {
@@ -151,8 +170,44 @@ export async function executeUpdateScopeFact(
   const factLabel = params.payload.factLabel.toLowerCase();
 
   let message: string;
-  if (previousFormatted && previousFormatted !== newFormatted) {
-    message = `${params.payload.scopeName} ${params.payload.factLabel.toLowerCase()} changed from ${previousFormatted} to ${newFormatted}.${formatEstimateDelta(recalc.estimateChange)}`;
+  const factKey = params.payload.factKey;
+  const isClientSuppliedUpdate =
+    factKey.includes("fixtures_client_supplied") ||
+    factKey.includes("tiles_supplied") ||
+    factKey.includes("material_supply") ||
+    factKey.includes("balustrade_supply");
+
+  if (isClientSuppliedUpdate) {
+    const suppliedItems: string[] = [];
+    const lowerAnswer = params.payload.newValue.toLowerCase();
+    if (factKey.includes("tiles")) suppliedItems.push("tiles");
+    if (factKey.includes("fixtures") || /vanity|toilet|basin/i.test(params.payload.newValue)) {
+      if (/partial|yes|vanity|toilet/i.test(lowerAnswer)) {
+        if (/vanity/i.test(params.payload.newValue) || factKey.includes("fixtures")) {
+          suppliedItems.push("vanity");
+        }
+        if (/toilet/i.test(params.payload.newValue)) suppliedItems.push("toilet");
+        if (/tile/i.test(params.payload.newValue)) suppliedItems.push("tiles");
+      }
+    }
+    if (lowerAnswer === "labour_only" || lowerAnswer === "client_supplied") {
+      message =
+        "Got it — I've marked materials as client-supplied and removed those material allowances from the estimate.";
+    } else if (suppliedItems.length > 0) {
+      message = `Got it — I've marked ${suppliedItems.join(" and ")} as client-supplied and removed those material allowances from the estimate.${formatEstimateDelta(recalc.estimateChange)}`;
+    } else {
+      message = `Got it — I've updated client-supplied items and adjusted material allowances.${formatEstimateDelta(recalc.estimateChange)}`;
+    }
+  } else if (previousFormatted && previousFormatted !== newFormatted) {
+    message = `Updated ${params.payload.scopeName} ${params.payload.factLabel.toLowerCase()} from ${previousFormatted} to ${newFormatted}.${formatEstimateDelta(recalc.estimateChange)}`;
+  } else if ((params.payload.additionalFacts?.length ?? 0) > 0) {
+    const extras = params.payload.additionalFacts!
+      .map(
+        (f) =>
+          `${f.factLabel.toLowerCase()} to ${formatFactValue(f.newValue, f.factKey, f.unit)}`
+      )
+      .join(", ");
+    message = `Updated ${scopeLabel} ${factLabel} to ${newFormatted} and ${extras}.${formatEstimateDelta(recalc.estimateChange)}`;
   } else {
     message = `Updated ${scopeLabel} ${factLabel} to ${newFormatted}.${formatEstimateDelta(recalc.estimateChange)}`;
   }
@@ -165,6 +220,7 @@ export async function executeUpdateScopeFact(
     content: message,
     metadata: {
       messageType: "assistant_text",
+      responseType: "action_applied",
       commandIntent: "update_existing_fact",
       scopeId: params.payload.scopeId,
       factKey: params.payload.factKey,

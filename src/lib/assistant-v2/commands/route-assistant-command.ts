@@ -4,6 +4,7 @@ import { executeRemoveAllowance } from "@/lib/assistant-v2/commands/remove-allow
 import { executeUpdateConstraint } from "@/lib/assistant-v2/commands/update-constraint";
 import { executeUpdateFinishLevel } from "@/lib/assistant-v2/commands/update-finish-level";
 import { executeUpdateAllowance } from "@/lib/assistant-v2/commands/update-allowance";
+import { executeUpdateMargin } from "@/lib/assistant-v2/commands/update-margin";
 import { executeUpdateScopeFact } from "@/lib/assistant-v2/commands/update-scope-fact";
 import {
   executeAddWorkArea,
@@ -19,6 +20,7 @@ import {
   removeAllowancePayloadSchema,
   updateConstraintPayloadSchema,
   updateFinishLevelPayloadSchema,
+  updateMarginPayloadSchema,
   updateScopeFactPayloadSchema,
   workAreaCommandPayloadSchema,
   onlyIncludeWorkAreasPayloadSchema,
@@ -122,6 +124,25 @@ export async function routeAssistantCommand(
         payload: parsed.data,
       });
       return { ...result, intent: "update_finish_level" };
+    }
+
+    case "update_margin": {
+      const parsed = updateMarginPayloadSchema.safeParse(params.payload);
+      if (!parsed.success) {
+        return {
+          success: false,
+          message: "",
+          error: "Invalid margin command. What percentage should I use?",
+          intent: "update_margin",
+        };
+      }
+      const result = await executeUpdateMargin(supabase, {
+        organisationId: params.organisationId,
+        projectId: params.projectId,
+        userId: params.userId,
+        payload: parsed.data,
+      });
+      return { ...result, intent: "update_margin" };
     }
 
     case "update_constraint": {

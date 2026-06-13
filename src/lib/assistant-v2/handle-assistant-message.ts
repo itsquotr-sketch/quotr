@@ -1,5 +1,5 @@
 import { routeAssistantCommand } from "@/lib/assistant-v2/commands/route-assistant-command";
-
+import { buildCommandEcho, isActionIntent } from "@/lib/assistant-v2/build-command-echo";
 import { insertAssistantMessage } from "@/lib/assistant-v2/assistant-messages-data";
 
 import {
@@ -13,6 +13,7 @@ import {
 import {
 
   CONFIDENCE_EXECUTE_THRESHOLD,
+  CONFIDENCE_CONFIRM_THRESHOLD,
 
   FALLBACK_ACTION_OPTIONS,
 
@@ -56,7 +57,7 @@ type Supabase = SupabaseClient<Database>;
 
 const DISCOVERY_TIMEOUT_MS = 15000;
 
-const CLASSIFICATION_TIMEOUT_MS = 5000;
+const CLASSIFICATION_TIMEOUT_MS = 8000;
 
 
 
@@ -654,6 +655,14 @@ async function insertConfirmationMessage(
 
       messageType: "command_confirmation",
 
+      responseType:
+
+        params.classification.confidence < CONFIDENCE_CONFIRM_THRESHOLD
+
+          ? "clarification_required"
+
+          : "confirmation_required",
+
       intent: params.classification.intent,
 
       confidence: params.classification.confidence,
@@ -892,6 +901,40 @@ export async function handleAssistantMessage(
   if (shouldRunDiscovery(classification.intent)) {
 
     return executeDiscoveryFlow(supabase, params);
+
+  }
+
+
+
+  const echoText =
+
+    classification.commandEcho ?? buildCommandEcho(classification);
+
+  if (echoText && isActionIntent(classification.intent)) {
+
+    await insertAssistantMessage(supabase, {
+
+      organisationId: params.organisationId,
+
+      projectId: params.projectId,
+
+      userId: params.userId,
+
+      role: "assistant",
+
+      content: echoText,
+
+      metadata: {
+
+        messageType: "assistant_text",
+
+        responseType: "command_echo",
+
+        intent: classification.intent,
+
+      },
+
+    });
 
   }
 
