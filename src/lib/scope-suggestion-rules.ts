@@ -2,6 +2,8 @@ import {
   getAllScopeTemplates,
   matchTemplatesFromNotes,
 } from "@/lib/scope-templates";
+import { classifyDetectedScope } from "@/lib/scopes/classification/classify-detected-scope";
+import { resolveWorkAreaTypeKeyFromCanonical } from "@/lib/scopes/classification/scope-taxonomy";
 
 export type GeneratedScopeSuggestion = {
   suggestedScopeType: string;
@@ -60,19 +62,19 @@ export const WORK_SCOPE_SUGGESTION_RULES: ScopeSuggestionRule[] = [
   {
     suggestedScopeType: "Painting",
     suggestedName: "Painting",
-    keywords: ["painting", "paint"],
+    keywords: ["painting project", "full repaint", "repaint entire"],
     locationArea: null,
   },
   {
     suggestedScopeType: "Flooring",
     suggestedName: "Flooring",
-    keywords: ["flooring", "carpet", "vinyl", "laminate", "timber floor"],
+    keywords: ["flooring project", "floor replacement", "new floors throughout"],
     locationArea: null,
   },
   {
     suggestedScopeType: "Internal Alteration",
     suggestedName: "Internal alteration",
-    keywords: ["wall", "framing", "gib", "internal alteration", "doorway"],
+    keywords: ["internal alteration", "internal works", "internal alter"],
     locationArea: null,
   },
   {
@@ -169,9 +171,11 @@ export function generateScopeSuggestionsFromNotes(
 
   const suggestions: GeneratedScopeSuggestion[] = [];
   const coveredTypes = new Set<string>();
+  const parentWorkAreaKeys: string[] = [];
 
   for (const match of matchTemplatesFromNotes(trimmed)) {
     coveredTypes.add(match.template.workAreaTypeKey);
+    parentWorkAreaKeys.push(match.template.key);
     suggestions.push({
       suggestedScopeType: match.template.workAreaTypeKey,
       suggestedName: match.suggestedName,
@@ -194,6 +198,50 @@ export function generateScopeSuggestionsFromNotes(
       continue;
     }
 
+    const classified = classifyDetectedScope(rule.suggestedName, {
+      parentWorkAreaKeys,
+      notesContext: trimmed,
+    });
+
+    if (
+      classified.classification === "broad_category" ||
+      classified.classification === "work_package" ||
+      classified.classification === "unknown"
+    ) {
+      if (classified.classification === "broad_category") {
+        suggestions.push({
+          suggestedScopeType: classified.canonicalKey ?? rule.suggestedScopeType,
+          suggestedName: rule.suggestedName,
+          suggestedDescription: buildDescription(
+            rule.suggestedScopeType,
+            matchedKeywords
+          ),
+          suggestedLocationArea: rule.locationArea,
+          confidence: classified.confidence,
+          matchedKeywords,
+        });
+      }
+      continue;
+    }
+
+    if (classified.classification === "work_area" && classified.canonicalKey) {
+      const typeKey = resolveWorkAreaTypeKeyFromCanonical(classified.canonicalKey);
+      if (coveredTypes.has(typeKey)) continue;
+      coveredTypes.add(typeKey);
+      suggestions.push({
+        suggestedScopeType: typeKey,
+        suggestedName: rule.suggestedName,
+        suggestedDescription: buildDescription(rule.suggestedScopeType, matchedKeywords),
+        suggestedLocationArea: rule.locationArea,
+        confidence: computeSuggestionConfidence(
+          matchedKeywords.length,
+          rule.keywords.length
+        ),
+        matchedKeywords,
+      });
+      continue;
+    }
+
     suggestions.push({
       suggestedScopeType: rule.suggestedScopeType,
       suggestedName: rule.suggestedName,
@@ -211,15 +259,38 @@ export function generateScopeSuggestionsFromNotes(
   }
 
   if (suggestions.length === 0) {
+    const vagueInternal = /internal\s+alteration|internal\s+works/i.test(trimmed);
+    if (vagueInternal) {
+      return [
+        {
+          suggestedScopeType: "internal_alteration",
+          suggestedName: "Internal alteration",
+          suggestedDescription:
+            "Internal works mentioned — needs clarification before estimating.",
+          suggestedLocationArea: null,
+          confidence: 0.35,
+          matchedKeywords: ["internal alteration"],
+        },
+      ];
+    }
     return [CUSTOM_SCOPE_FALLBACK];
   }
 
   const hasSpecificScope = suggestions.some(
-    (item) => item.suggestedScopeType !== "General Building Works"
+    (item) =>
+      item.suggestedScopeType !== "General Building Works" &&
+      item.suggestedScopeType !== "internal_alteration" &&
+      item.suggestedScopeType !== "internal_works"
   );
   const filtered = hasSpecificScope
     ? suggestions.filter(
-        (item) => item.suggestedScopeType !== "General Building Works"
+        (item) =>
+          item.suggestedScopeType !== "General Building Works" &&
+          !(
+            (item.suggestedScopeType === "internal_alteration" ||
+              item.suggestedScopeType === "Internal Alteration") &&
+            hasSpecificScope
+          )
       )
     : suggestions;
 

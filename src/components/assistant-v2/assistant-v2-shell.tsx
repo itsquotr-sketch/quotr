@@ -7,7 +7,7 @@ import { AssistantChatProvider } from "@/components/assistant-v2/assistant-chat-
 import { AssistantV2Chat } from "@/components/assistant-v2/assistant-v2-chat";
 import { AssistantV2Composer } from "@/components/assistant-v2/assistant-v2-composer";
 import { AssistantV2Header } from "@/components/assistant-v2/assistant-v2-header";
-import { AssistantV2LiveEstimatePanel } from "@/components/assistant-v2/assistant-v2-live-estimate-panel";
+import { AssistantV2ConnectedEstimatePanel } from "@/components/assistant-v2/assistant-v2-connected-estimate-panel";
 import { AssistantV2ProjectDetails } from "@/components/assistant-v2/assistant-v2-project-details";
 import { AssistantV2WorkAreas } from "@/components/assistant-v2/assistant-v2-work-areas";
 import {
@@ -16,8 +16,14 @@ import {
 } from "@/components/projects/estimate-update-context";
 import { buildMergedAnswersForScope } from "@/lib/assistant-v2/build-merged-answers";
 import type { AssistantMessageRow } from "@/lib/assistant-v2/assistant-messages-data";
+import { evaluateAssistantProjectCompleteness } from "@/lib/assistant-v2/completeness/build-evaluate-input";
+import type { ProjectCompletenessResult } from "@/lib/assistant-v2/completeness/evaluate-project-completeness";
 import {
-  buildMissingInformationLabels,
+  getCriticalOrUsefulMissing,
+  getCurrentMissingItems,
+  getOptionalMissing,
+} from "@/lib/assistant-v2/missing/get-current-missing-items";
+import {
   computeProjectCompleteness,
   type WorkAreaCompletenessInput,
 } from "@/lib/assistant-v2/compute-information-completeness";
@@ -38,6 +44,7 @@ import type {
   ProjectScopeBuilderInput,
   ProjectScopeSuggestion,
   QuickEstimate,
+  ProjectScopePackage,
 } from "@/types/database";
 
 export interface AssistantV2ShellProps {
@@ -52,6 +59,7 @@ export interface AssistantV2ShellProps {
   discovery: DiscoveryResult | null;
   chatMessages: AssistantMessageRow[];
   declinedConstraintSlugs: string[];
+  scopePackages: ProjectScopePackage[];
   clientName: string;
   clientPhone: string | null;
   clientEmail: string | null;
@@ -76,13 +84,14 @@ function AssistantV2ShellInner({
   selectedConstraintSlugs,
   chatMessages,
   declinedConstraintSlugs,
+  scopePackages: initialScopePackages,
   clientName,
   clientPhone,
   clientEmail,
 }: AssistantV2ShellProps) {
   const router = useRouter();
   const [resetPending, startReset] = useTransition();
-  const { recordEstimateSnapshot } = useEstimateUpdate();
+  const { recordEstimateSnapshot, breakdownOpenRequest } = useEstimateUpdate();
 
   const [liveEstimate, setLiveEstimate] = useState(quickEstimate);
   const [liveScopeQuestions, setLiveScopeQuestions] = useState(scopeQuestions);
@@ -94,6 +103,7 @@ function AssistantV2ShellInner({
     selectedConstraintSlugs
   );
   const [liveChatMessages, setLiveChatMessages] = useState(chatMessages);
+  const [liveScopePackages, setLiveScopePackages] = useState(initialScopePackages);
 
   useEffect(() => {
     setLiveEstimate(quickEstimate);
@@ -102,6 +112,7 @@ function AssistantV2ShellInner({
     setLiveDeclinedConstraints(declinedConstraintSlugs);
     setLiveSelectedConstraints(selectedConstraintSlugs);
     setLiveChatMessages(chatMessages);
+    setLiveScopePackages(initialScopePackages);
   }, [
     quickEstimate,
     scopeQuestions,
@@ -109,6 +120,7 @@ function AssistantV2ShellInner({
     declinedConstraintSlugs,
     selectedConstraintSlugs,
     chatMessages,
+    initialScopePackages,
   ]);
 
   const handleAssistantSync = useCallback((payload: AssistantSyncPayload) => {
@@ -118,19 +130,25 @@ function AssistantV2ShellInner({
     setLiveConfirmedScopes(payload.confirmedScopes);
     setLiveDeclinedConstraints(payload.declinedConstraintSlugs);
     setLiveSelectedConstraints(payload.selectedConstraintSlugs);
+    setLiveScopePackages(payload.scopePackages ?? []);
   }, []);
 
   const scopeGroups: ScopeGroupInput[] = useMemo(() => {
-    return liveConfirmedScopes.map((scope) => ({
-      scopeId: scope.id,
-      scopeName: scope.name,
-      scopeTypeName: scope.scope_types?.name ?? null,
-      questions: liveScopeQuestions.filter((q) => q.project_scope_id === scope.id),
-    }));
+    return liveConfirmedScopes
+      .filter((scope) => scope.include_in_quick_estimate !== false)
+      .map((scope) => ({
+        scopeId: scope.id,
+        scopeName: scope.name,
+        scopeTypeName: scope.scope_types?.name ?? null,
+        questions: liveScopeQuestions.filter((q) => q.project_scope_id === scope.id),
+      }));
   }, [liveConfirmedScopes, liveScopeQuestions]);
 
   const workAreas: WorkAreaCompletenessInput[] = useMemo(() => {
     return liveConfirmedScopes.map((scope) => ({
+      scopeId: scope.id,
+      scopeName: scope.name,
+      included: scope.include_in_quick_estimate !== false,
       workAreaTypeKey: resolveWorkAreaTypeKey(
         scope.scope_types?.name,
         scope.name
@@ -145,6 +163,29 @@ function AssistantV2ShellInner({
     }));
   }, [liveConfirmedScopes, liveScopeQuestions, discovery]);
 
+  const finishLevel = normaliseQualityLevel(liveEstimate?.quality_level);
+
+  const projectCompleteness: ProjectCompletenessResult = useMemo(() => {
+    return evaluateAssistantProjectCompleteness({
+      scopes: liveConfirmedScopes,
+      scopeQuestions: liveScopeQuestions,
+      discovery,
+      qualityLevel: finishLevel,
+      selectedConstraintSlugs: liveSelectedConstraints,
+      declinedConstraintSlugs: liveDeclinedConstraints,
+      pendingSuggestionCount: suggestions.filter((s) => s.status === "pending")
+        .length,
+    });
+  }, [
+    liveConfirmedScopes,
+    liveScopeQuestions,
+    discovery,
+    finishLevel,
+    liveSelectedConstraints,
+    liveDeclinedConstraints,
+    suggestions,
+  ]);
+
   const completenessPercent = useMemo(
     () => computeProjectCompleteness(workAreas),
     [workAreas]
@@ -155,62 +196,88 @@ function AssistantV2ShellInner({
   const qualityLevel = (liveEstimate?.confidence_level ??
     "low") as QuickEstimateConfidenceLevel;
 
-  const finishLevel = normaliseQualityLevel(liveEstimate?.quality_level);
-
   const estimateQualityTier = useMemo(() => {
+    const includedCount = workAreas.filter((a) => a.included !== false).length;
+    const missingItems = getCurrentMissingItems({
+      workAreas: workAreas.map((area) => ({
+        scopeId: area.scopeId ?? "",
+        scopeName: area.scopeName ?? "Work area",
+        workAreaTypeKey: area.workAreaTypeKey,
+        answers: area.answers,
+        included: area.included !== false,
+      })),
+      estimateTrace: estimateSummary?.estimateTrace,
+    });
+    const criticalOrUseful = getCriticalOrUsefulMissing(missingItems);
+    const optionalOnly =
+      criticalOrUseful.length === 0 &&
+      getOptionalMissing(missingItems).length > 0;
+
     return resolveEstimateQualityTier({
       confidenceLevel: qualityLevel,
-      confidenceScore: estimateSummary?.confidenceScore ?? completenessPercent,
-      hasKeyMeasurements: workAreas.length > 0 && completenessPercent >= 50,
-      workAreasConfirmed: liveConfirmedScopes.length > 0,
+      confidenceScore:
+        estimateSummary?.confidenceScore ?? projectCompleteness.overallCompleteness,
+      hasKeyMeasurements:
+        includedCount > 0 &&
+        (projectCompleteness.overallCompleteness >= 50 ||
+          projectCompleteness.projectStatus === "enough_for_draft" ||
+          projectCompleteness.projectStatus === "quote_ready"),
+      workAreasConfirmed: includedCount > 0,
       qualityLevel: finishLevel,
       siteConstraintsAssessed:
         (estimateSummary?.constraintsApplied?.length ?? 0) > 0 ||
-        liveDeclinedConstraints.length > 0,
-      missingInformationCount: estimateSummary?.missingInformation?.length ?? 0,
+        liveDeclinedConstraints.length > 0 ||
+        projectCompleteness.projectStatus === "enough_for_draft" ||
+        projectCompleteness.projectStatus === "quote_ready",
+      missingInformationCount:
+        criticalOrUseful.length > 0
+          ? criticalOrUseful.length
+          : (estimateSummary?.missingInformation?.length ?? 0),
+      criticalOrUsefulMissingCount: criticalOrUseful.length,
+      optionalOnlyMissing: optionalOnly,
     });
   }, [
     workAreas,
     qualityLevel,
     estimateSummary,
-    completenessPercent,
-    liveConfirmedScopes.length,
+    projectCompleteness,
     liveDeclinedConstraints.length,
     finishLevel,
   ]);
 
   const qualityFactors = useMemo(() => {
-    const primary = workAreas[0];
-    if (!primary) return [];
-    return buildEstimateQualityFactors({
-      hasKeyMeasurements: completenessPercent >= 50,
-      workAreasConfirmed: liveConfirmedScopes.length > 0,
-      qualityLevel: finishLevel,
-      siteConstraintsAssessed:
-        (estimateSummary?.constraintsApplied?.length ?? 0) > 0,
-      materialsKnown: Object.entries(primary.answers).some(
+    const included = workAreas.filter((a) => a.included !== false);
+    const materialsKnown = included.some((area) =>
+      Object.entries(area.answers).some(
         ([key, val]) => key.includes("material") && val && val !== "unknown"
-      ),
-      accessKnown: Object.entries(primary.answers).some(
+      )
+    );
+    const accessKnown = included.some((area) =>
+      Object.entries(area.answers).some(
         ([key, val]) =>
           (key.includes("access") || key.includes("level_type")) &&
           val &&
           val !== "unknown"
-      ),
+      )
+    );
+
+    return buildEstimateQualityFactors({
+      hasKeyMeasurements: projectCompleteness.overallCompleteness >= 50,
+      workAreasConfirmed: included.length > 0,
+      qualityLevel: finishLevel,
+      siteConstraintsAssessed:
+        (estimateSummary?.constraintsApplied?.length ?? 0) > 0 ||
+        liveDeclinedConstraints.length > 0,
+      materialsKnown,
+      accessKnown,
     });
   }, [
     workAreas,
-    completenessPercent,
-    liveConfirmedScopes.length,
+    projectCompleteness.overallCompleteness,
     finishLevel,
     estimateSummary,
+    liveDeclinedConstraints.length,
   ]);
-
-  const missingInformation = useMemo(() => {
-    const fromSummary = estimateSummary?.missingInformation ?? [];
-    if (fromSummary.length > 0) return fromSummary;
-    return buildMissingInformationLabels(workAreas);
-  }, [estimateSummary, workAreas]);
 
   const costMid =
     liveEstimate?.estimated_cost_low != null &&
@@ -246,15 +313,23 @@ function AssistantV2ShellInner({
 
   const showWelcome = liveChatMessages.length === 0;
 
-  const estimatePanelProps = {
+  const estimatePanelBaseProps = {
     projectId,
     quickEstimate: liveEstimate,
-    estimateQualityTier,
     qualityFactors,
-    missingInformation,
     lastEstimateChange: estimateSummary?.lastEstimateChange ?? null,
     costBreakdown: estimateSummary?.costBreakdown ?? null,
     confidenceScore: estimateSummary?.confidenceScore ?? completenessPercent,
+    confidenceLevel: qualityLevel,
+    qualityLevel: finishLevel,
+    hasKeyMeasurements: projectCompleteness.overallCompleteness >= 50,
+    workAreasConfirmed: workAreas.filter((a) => a.included !== false).length > 0,
+    siteConstraintsAssessed:
+      (estimateSummary?.constraintsApplied?.length ?? 0) > 0 ||
+      liveDeclinedConstraints.length > 0 ||
+      projectCompleteness.projectStatus === "enough_for_draft" ||
+      projectCompleteness.projectStatus === "quote_ready",
+    estimateTrace: estimateSummary?.estimateTrace ?? null,
     finishLevel: labelForQualityLevel(finishLevel),
     estimateIncludes: estimateSummary?.workAreasIncluded ?? [],
     estimateExcludes: estimateSummary?.workAreasExcluded ?? [],
@@ -262,6 +337,8 @@ function AssistantV2ShellInner({
     allowancesIncluded: estimateSummary?.allowances ?? [],
     rateSourceLines: estimateSummary?.rateSourceLines ?? [],
     rateSourceDetail: estimateSummary?.rateSourceDetail ?? null,
+    stagedRatePrompt: estimateSummary?.stagedRatePrompt ?? null,
+    breakdownOpenRequest,
     benchmarkScopesForOnboarding:
       estimateSummary?.benchmarkScopesForOnboarding ?? [],
     onEstimateSync: handleAssistantSync,
@@ -278,20 +355,23 @@ function AssistantV2ShellInner({
       />
 
       <div className="flex flex-1 flex-col lg:flex-row lg:gap-6 lg:px-6 lg:py-4">
-        <div className="flex min-w-0 flex-1 flex-col lg:w-[70%]">
-          <div className="border-b px-4 py-3 lg:hidden">
-            <AssistantV2LiveEstimatePanel {...estimatePanelProps} compact />
-          </div>
+        <AssistantChatProvider
+          projectId={projectId}
+          persistedMessages={liveChatMessages}
+          initialWorkAreas={workAreas}
+          selectedConstraintSlugs={liveSelectedConstraints}
+          initialDeclinedConstraintSlugs={liveDeclinedConstraints}
+          initialQualityLevel={finishLevel}
+          onSync={handleAssistantSync}
+        >
+          <div className="flex min-w-0 flex-1 flex-col lg:w-[70%]">
+            <div className="border-b px-4 py-3 lg:hidden">
+              <AssistantV2ConnectedEstimatePanel
+                {...estimatePanelBaseProps}
+                compact
+              />
+            </div>
 
-          <AssistantChatProvider
-            projectId={projectId}
-            persistedMessages={liveChatMessages}
-            initialWorkAreas={workAreas}
-            selectedConstraintSlugs={liveSelectedConstraints}
-            initialDeclinedConstraintSlugs={liveDeclinedConstraints}
-            initialQualityLevel={finishLevel}
-            onSync={handleAssistantSync}
-          >
             <div className="flex min-h-0 flex-1 flex-col">
               <AssistantV2Chat
                 projectId={projectId}
@@ -301,7 +381,11 @@ function AssistantV2ShellInner({
                 scopeGroups={scopeGroups}
                 scopeQuestions={liveScopeQuestions}
                 qualityLevel={finishLevel}
+                projectCompleteness={projectCompleteness}
                 showGreeting={false}
+                benchmarkScopesForOnboarding={
+                  estimateSummary?.benchmarkScopesForOnboarding ?? []
+                }
               />
 
               <div className="shrink-0 border-t bg-background px-4 py-3 lg:px-0">
@@ -317,6 +401,7 @@ function AssistantV2ShellInner({
                   confirmedScopes={liveConfirmedScopes}
                   scopeQuestions={liveScopeQuestions}
                   discovery={discovery}
+                  scopePackages={liveScopePackages}
                 />
                 <AssistantV2ProjectDetails
                   project={project}
@@ -326,12 +411,12 @@ function AssistantV2ShellInner({
                 />
               </div>
             </div>
-          </AssistantChatProvider>
-        </div>
+          </div>
 
-        <aside className="hidden w-full shrink-0 lg:block lg:w-[30%]">
-          <AssistantV2LiveEstimatePanel {...estimatePanelProps} />
-        </aside>
+          <aside className="hidden w-full shrink-0 lg:block lg:w-[30%]">
+            <AssistantV2ConnectedEstimatePanel {...estimatePanelBaseProps} />
+          </aside>
+        </AssistantChatProvider>
       </div>
     </div>
   );

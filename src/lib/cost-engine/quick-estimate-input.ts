@@ -17,6 +17,7 @@ import type {
   MaterialRate,
   PackageRate,
   Project,
+  ProjectAllowance,
   QuickEstimate,
   ScopeRate,
   SubcontractorRate,
@@ -63,6 +64,7 @@ export type QuickEstimateInput = {
   allWorkAreasExcluded?: boolean;
   /** True when user has confirmed site conditions (selected or declined). */
   siteConstraintsAssessed?: boolean;
+  userAllowances?: ProjectAllowance[];
 };
 
 export type QuickEstimateOutput = {
@@ -94,6 +96,8 @@ export type QuickEstimateOutput = {
   qualityLevelNote: string | null;
   ratesSource: "saved" | "fallback";
   rateSourceDetail: string;
+  stagedRateLevel?: number;
+  stagedRatePrompt?: string | null;
   rateSourceLines: WorkAreaRateSourceLine[];
   benchmarkScopesForOnboarding: {
     scopeTypeKey: string;

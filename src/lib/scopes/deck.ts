@@ -72,13 +72,29 @@ export const deckScope: ScopeDefinition = {
         { value: "elevated", label: "Elevated" },
         { value: "unknown", label: "Not sure yet" },
       ],
-      extractionPatterns: [/\belevated\s+deck/i, /\braised\s+deck/i, /\bground\s+level/i],
+      extractionPatterns: [/\belevated\s+deck/i, /\braised\s+deck/i, /\bground\s+level/i, /\bground.?level/i],
       extractValue: (m) => {
         const text = m[0].toLowerCase();
         if (text.includes("elevated") || text.includes("raised")) return "elevated";
         if (text.includes("ground")) return "ground";
         return null;
       },
+    },
+    {
+      key: "deck.height_m",
+      label: "Deck height",
+      type: "number",
+      unit: "m",
+      required: false,
+      affectsEstimate: true,
+      affectsConfidence: true,
+      questionText: "If elevated, how high off the ground?",
+      placeholder: "e.g. 1.2",
+      extractionPatterns: [
+        /(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?)\s*(?:high|height|off\s+the\s+ground)/i,
+        /elevated\s*(?:at|about|approx(?:imately)?\.?)?\s*(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?)/i,
+      ],
+      extractValue: (m) => m[1] ?? null,
     },
     {
       key: "deck.finish_level",
@@ -154,15 +170,115 @@ export const deckScope: ScopeDefinition = {
       extractionPatterns: [/\bpergola\b/i],
       extractValue: () => "yes",
     },
+    {
+      key: "deck.has_existing_deck",
+      label: "Existing deck / demo",
+      type: "select",
+      required: false,
+      affectsEstimate: true,
+      affectsConfidence: true,
+      questionText: "Is there an existing deck to remove?",
+      options: [...YES_NO_UNSURE],
+      extractionPatterns: [
+        /\bexisting\s+deck\b/i,
+        /\bdemo(?:lish)?\s+(?:the\s+)?deck\b/i,
+        /\bremove\s+(?:the\s+)?(?:old\s+)?deck\b/i,
+      ],
+      extractValue: () => "yes",
+    },
+    {
+      key: "deck.tight_access",
+      label: "Site access",
+      type: "select",
+      required: false,
+      affectsEstimate: true,
+      affectsConfidence: true,
+      questionText: "Is site access tight or restricted?",
+      options: [...YES_NO_UNSURE],
+      extractionPatterns: [
+        /\btight\s+access\b/i,
+        /\brestricted\s+access\b/i,
+        /\bpoor\s+access\b/i,
+        /\blimited\s+access\b/i,
+      ],
+      extractValue: () => "yes",
+    },
+    {
+      key: "deck.rubbish_removal",
+      label: "Rubbish removal",
+      type: "select",
+      required: false,
+      affectsEstimate: false,
+      affectsConfidence: true,
+      questionText: "Is rubbish removal required?",
+      options: [...YES_NO_UNSURE],
+      extractionPatterns: [/\brubbish\b/i, /\bwaste\s+removal\b/i, /\bskip\b/i],
+      extractValue: () => "yes",
+    },
+    {
+      key: "deck.material_supply",
+      label: "Material supply",
+      type: "select",
+      required: false,
+      affectsEstimate: true,
+      affectsConfidence: true,
+      questionText: "Supply and install, labour only, or client-supplied materials?",
+      options: [
+        { value: "supply_and_install", label: "Supply and install" },
+        { value: "labour_only", label: "Labour only" },
+        { value: "client_supplied", label: "Client supplies materials" },
+      ],
+      extractionPatterns: [
+        /\blabour\s+only\b/i,
+        /\bclient\s+suppl(?:y|ies)\s+(?:deck|materials|decking)/i,
+        /\bsupply\s+and\s+install\b/i,
+      ],
+      extractValue: (m) => {
+        const text = m[0].toLowerCase();
+        if (text.includes("labour only")) return "labour_only";
+        if (text.includes("client suppl")) return "client_supplied";
+        return "supply_and_install";
+      },
+    },
+    {
+      key: "deck.balustrade_supply",
+      label: "Balustrade supply",
+      type: "select",
+      required: false,
+      affectsEstimate: true,
+      affectsConfidence: true,
+      questionText: "Is balustrade supplied and installed, or install only?",
+      options: [
+        { value: "supply_and_install", label: "Supply and install" },
+        { value: "client_supplied", label: "Client supplies — install only" },
+        { value: "excluded", label: "Excluded" },
+      ],
+      extractionPatterns: [
+        /exclude\s+balustrade/i,
+        /install\s+only.*balustrad/i,
+        /client\s+suppl.*balustrad/i,
+      ],
+      extractValue: (m) => {
+        const text = m[0].toLowerCase();
+        if (text.includes("exclude")) return "excluded";
+        if (text.includes("install only") || text.includes("client suppl")) {
+          return "client_supplied";
+        }
+        return "supply_and_install";
+      },
+    },
   ],
   pricingDrivers: [
     "deck.area_m2",
     "deck.material_type",
     "deck.level_type",
+    "deck.height_m",
     "deck.finish_level",
     "deck.has_stairs",
     "deck.has_balustrade",
     "deck.has_pergola",
+    "deck.has_existing_deck",
+    "deck.tight_access",
   ],
   constraints: [
     {
@@ -206,6 +322,10 @@ export const deckScope: ScopeDefinition = {
       "deck.has_stairs",
       "deck.has_balustrade",
       "deck.has_pergola",
+      "deck.height_m",
+      "deck.tight_access",
+      "deck.material_supply",
+      "deck.balustrade_supply",
     ],
   },
   benchmarkRates: { unit: "m²", low: 450, typical: 650, high: 900 },

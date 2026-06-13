@@ -62,6 +62,9 @@ export async function createProject(
       organisation_id: organisationId,
       created_by: user.id,
       client_id: clientId,
+      client_name: parsed.data.clientName,
+      client_phone: parsed.data.clientPhone ?? null,
+      client_email: parsed.data.clientEmail || null,
       title: parsed.data.title,
       site_address: parsed.data.siteAddress,
       enquiry_source: parsed.data.enquirySource,
@@ -81,7 +84,11 @@ export async function createProject(
 
   revalidatePath("/projects");
   revalidatePath("/dashboard");
-  redirect(`/projects/${project.id}`);
+  revalidatePath(`/projects/${project.id}`);
+
+  // Client-side navigation avoids Next.js dev manifest corruption after
+  // server-action redirects on Windows (see vercel/next.js#91797).
+  return { success: true, projectId: project.id };
 }
 
 export async function updateProject(
@@ -143,6 +150,9 @@ export async function updateProject(
     .update({
       title: parsed.data.title,
       client_id: clientId,
+      client_name: parsed.data.clientName,
+      client_phone: parsed.data.clientPhone ?? null,
+      client_email: parsed.data.clientEmail || null,
       site_address: parsed.data.siteAddress,
       enquiry_source: parsed.data.enquirySource,
       client_brief: parsed.data.clientBrief ?? null,

@@ -28,7 +28,8 @@ export function AssistantV2Composer({
     syncAssistant,
     clearOptimisticMessages,
   } = useAssistantChat();
-  const { markSaving, markUpdating, markSaved, markIdle } = useEstimateUpdate();
+  const { markSaving, markUpdating, markSaved, markIdle, requestBreakdownOpen } =
+    useEstimateUpdate();
   const [pending, startTransition] = useTransition();
   const [text, setText] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -40,7 +41,7 @@ export function AssistantV2Composer({
 
     setError(null);
     const optimisticId = addOptimisticUserMessage(content);
-    addOptimisticAssistantMessage("Analysing project…");
+    addOptimisticAssistantMessage("Processing…");
     setText("");
     markSaving();
 
@@ -60,7 +61,26 @@ export function AssistantV2Composer({
         resolveOptimisticMessage(optimisticId);
         await syncAssistant();
         clearOptimisticMessages();
-        markSaved({ costDelta: null, previousCompleteness: null, newCompleteness: null, changeLabel: "after new notes" });
+        if (result.openBreakdown) {
+          requestBreakdownOpen();
+        }
+        if (result.intent && result.intent !== "ask_question" && !result.requiresConfirmation) {
+          markSaved({
+            costDelta: null,
+            previousCompleteness: null,
+            newCompleteness: null,
+            changeLabel: "after command",
+          });
+        } else if (result.requiresConfirmation || result.usedFallback) {
+          markIdle();
+        } else {
+          markSaved({
+            costDelta: null,
+            previousCompleteness: null,
+            newCompleteness: null,
+            changeLabel: "after new notes",
+          });
+        }
       } catch {
         markIdle();
         setError("Could not send message.");

@@ -20,6 +20,7 @@ import {
   listAssistantMessages,
   type AssistantMessageRow,
 } from "@/lib/assistant-v2/assistant-messages-data";
+import { listScopePackagesForProject } from "@/lib/assistant-v2/confirm-internal-works";
 import { devLog } from "@/lib/dev-log";
 import { getProjectById } from "@/lib/projects-data";
 import type { DiscoveryResult } from "@/lib/ai/discovery/types";
@@ -31,6 +32,7 @@ import type {
   ProjectScopeBuilderInput,
   ProjectScopeSuggestion,
   QuickEstimate,
+  ProjectScopePackage,
 } from "@/types/database";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database";
@@ -50,6 +52,7 @@ export type ProjectAssistantData = {
   discoveryMeta: ProjectDiscoveryMeta;
   chatMessages: AssistantMessageRow[];
   declinedConstraintSlugs: string[];
+  scopePackages: ProjectScopePackage[];
 };
 
 export async function loadProjectAssistantData(
@@ -92,6 +95,7 @@ export async function loadProjectAssistantData(
     { data: scopeQuestions },
     { data: chatMessages },
     savedConstraints,
+    scopePackages,
   ] = await Promise.all([
     listScopeBuilderInputs(supabase, organisationId, projectId),
     listScopeSuggestions(supabase, organisationId, projectId),
@@ -106,6 +110,7 @@ export async function loadProjectAssistantData(
       projectId,
       quickEstimate?.id
     ),
+    listScopePackagesForProject(supabase, organisationId, projectId),
   ]);
 
   const discovery = normalizeDiscoveryResult(
@@ -152,6 +157,7 @@ export async function loadProjectAssistantData(
       discoveryMeta,
       chatMessages: chatMessages ?? [],
       declinedConstraintSlugs,
+      scopePackages: scopePackages ?? [],
     },
     error: null,
   };

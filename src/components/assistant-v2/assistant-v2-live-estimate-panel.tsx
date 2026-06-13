@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useTransition } from "react";
+import { useState, useTransition, useEffect } from "react";
 import { Check, ChevronDown, TrendingDown, TrendingUp, X } from "lucide-react";
 import {
   exportScopeSummary,
@@ -30,13 +30,18 @@ import {
 } from "@/components/assistant-v2/scope-rate-onboarding-dialog";
 import type { WorkAreaRateSourceLine } from "@/lib/cost-engine/estimate-trace";
 import { isBenchmarkRateSource } from "@/lib/cost-engine/rates/get-base-rate-for-scope";
+import { AddMoreDetailButton } from "@/components/assistant-v2/assistant-refinement-trigger";
 
 interface AssistantV2LiveEstimatePanelProps {
   projectId: string;
   quickEstimate: QuickEstimate | null;
   estimateQualityTier: EstimateQualityTier;
+  qualityTierDescription?: string;
   qualityFactors: EstimateQualityFactor[];
   missingInformation: string[];
+  criticalMissing?: string[];
+  optionalMissing?: string[];
+  optionalOnlyMissing?: boolean;
   lastEstimateChange: EstimateChangeEvent | null;
   costBreakdown: CostBreakdown | null;
   confidenceScore: number;
@@ -47,6 +52,8 @@ interface AssistantV2LiveEstimatePanelProps {
   allowancesIncluded?: string[];
   rateSourceLines?: WorkAreaRateSourceLine[];
   rateSourceDetail?: string | null;
+  stagedRatePrompt?: string | null;
+  breakdownOpenRequest?: number;
   benchmarkScopesForOnboarding?: BenchmarkScopeForOnboarding[];
   compact?: boolean;
   onEstimateSync?: (payload: AssistantSyncPayload) => void;
@@ -130,8 +137,12 @@ export function AssistantV2LiveEstimatePanel({
   projectId,
   quickEstimate,
   estimateQualityTier,
+  qualityTierDescription,
   qualityFactors,
   missingInformation,
+  criticalMissing = [],
+  optionalMissing = [],
+  optionalOnlyMissing = false,
   lastEstimateChange,
   costBreakdown,
   confidenceScore,
@@ -142,6 +153,8 @@ export function AssistantV2LiveEstimatePanel({
   allowancesIncluded = [],
   rateSourceLines = [],
   rateSourceDetail,
+  stagedRatePrompt,
+  breakdownOpenRequest = 0,
   benchmarkScopesForOnboarding = [],
   compact = false,
   onEstimateSync,
@@ -149,6 +162,12 @@ export function AssistantV2LiveEstimatePanel({
   const { status, lastUpdatedAt } = useEstimateUpdate();
   const [breakdownOpen, setBreakdownOpen] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
+
+  useEffect(() => {
+    if (breakdownOpenRequest > 0) {
+      setBreakdownOpen(true);
+    }
+  }, [breakdownOpenRequest]);
   const [onboardingScope, setOnboardingScope] =
     useState<BenchmarkScopeForOnboarding | null>(null);
 
@@ -211,6 +230,7 @@ export function AssistantV2LiveEstimatePanel({
 
   return (
     <div
+      id="assistant-live-estimate-panel"
       className={cn(
         "rounded-xl border bg-card shadow-sm lg:sticky lg:top-4",
         compact ? "p-4" : "p-5"
@@ -239,7 +259,10 @@ export function AssistantV2LiveEstimatePanel({
           )}
         </div>
         <p className="text-xs text-muted-foreground">
-          {describeEstimateQualityTier(estimateQualityTier)}
+          {qualityTierDescription ??
+            describeEstimateQualityTier(estimateQualityTier, {
+              optionalOnlyMissing,
+            })}
           {statusLabel ? ` · ${statusLabel}` : ""}
         </p>
         {finishLevel && (
@@ -299,7 +322,7 @@ export function AssistantV2LiveEstimatePanel({
           {!compact && (rateSourceLines.length > 0 || rateSourceDetail) && (
             <div className="rounded-lg border bg-muted/20 px-3 py-2 text-xs">
               <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                Rate source
+                Rate detail
               </p>
               {rateSourceLines.length > 1 ? (
                 <ul className="mt-1.5 space-y-0.5">
@@ -312,8 +335,11 @@ export function AssistantV2LiveEstimatePanel({
                 </ul>
               ) : (
                 <p className="mt-1 font-medium text-foreground">
-                  {rateSourceLines[0]?.rateSourceLabel ?? rateSourceDetail}
+                  {rateSourceDetail ?? rateSourceLines[0]?.rateSourceLabel}
                 </p>
+              )}
+              {stagedRatePrompt && (
+                <p className="mt-2 text-muted-foreground">{stagedRatePrompt}</p>
               )}
               {usesBenchmarkRates && (
                 <div className="mt-2 space-y-2 border-t border-border/60 pt-2">
@@ -498,21 +524,57 @@ export function AssistantV2LiveEstimatePanel({
                 </li>
               ))}
             </ul>
-            {missingInformation.length > 0 && (
+            {criticalMissing.length > 0 || missingInformation.length > 0 ? (
               <>
-                <p className="mt-2 text-xs text-muted-foreground">Missing:</p>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Missing information:
+                </p>
                 <ul className="mt-1 space-y-0.5">
-                  {missingInformation.slice(0, 4).map((item) => (
+                  {(criticalMissing.length > 0
+                    ? criticalMissing
+                    : missingInformation
+                  )
+                    .slice(0, 6)
+                    .map((item) => (
+                      <li
+                        key={item}
+                        className="flex items-start gap-1.5 text-xs text-muted-foreground"
+                      >
+                        <X className="mt-0.5 h-3 w-3 shrink-0" />
+                        <span>{item}</span>
+                      </li>
+                    ))}
+                </ul>
+              </>
+            ) : optionalMissing.length > 0 ? null : (
+              <p className="mt-2 text-xs text-muted-foreground">
+                No key missing information.
+              </p>
+            )}
+            {optionalMissing.length > 0 && (
+              <>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Optional details:
+                </p>
+                <ul className="mt-1 space-y-0.5">
+                  {optionalMissing.slice(0, 6).map((item) => (
                     <li
                       key={item}
                       className="flex items-start gap-1.5 text-xs text-muted-foreground"
                     >
-                      <X className="mt-0.5 h-3 w-3 shrink-0" />
+                      <X className="mt-0.5 h-3 w-3 shrink-0 opacity-50" />
                       <span>{item}</span>
                     </li>
                   ))}
                 </ul>
               </>
+            )}
+            {(optionalMissing.length > 0 ||
+              optionalOnlyMissing ||
+              estimateQualityTier === "READY") && (
+              <div className="mt-3">
+                <AddMoreDetailButton projectId={projectId} />
+              </div>
             )}
             <p className="sr-only">Internal confidence score: {confidenceScore}%</p>
           </div>

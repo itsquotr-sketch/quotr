@@ -1,5 +1,10 @@
 import type { DiscoveryRunResult } from "@/lib/ai/discovery/types";
 import type { DiscoveryQuestion } from "@/lib/ai/discovery/types";
+import {
+  applyBroadCategoryAndPackages,
+  classifyDiscoveryResult,
+  normaliseLegacyBroadCategoryScopes,
+} from "@/lib/scopes/classification/apply-discovery-classification";
 import { resolveWorkAreaTypeKey } from "@/lib/project-assistant-questions";
 import { normalizeQuestionKey } from "@/lib/question-keys";
 import { listActiveScopeSuggestionTypes } from "@/lib/scope-builder-data";
@@ -159,6 +164,7 @@ export async function applyDiscoveryResults(
     sourceInputId: string | null;
     quickEstimateId: string | null;
     result: DiscoveryRunResult;
+    inputText?: string;
   }
 ): Promise<{ error: string | null }> {
   const {
@@ -168,7 +174,14 @@ export async function applyDiscoveryResults(
     sourceInputId,
     quickEstimateId,
     result,
+    inputText = "",
   } = params;
+
+  const classified = classifyDiscoveryResult(result, inputText);
+  const classifiedResult: DiscoveryRunResult = {
+    ...classified,
+    workAreas: classified.workAreas,
+  };
 
   const suggestionResult = await applyWorkAreaSuggestions(
     supabase,
@@ -176,17 +189,26 @@ export async function applyDiscoveryResults(
     projectId,
     userId,
     sourceInputId,
-    result
+    classifiedResult
   );
   if (suggestionResult.error) {
     return { error: suggestionResult.error };
   }
 
+  await applyBroadCategoryAndPackages(supabase, {
+    organisationId,
+    projectId,
+    userId,
+    classified,
+  });
+
+  await normaliseLegacyBroadCategoryScopes(supabase, organisationId, projectId);
+
   const questionResult = await syncDiscoveryQuestionsToScopes(
     supabase,
     organisationId,
     projectId,
-    result
+    classifiedResult
   );
   if (questionResult.error) {
     return { error: questionResult.error };
@@ -204,7 +226,7 @@ export async function applyDiscoveryResults(
       supabase,
       organisationId,
       quickEstimateId,
-      result.qualityLevel
+      classifiedResult.qualityLevel
     );
   }
 

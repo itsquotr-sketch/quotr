@@ -68,6 +68,7 @@ const SNAPSHOT_ALWAYS_TRIGGERS = new Set([
   "margin_changed",
   "quality_changed",
   "constraint_changed",
+  "allowance_changed",
 ]);
 
 const SNAPSHOT_STALE_MS = 24 * 60 * 60 * 1000;
@@ -224,6 +225,8 @@ export async function recalculateQuickEstimate(
     missingInformation: result.missingInformation,
     ratesSource: result.ratesSource,
     rateSourceDetail: result.rateSourceDetail,
+    stagedRateLevel: result.stagedRateLevel,
+    stagedRatePrompt: result.stagedRatePrompt,
     rateSourceLines: result.rateSourceLines,
     benchmarkScopesForOnboarding: result.benchmarkScopesForOnboarding,
     constraintsApplied: result.constraintsApplied,

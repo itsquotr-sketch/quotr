@@ -18,7 +18,6 @@ import {
   type WorkAreaSelection,
 } from "@/lib/assistant-v2/confirm-work-areas";
 import { resetAssistantState } from "@/lib/assistant-v2/reset-assistant";
-import { runAssistantAnalysis } from "@/lib/assistant-v2/run-assistant-analysis";
 import { saveConstraintAnswer } from "@/lib/assistant-v2/save-constraint-answer";
 import { saveQualityLevel } from "@/lib/assistant-v2/save-quality-level";
 import {
@@ -26,7 +25,13 @@ import {
   batchSaveScopeAnswers,
 } from "@/lib/assistant-v2/batch-save-answers";
 import { saveScopeAnswer } from "@/lib/assistant-v2/save-scope-answer";
-import { submitProjectNotes } from "@/lib/assistant-v2/submit-notes";
+import {
+  confirmPendingAssistantCommand,
+  handleAssistantMessage,
+} from "@/lib/assistant-v2/handle-assistant-message";
+import {
+  confirmInternalWorksPackages,
+} from "@/lib/assistant-v2/confirm-internal-works";
 import { acceptScopeSuggestion } from "@/actions/scope-suggestions";
 import { ensureQuestionsForProjectScopes } from "@/lib/scope-questions-seed";
 import { recalculateQuickEstimate } from "@/lib/cost-engine/recalculate-quick-estimate";
@@ -51,6 +56,28 @@ export type AssistantV2ActionState = {
   fieldErrors?: Record<string, string[]>;
   analysingMode?: "ai" | "rules";
   usedFallback?: boolean;
+  requiresConfirmation?: boolean;
+  openBreakdown?: boolean;
+  intent?: string;
+  navigateTo?: string;
+  rateScopes?: {
+    scopeTypeKey: string;
+    label: string;
+    workAreaTypeKey: string;
+    unit: string;
+    benchmarkLow: number;
+    benchmarkStandard: number;
+    benchmarkPremium: number;
+  }[];
+  singleRateScope?: {
+    scopeTypeKey: string;
+    label: string;
+    workAreaTypeKey: string;
+    unit: string;
+    benchmarkLow: number;
+    benchmarkStandard: number;
+    benchmarkPremium: number;
+  } | null;
 };
 
 export async function resetAssistant(
@@ -144,59 +171,67 @@ export async function submitAssistantNotes(
     metadata: { messageType: "note" },
   });
 
-  const saveResult = await submitProjectNotes(supabase, {
+  const result = await handleAssistantMessage(supabase, {
     organisationId,
     projectId,
     userId: user.id,
     content,
   });
 
-  if ("error" in saveResult && saveResult.error) {
-    return {
-      error: saveResult.error,
-      fieldErrors: saveResult.fieldErrors,
-    };
+  if (result.error) {
+    return { error: result.error };
   }
-
-  const analyseResult = await runAssistantAnalysis(supabase, {
-    organisationId,
-    projectId,
-    userId: user.id,
-  });
-
-  const { data: pendingSuggestions } = await supabase
-    .from("project_scope_suggestions")
-    .select("suggested_name")
-    .eq("project_id", projectId)
-    .eq("organisation_id", organisationId)
-    .eq("status", "pending");
-
-  const assistantText = analyseResult.success
-    ? (pendingSuggestions?.length ?? 0) > 0
-      ? "I found these work areas. Confirm what should be included in this estimate."
-      : analyseResult.usedFallback
-        ? "I used basic analysis — your notes are saved."
-        : "Got it — I'm reviewing the scope."
-    : "Notes saved. Add more detail if needed.";
-
-  await insertAssistantMessage(supabase, {
-    organisationId,
-    projectId,
-    userId: user.id,
-    role: "assistant",
-    content: assistantText,
-    metadata: {
-      messageType: "assistant_text",
-      analysingMode: analyseResult.analysingMode,
-    },
-  });
 
   revalidateProjectAssistant(projectId);
   return {
     success: true,
-    message: analyseResult.message ?? assistantText,
-    analysingMode: analyseResult.analysingMode,
-    usedFallback: analyseResult.usedFallback,
+    message: result.message,
+    analysingMode: result.analysingMode,
+    usedFallback: result.usedFallback,
+    requiresConfirmation: result.requiresConfirmation,
+    openBreakdown: result.openBreakdown,
+    intent: result.intent,
+  };
+}
+
+export async function confirmAssistantCommand(
+  projectId: string,
+  pendingCommand: {
+    intent: string;
+    confidence: number;
+    extractedPayload: Record<string, unknown>;
+    requiresConfirmation: true;
+  },
+  confirmed: boolean
+): Promise<AssistantV2ActionState> {
+  const { user, organisationId } = await requireOrganisation();
+  const supabase = await createClient();
+
+  const result = await confirmPendingAssistantCommand(supabase, {
+    organisationId,
+    projectId,
+    userId: user.id,
+    pendingCommand: {
+      intent: pendingCommand.intent as Parameters<
+        typeof confirmPendingAssistantCommand
+      >[1]["pendingCommand"]["intent"],
+      confidence: pendingCommand.confidence,
+      extractedPayload: pendingCommand.extractedPayload,
+      requiresConfirmation: true,
+    },
+    confirmed,
+  });
+
+  if (result.error) {
+    return { error: result.error };
+  }
+
+  revalidateProjectAssistant(projectId);
+  return {
+    success: true,
+    message: result.message,
+    openBreakdown: result.openBreakdown,
+    intent: result.intent,
   };
 }
 
@@ -413,6 +448,7 @@ export type AssistantSyncPayload = {
   confirmedScopes: (ProjectScope & { scope_types: { name: string } | null })[];
   selectedConstraintSlugs: string[];
   declinedConstraintSlugs: string[];
+  scopePackages: import("@/types/database").ProjectScopePackage[];
 };
 
 export async function syncAssistantState(
@@ -440,7 +476,63 @@ export async function syncAssistantState(
       confirmedScopes: data.confirmedScopes,
       selectedConstraintSlugs: data.selectedConstraintSlugs,
       declinedConstraintSlugs: data.declinedConstraintSlugs,
+      scopePackages: data.scopePackages ?? [],
     },
+  };
+}
+
+export async function confirmInternalWorksSelection(
+  projectId: string,
+  params: {
+    projectScopeId: string | null;
+    broadCategoryKey: string;
+    selectedPackageKeys: string[];
+    noneApply: boolean;
+  }
+): Promise<AssistantV2ActionState> {
+  const { user, organisationId } = await requireOrganisation();
+  const supabase = await createClient();
+
+  if (params.noneApply) {
+    await insertAssistantMessage(supabase, {
+      organisationId,
+      projectId,
+      userId: user.id,
+      role: "user",
+      content: "None of these apply",
+      metadata: { messageType: "answer", internalWorksConfirmation: true },
+    });
+    await insertAssistantMessage(supabase, {
+      organisationId,
+      projectId,
+      userId: user.id,
+      role: "assistant",
+      content:
+        "No problem — tell me more about the internal works in your own words and I'll break them down.",
+      metadata: { messageType: "assistant_text" },
+    });
+    revalidateProjectAssistant(projectId);
+    return { success: true, message: "Noted." };
+  }
+
+  const result = await confirmInternalWorksPackages(supabase, {
+    organisationId,
+    projectId,
+    userId: user.id,
+    projectScopeId: params.projectScopeId,
+    selectedPackageKeys: params.selectedPackageKeys,
+    broadCategoryKey: params.broadCategoryKey,
+  });
+
+  if (result.error) {
+    return { error: result.error };
+  }
+
+  revalidateProjectAssistant(projectId);
+  revalidateEstimateOnly(projectId);
+  return {
+    success: true,
+    message: result.scopeNoteMessage ?? "Internal works updated.",
   };
 }
 
@@ -546,6 +638,122 @@ export async function persistAssistantQuestionBatch(
 
   revalidateAssistantTags(projectId, ["messages"]);
   return { success: true };
+}
+
+export async function refinementAnswerNow(
+  projectId: string,
+  refinementBatchId?: string,
+  sourceMessageId?: string
+): Promise<AssistantV2ActionState> {
+  const { user, organisationId } = await requireOrganisation();
+  const supabase = await createClient();
+
+  const { executeRefinementAnswerNow } = await import(
+    "@/lib/assistant-v2/refinement/execute-refinement-action"
+  );
+
+  const result = await executeRefinementAnswerNow(supabase, {
+    organisationId,
+    projectId,
+    userId: user.id,
+    refinementBatchId,
+    sourceMessageId,
+  });
+
+  if (!result.success) {
+    return { error: result.error ?? "Could not start refinement questions." };
+  }
+
+  revalidateProjectAssistant(projectId);
+  return { success: true, message: result.message };
+}
+
+export async function refinementSkipForNow(
+  projectId: string,
+  refinementBatchId?: string,
+  sourceMessageId?: string
+): Promise<AssistantV2ActionState> {
+  const { user, organisationId } = await requireOrganisation();
+  const supabase = await createClient();
+
+  const { executeRefinementSkip } = await import(
+    "@/lib/assistant-v2/refinement/execute-refinement-action"
+  );
+
+  const result = await executeRefinementSkip(supabase, {
+    organisationId,
+    projectId,
+    userId: user.id,
+    refinementBatchId,
+    sourceMessageId,
+  });
+
+  if (!result.success) {
+    return { error: result.error ?? "Could not skip refinement." };
+  }
+
+  revalidateProjectAssistant(projectId);
+  return { success: true, message: result.message };
+}
+
+export async function refinementAddMoreDetail(
+  projectId: string,
+  scopeId?: string
+): Promise<AssistantV2ActionState> {
+  const { user, organisationId } = await requireOrganisation();
+  const supabase = await createClient();
+
+  const { executeRefinementAddMoreDetail } = await import(
+    "@/lib/assistant-v2/refinement/execute-refinement-action"
+  );
+
+  const result = await executeRefinementAddMoreDetail(supabase, {
+    organisationId,
+    projectId,
+    userId: user.id,
+    scopeId,
+  });
+
+  if (!result.success) {
+    return { error: result.error ?? "Could not load optional details." };
+  }
+
+  revalidateProjectAssistant(projectId);
+  return { success: true, message: result.message };
+}
+
+export async function refinementAddRates(
+  projectId: string,
+  refinementBatchId?: string,
+  sourceMessageId?: string
+): Promise<AssistantV2ActionState> {
+  const { user, organisationId } = await requireOrganisation();
+  const supabase = await createClient();
+
+  const { executeRefinementAddRates } = await import(
+    "@/lib/assistant-v2/refinement/execute-refinement-action"
+  );
+
+  const result = await executeRefinementAddRates(supabase, {
+    organisationId,
+    projectId,
+    userId: user.id,
+    refinementBatchId,
+    sourceMessageId,
+  });
+
+  if (!result.success) {
+    return { error: result.error ?? "Could not open rate setup." };
+  }
+
+  revalidateProjectAssistant(projectId);
+  return {
+    success: true,
+    message: result.message,
+    navigateTo: result.navigateTo,
+    rateScopes: result.rateScopes,
+    singleRateScope: result.singleRateScope,
+  };
 }
 
 export async function exportScopeSummary(

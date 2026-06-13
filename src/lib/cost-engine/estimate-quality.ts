@@ -64,6 +64,8 @@ export function resolveEstimateQualityTier(input: {
   qualityLevel: QualityLevel;
   siteConstraintsAssessed: boolean;
   missingInformationCount: number;
+  criticalOrUsefulMissingCount?: number;
+  optionalOnlyMissing?: boolean;
 }): EstimateQualityTier {
   const {
     confidenceLevel,
@@ -73,7 +75,12 @@ export function resolveEstimateQualityTier(input: {
     qualityLevel,
     siteConstraintsAssessed,
     missingInformationCount,
+    criticalOrUsefulMissingCount,
+    optionalOnlyMissing,
   } = input;
+
+  const blockingMissing =
+    criticalOrUsefulMissingCount ?? missingInformationCount;
 
   if (
     confidenceLevel === "high" &&
@@ -82,7 +89,17 @@ export function resolveEstimateQualityTier(input: {
     workAreasConfirmed &&
     qualityLevel !== "unknown" &&
     siteConstraintsAssessed &&
-    missingInformationCount <= 1
+    (optionalOnlyMissing || blockingMissing <= 1)
+  ) {
+    return "READY";
+  }
+
+  if (
+    confidenceScore >= 55 &&
+    hasKeyMeasurements &&
+    workAreasConfirmed &&
+    qualityLevel !== "unknown" &&
+    blockingMissing === 0
   ) {
     return "READY";
   }
@@ -119,12 +136,17 @@ export function labelForEstimateQuality(
   }
 }
 
-export function describeEstimateQualityTier(tier: EstimateQualityTier): string {
+export function describeEstimateQualityTier(
+  tier: EstimateQualityTier,
+  options?: { optionalOnlyMissing?: boolean }
+): string {
   switch (tier) {
     case "READY":
-      return "Ready to quote against";
+      return options?.optionalOnlyMissing
+        ? "Quote-ready draft"
+        : "Ready to quote against";
     case "GOOD":
-      return "Solid draft — a few details would sharpen it";
+      return "Good draft — a few details would sharpen it";
     case "FAIR":
       return "Rough range — answer a few more questions";
     case "LOW":

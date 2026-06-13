@@ -2,9 +2,16 @@
 
 import type { ReactNode } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { persistAssistantQuestionBatch } from "@/actions/assistant-v2";
+import { persistAssistantQuestionBatch, confirmAssistantCommand, confirmInternalWorksSelection } from "@/actions/assistant-v2";
 import type { WorkAreaSelection } from "@/lib/assistant-v2/confirm-work-areas";
 import { AnswerChips } from "@/components/assistant-v2/answer-chips";
+import {
+  RefinementAnswerBatch,
+  RefinementStatusActions,
+  SharpeningOptionsActions,
+} from "@/components/assistant-v2/assistant-refinement-trigger";
+import type { RefinementAnswerQuestion } from "@/lib/assistant-v2/refinement/refinement-batch";
+import type { BenchmarkScopeForOnboarding } from "@/components/assistant-v2/scope-rate-onboarding-dialog";
 import { AssistantConversationPanel } from "@/components/assistant-v2/assistant-conversation-panel";
 import { useAssistantChat } from "@/components/assistant-v2/assistant-chat-context";
 import { AssistantV2UnderstoodCard } from "@/components/assistant-v2/assistant-v2-understood-card";
@@ -30,7 +37,119 @@ import type { DiscoveryResult } from "@/lib/ai/discovery/types";
 import type { ProjectScope, ProjectScopeSuggestion } from "@/types/database";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import type { PendingAssistantCommand } from "@/lib/assistant-v2/intent/types";
+import {
+  describeCompletenessStatus,
+  type ProjectCompletenessResult,
+} from "@/lib/assistant-v2/completeness/evaluate-project-completeness";
+import { useEstimateUpdate } from "@/components/projects/estimate-update-context";
 import { cn } from "@/lib/utils";
+
+function CommandConfirmationActions({
+  projectId,
+  pendingCommand,
+  options,
+}: {
+  projectId: string;
+  pendingCommand: PendingAssistantCommand;
+  options?: { id: string; label: string }[];
+}) {
+  const { syncAssistant } = useAssistantChat();
+  const { markUpdating, markSaved, markIdle, requestBreakdownOpen } =
+    useEstimateUpdate();
+  const [pending, setPending] = useState(false);
+  const [resolved, setResolved] = useState(false);
+
+  const confirmOption =
+    options?.find((o) => o.id === "confirm") ?? options?.[0];
+  const ignoreOption =
+    options?.find((o) => o.id === "ignore") ?? options?.[1];
+
+  async function handleConfirm(confirmed: boolean) {
+    if (pending || resolved) return;
+    setPending(true);
+    if (confirmed) markUpdating();
+
+    const result = await confirmAssistantCommand(
+      projectId,
+      pendingCommand,
+      confirmed
+    );
+
+    setPending(false);
+    setResolved(true);
+
+    if (result.error) {
+      markIdle();
+      return;
+    }
+
+    await syncAssistant();
+    if (result.openBreakdown) requestBreakdownOpen();
+    if (confirmed) {
+      markSaved({
+        costDelta: null,
+        previousCompleteness: null,
+        newCompleteness: null,
+        changeLabel: "after confirmation",
+      });
+    } else {
+      markIdle();
+    }
+  }
+
+  if (resolved) return null;
+
+  return (
+    <div className="mt-2 flex flex-wrap gap-2 pl-1">
+      {confirmOption && (
+        <Button
+          type="button"
+          size="sm"
+          disabled={pending}
+          onClick={() => void handleConfirm(true)}
+        >
+          {confirmOption.label}
+        </Button>
+      )}
+      {ignoreOption && (
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={pending}
+          onClick={() => void handleConfirm(false)}
+        >
+          {ignoreOption.label}
+        </Button>
+      )}
+    </div>
+  );
+}
+
+function FallbackOptionsActions({
+  options,
+  onSelect,
+}: {
+  options: { id: string; label: string }[];
+  onSelect: (label: string) => void;
+}) {
+  return (
+    <div className="mt-2 flex flex-wrap gap-2 pl-1">
+      {options.map((option) => (
+        <Button
+          key={option.id}
+          type="button"
+          size="sm"
+          variant="secondary"
+          onClick={() => onSelect(option.label)}
+        >
+          {option.label}
+        </Button>
+      ))}
+    </div>
+  );
+}
 
 function UserBubble({ children }: { children: ReactNode }) {
   return (
@@ -70,7 +189,9 @@ interface AssistantV2ChatProps {
   scopeGroups: ScopeGroupInput[];
   scopeQuestions: ScopeQuestionWithAnswers[];
   qualityLevel: string;
+  projectCompleteness: ProjectCompletenessResult;
   showGreeting: boolean;
+  benchmarkScopesForOnboarding?: BenchmarkScopeForOnboarding[];
 }
 
 export function AssistantV2Chat({
@@ -81,7 +202,9 @@ export function AssistantV2Chat({
   scopeGroups,
   scopeQuestions,
   qualityLevel,
+  projectCompleteness,
   showGreeting,
+  benchmarkScopesForOnboarding = [],
 }: AssistantV2ChatProps) {
   const {
     allMessages,
@@ -101,9 +224,11 @@ export function AssistantV2Chat({
 
   const workAreaTypeKeys = useMemo(
     () =>
-      confirmedScopes.map((scope) =>
-        resolveWorkAreaTypeKey(scope.scope_types?.name, scope.name)
-      ),
+      confirmedScopes
+        .filter((scope) => scope.include_in_quick_estimate !== false)
+        .map((scope) =>
+          resolveWorkAreaTypeKey(scope.scope_types?.name, scope.name)
+        ),
     [confirmedScopes]
   );
 
@@ -177,6 +302,23 @@ export function AssistantV2Chat({
     });
   }, [allMessages, persistedMessages, activeTurnFingerprint]);
 
+  const userMessageCount = useMemo(
+    () => allMessages.filter((m) => m.role === "user").length,
+    [allMessages]
+  );
+
+  const statusMessage = useMemo(
+    () => describeCompletenessStatus(projectCompleteness),
+    [projectCompleteness]
+  );
+
+  const showDerivedStatus =
+    !nextTurn &&
+    confirmedScopes.length > 0 &&
+    discovery &&
+    !showWorkAreaConfirmation &&
+    !flushInFlight;
+
   return (
     <AssistantConversationPanel>
       {showGreeting && (
@@ -189,7 +331,11 @@ export function AssistantV2Chat({
         </AssistantBubble>
       )}
 
-      {visibleMessages.map((message) => (
+      {visibleMessages.map((message) => {
+        const persisted = persistedMessages.find((m) => m.id === message.id);
+        const meta = persisted?.metadata as Record<string, unknown> | null;
+
+        return (
         <div key={message.id}>
           {message.role === "user" ? (
             <UserBubble>
@@ -201,30 +347,105 @@ export function AssistantV2Chat({
               )}
             </UserBubble>
           ) : (
-            <AssistantBubble>
-              <span className="whitespace-pre-wrap">{message.content}</span>
-              {message.pending && (
-                <p className="mt-1 flex items-center text-xs text-muted-foreground">
-                  {message.content.includes("Analysing")
-                    ? "Analysing project"
-                    : message.content.includes("Saving site")
-                      ? "Saving site conditions"
-                      : message.content.includes("Updating")
-                        ? "Updating estimate"
-                        : "Working"}
-                  <LoadingDots />
-                </p>
+            <>
+              <AssistantBubble>
+                <span className="whitespace-pre-wrap">{message.content}</span>
+                {message.pending && (
+                  <p className="mt-1 flex items-center text-xs text-muted-foreground">
+                    {message.content.includes("Processing")
+                      ? "Processing"
+                      : message.content.includes("Analysing")
+                        ? "Analysing project"
+                        : message.content.includes("Saving site")
+                          ? "Saving site conditions"
+                          : message.content.includes("Updating")
+                            ? "Updating estimate"
+                            : "Working"}
+                    <LoadingDots />
+                  </p>
+                )}
+              </AssistantBubble>
+              {meta?.messageType === "command_confirmation" && (
+                <CommandConfirmationActions
+                  projectId={projectId}
+                  pendingCommand={meta.pendingCommand as PendingAssistantCommand}
+                  options={
+                    (meta.confirmationOptions as { id: string; label: string }[]) ??
+                    undefined
+                  }
+                />
               )}
-            </AssistantBubble>
+              {meta?.messageType === "fallback_options" && (
+                <FallbackOptionsActions
+                  options={
+                    (meta.fallbackOptions as { id: string; label: string }[]) ??
+                    []
+                  }
+                  onSelect={(label) => {
+                    const textarea = document.querySelector<HTMLTextAreaElement>(
+                      'textarea[name="content"]'
+                    );
+                    if (textarea) {
+                      textarea.value = label;
+                      textarea.focus();
+                    }
+                  }}
+                />
+              )}
+              {((meta?.messageType === "sharpen_options" ||
+                meta?.messageType === "refinement_suggestions")) && (
+                <SharpeningOptionsActions
+                  projectId={projectId}
+                  sourceMessageId={persisted?.id}
+                  refinementBatchId={
+                    meta.refinementBatchId as string | undefined
+                  }
+                  actionTaken={meta.actionTaken as string | undefined}
+                  options={
+                    (meta.sharpenOptions as { id: string; label: string }[]) ??
+                    undefined
+                  }
+                  benchmarkScopes={benchmarkScopesForOnboarding}
+                />
+              )}
+              {meta?.messageType === "refinement_answer_batch" && (
+                <RefinementAnswerBatch
+                  questions={
+                    (meta.questions as RefinementAnswerQuestion[]) ?? []
+                  }
+                />
+              )}
+              {meta?.messageType === "internal_works_clarification" && (
+                <InternalWorksClarificationActions
+                  projectId={projectId}
+                  projectScopeId={
+                    (meta.projectScopeId as string | null) ?? null
+                  }
+                  broadCategoryKey={
+                    (meta.broadCategoryKey as string) ?? "internal_alteration"
+                  }
+                  options={
+                    (meta.options as { key: string; label: string }[]) ?? []
+                  }
+                  detectedPackages={
+                    (meta.detectedPackages as { packageKey: string; label: string }[]) ??
+                    []
+                  }
+                />
+              )}
+            </>
           )}
         </div>
-      ))}
+        );
+      })}
 
       {confirmedScopes.length > 0 && discovery && (
         <AssistantV2UnderstoodCard
           confirmedScopes={confirmedScopes}
           discovery={discovery}
           qualityLevel={qualityLevel}
+          projectCompleteness={projectCompleteness}
+          compact={userMessageCount > 1}
         />
       )}
 
@@ -236,25 +457,29 @@ export function AssistantV2Chat({
       )}
 
       {showActiveTurn && nextTurn && (
-        <ActiveTurnBubble
-          projectId={projectId}
-          turn={nextTurn}
-          optimisticAnswers={optimisticAnswers}
-          onScopeAnswer={submitScopeAnswer}
-          onScopeBatchComplete={flushScopeBatch}
-          onConstraintBatch={submitConstraintBatch}
-          onQualityAnswer={(level, label) => submitQualityLevel(level, label)}
-          onPersisted={syncAssistant}
-        />
+        <div id="assistant-pricing-questions">
+          <ActiveTurnBubble
+            projectId={projectId}
+            turn={nextTurn}
+            optimisticAnswers={optimisticAnswers}
+            onScopeAnswer={submitScopeAnswer}
+            onScopeBatchComplete={flushScopeBatch}
+            onConstraintBatch={submitConstraintBatch}
+            onQualityAnswer={(level, label) => submitQualityLevel(level, label)}
+            onPersisted={syncAssistant}
+          />
+        </div>
       )}
 
-      {!nextTurn && confirmedScopes.length > 0 && discovery && (
+      {showDerivedStatus && (
         <AssistantBubble>
-          <p className="font-medium">That&apos;s enough to work with</p>
-          <p className="mt-1 text-muted-foreground">
-            Check the live estimate on the right — add more notes anytime to
-            refine.
-          </p>
+          <p className="font-medium">{statusMessage.title}</p>
+          <p className="mt-1 text-muted-foreground">{statusMessage.subtitle}</p>
+          {(projectCompleteness.projectStatus === "needs_questions" ||
+            projectCompleteness.projectStatus === "enough_for_draft" ||
+            statusMessage.title.toLowerCase().includes("details")) && (
+            <RefinementStatusActions projectId={projectId} />
+          )}
         </AssistantBubble>
       )}
     </AssistantConversationPanel>
@@ -848,5 +1073,110 @@ function ConstraintBatchBubble({
         </Button>
       </div>
     </AssistantBubble>
+  );
+}
+
+function InternalWorksClarificationActions({
+  projectId,
+  projectScopeId,
+  broadCategoryKey,
+  options,
+  detectedPackages,
+}: {
+  projectId: string;
+  projectScopeId: string | null;
+  broadCategoryKey: string;
+  options: { key: string; label: string }[];
+  detectedPackages: { packageKey: string; label: string }[];
+}) {
+  const { syncAssistant } = useAssistantChat();
+  const { markUpdating, markSaved } = useEstimateUpdate();
+  const [selected, setSelected] = useState<Set<string>>(() => {
+    const preselected = new Set(detectedPackages.map((p) => p.packageKey));
+    return preselected;
+  });
+  const [submitted, setSubmitted] = useState(false);
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function toggle(key: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  async function handleConfirm(noneApply: boolean) {
+    if (submitted || pending) return;
+    if (!noneApply && selected.size === 0) {
+      setError("Select at least one option, or choose None of these apply.");
+      return;
+    }
+
+    setPending(true);
+    setError(null);
+    markUpdating();
+
+    const result = await confirmInternalWorksSelection(projectId, {
+      projectScopeId,
+      broadCategoryKey,
+      selectedPackageKeys: noneApply ? [] : [...selected],
+      noneApply,
+    });
+
+    setPending(false);
+
+    if (result.error) {
+      setError(result.error);
+      return;
+    }
+
+    setSubmitted(true);
+    await syncAssistant();
+    markSaved();
+  }
+
+  if (submitted) return null;
+
+  return (
+    <div id="internal-works-clarification" className="mt-2 pl-1">
+      <p className="mb-2 text-sm text-muted-foreground">Which of these apply?</p>
+      <div className="flex flex-wrap gap-2">
+        {options.map((opt) => (
+          <Button
+            key={opt.key}
+            type="button"
+            size="sm"
+            variant={selected.has(opt.key) ? "default" : "outline"}
+            disabled={pending}
+            onClick={() => toggle(opt.key)}
+          >
+            {opt.label}
+          </Button>
+        ))}
+      </div>
+      {error && <p className="mt-2 text-xs text-destructive">{error}</p>}
+      <div className="mt-3 flex flex-wrap gap-2">
+        <Button
+          type="button"
+          size="sm"
+          disabled={pending}
+          onClick={() => void handleConfirm(false)}
+        >
+          Confirm selected
+        </Button>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          disabled={pending}
+          onClick={() => void handleConfirm(true)}
+        >
+          None of these apply
+        </Button>
+      </div>
+    </div>
   );
 }

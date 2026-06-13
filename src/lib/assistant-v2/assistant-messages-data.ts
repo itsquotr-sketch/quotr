@@ -60,6 +60,46 @@ export async function insertAssistantMessage(
   return { data, error: null };
 }
 
+export async function updateAssistantMessageMetadata(
+  supabase: Supabase,
+  params: {
+    organisationId: string;
+    projectId: string;
+    messageId: string;
+    patch: Record<string, unknown>;
+  }
+): Promise<{ error: string | null }> {
+  const { data: existing, error: fetchError } = await supabase
+    .from("assistant_messages")
+    .select("metadata")
+    .eq("id", params.messageId)
+    .eq("organisation_id", params.organisationId)
+    .eq("project_id", params.projectId)
+    .maybeSingle();
+
+  if (fetchError || !existing) {
+    logSupabaseError("updateAssistantMessageMetadata.fetch", fetchError);
+    return { error: "Could not update message." };
+  }
+
+  const current = (existing.metadata as Record<string, unknown> | null) ?? {};
+  const merged = { ...current, ...params.patch };
+
+  const { error } = await supabase
+    .from("assistant_messages")
+    .update({ metadata: merged as Json })
+    .eq("id", params.messageId)
+    .eq("organisation_id", params.organisationId)
+    .eq("project_id", params.projectId);
+
+  if (error) {
+    logSupabaseError("updateAssistantMessageMetadata", error);
+    return { error: "Could not update message." };
+  }
+
+  return { error: null };
+}
+
 export async function deleteAssistantMessagesForProject(
   supabase: Supabase,
   organisationId: string,

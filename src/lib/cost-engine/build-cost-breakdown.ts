@@ -105,6 +105,7 @@ export function buildCostBreakdown(input: {
     centralEstimate: number;
     scopeAllocation?: ScopeRateAllocation | null;
   }[];
+  userAllowances?: { label: string; amount: number }[];
 }): CostBreakdown {
   const contingencyFraction = input.contingencyPercent / 100;
 
@@ -127,7 +128,27 @@ export function buildCostBreakdown(input: {
     (sum, row) => sum + row.subcontractors,
     0
   );
-  const allowances = byWorkArea.reduce((sum, row) => sum + row.allowances, 0);
+  let allowances = byWorkArea.reduce((sum, row) => sum + row.allowances, 0);
+
+  const userAllowanceRows = input.userAllowances ?? [];
+  const userAllowanceTotal = userAllowanceRows.reduce(
+    (sum, row) => sum + row.amount,
+    0
+  );
+
+  if (userAllowanceTotal > 0) {
+    allowances += userAllowanceTotal;
+    byWorkArea.push({
+      name: "User allowances",
+      workAreaTypeKey: "allowance",
+      total: userAllowanceTotal,
+      labour: 0,
+      materials: 0,
+      subcontractors: 0,
+      allowances: userAllowanceTotal,
+      contingency: 0,
+    });
+  }
   const contingencyFromSplit = byWorkArea.reduce(
     (sum, row) => sum + row.contingency,
     0

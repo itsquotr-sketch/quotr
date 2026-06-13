@@ -25,6 +25,7 @@ import {
   listSubcontractorRates,
 } from "@/lib/rates-data";
 import { listScopeBuilderInputs } from "@/lib/scope-builder-data";
+import { listProjectAllowances } from "@/lib/assistant-v2/project-allowances-data";
 import { getQuickEstimateForProject } from "@/lib/quick-estimate-data";
 import { getProjectById } from "@/lib/projects-data";
 import { normalizeQuestionKey } from "@/lib/question-keys";
@@ -102,6 +103,7 @@ export async function buildQuickEstimateInput(
     { data: pricingSettings },
     { data: discoveryRun },
     { data: scopeBuilderInputs },
+    { data: userAllowances },
   ] = await Promise.all([
     listScopeRates(supabase, organisationId),
     listPackageRates(supabase, organisationId),
@@ -111,6 +113,7 @@ export async function buildQuickEstimateInput(
     getOrganisationPricingSettings(supabase, organisationId),
     getLatestDiscoveryRun(supabase, organisationId, projectId),
     listScopeBuilderInputs(supabase, organisationId, projectId),
+    listProjectAllowances(supabase, organisationId, projectId),
   ]);
 
   const sourceNotesLength = (scopeBuilderInputs ?? [])
@@ -319,6 +322,7 @@ export async function buildQuickEstimateInput(
       excludedWorkAreaNames,
       allWorkAreasExcluded,
       siteConstraintsAssessed,
+      userAllowances: userAllowances ?? [],
     },
     error: null,
   };

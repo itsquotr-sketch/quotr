@@ -304,6 +304,7 @@ export async function runProjectDiscovery(
     sourceInputId,
     quickEstimateId,
     result: outcome.result,
+    inputText,
   });
 
   const message = outcome.usedFallback

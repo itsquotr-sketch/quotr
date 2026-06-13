@@ -206,6 +206,9 @@ export interface Database {
           organisation_id: string;
           created_by: string;
           client_id: string | null;
+          client_name: string | null;
+          client_phone: string | null;
+          client_email: string | null;
           title: string;
           site_address: string;
           enquiry_source: string;
@@ -213,6 +216,8 @@ export interface Database {
           client_brief: string | null;
           priority: string;
           status: string;
+          quote_status: string | null;
+          initial_notes: string | null;
           job_type: string | null;
           description: string | null;
           created_at: string;
@@ -223,6 +228,9 @@ export interface Database {
           organisation_id: string;
           created_by: string;
           client_id?: string | null;
+          client_name?: string | null;
+          client_phone?: string | null;
+          client_email?: string | null;
           title: string;
           site_address: string;
           enquiry_source: string;
@@ -230,6 +238,8 @@ export interface Database {
           client_brief?: string | null;
           priority?: string;
           status?: string;
+          quote_status?: string | null;
+          initial_notes?: string | null;
           job_type?: string | null;
           description?: string | null;
           created_at?: string;
@@ -240,6 +250,9 @@ export interface Database {
           organisation_id?: string;
           created_by?: string;
           client_id?: string | null;
+          client_name?: string | null;
+          client_phone?: string | null;
+          client_email?: string | null;
           title?: string;
           site_address?: string;
           enquiry_source?: string;
@@ -247,6 +260,8 @@ export interface Database {
           client_brief?: string | null;
           priority?: string;
           status?: string;
+          quote_status?: string | null;
+          initial_notes?: string | null;
           job_type?: string | null;
           description?: string | null;
           created_at?: string;
@@ -440,6 +455,7 @@ export interface Database {
           estimate_status: string;
           is_custom: boolean;
           include_in_quick_estimate: boolean;
+          classification_status: string;
           sort_order: number;
           created_at: string;
           updated_at: string;
@@ -460,6 +476,7 @@ export interface Database {
           estimate_status?: string;
           is_custom?: boolean;
           include_in_quick_estimate?: boolean;
+          classification_status?: string;
           sort_order?: number;
           created_at?: string;
           updated_at?: string;
@@ -480,6 +497,7 @@ export interface Database {
           estimate_status?: string;
           is_custom?: boolean;
           include_in_quick_estimate?: boolean;
+          classification_status?: string;
           sort_order?: number;
           created_at?: string;
           updated_at?: string;
@@ -497,6 +515,69 @@ export interface Database {
             columns: ["scope_type_id"];
             isOneToOne: false;
             referencedRelation: "scope_types";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      project_scope_packages: {
+        Row: {
+          id: string;
+          organisation_id: string;
+          project_id: string;
+          project_scope_id: string | null;
+          package_key: string;
+          label: string;
+          status: string;
+          quantity: number | null;
+          unit: string | null;
+          metadata: Json;
+          include_in_quick_estimate: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          organisation_id: string;
+          project_id: string;
+          project_scope_id?: string | null;
+          package_key: string;
+          label: string;
+          status?: string;
+          quantity?: number | null;
+          unit?: string | null;
+          metadata?: Json;
+          include_in_quick_estimate?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          organisation_id?: string;
+          project_id?: string;
+          project_scope_id?: string | null;
+          package_key?: string;
+          label?: string;
+          status?: string;
+          quantity?: number | null;
+          unit?: string | null;
+          metadata?: Json;
+          include_in_quick_estimate?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "project_scope_packages_project_id_fkey";
+            columns: ["project_id"];
+            isOneToOne: false;
+            referencedRelation: "projects";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "project_scope_packages_project_scope_id_fkey";
+            columns: ["project_scope_id"];
+            isOneToOne: false;
+            referencedRelation: "project_scopes";
             referencedColumns: ["id"];
           },
         ];
@@ -1171,6 +1252,111 @@ export interface Database {
             referencedColumns: ["id"];
           },
         ];
+      };
+      project_allowances: {
+        Row: {
+          id: string;
+          organisation_id: string;
+          project_id: string;
+          project_scope_id: string | null;
+          allowance_key: string;
+          label: string;
+          amount: number;
+          source: string;
+          note: string | null;
+          is_active: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          organisation_id: string;
+          project_id: string;
+          project_scope_id?: string | null;
+          allowance_key: string;
+          label: string;
+          amount: number;
+          source?: string;
+          note?: string | null;
+          is_active?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          organisation_id?: string;
+          project_id?: string;
+          project_scope_id?: string | null;
+          allowance_key?: string;
+          label?: string;
+          amount?: number;
+          source?: string;
+          note?: string | null;
+          is_active?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [
+          {
+            foreignKeyName: "project_allowances_organisation_id_fkey";
+            columns: ["organisation_id"];
+            isOneToOne: false;
+            referencedRelation: "organisations";
+            referencedColumns: ["id"];
+          },
+          {
+            foreignKeyName: "project_allowances_project_id_fkey";
+            columns: ["project_id"];
+            isOneToOne: false;
+            referencedRelation: "projects";
+            referencedColumns: ["id"];
+          },
+        ];
+      };
+      scope_components: {
+        Row: {
+          id: string;
+          organisation_id: string | null;
+          scope_type_key: string;
+          component_key: string;
+          label: string;
+          default_unit: string;
+          default_quantity_formula: string | null;
+          default_rate_type: string | null;
+          is_system: boolean;
+          is_active: boolean;
+          created_at: string;
+          updated_at: string;
+        };
+        Insert: {
+          id?: string;
+          organisation_id?: string | null;
+          scope_type_key: string;
+          component_key: string;
+          label: string;
+          default_unit: string;
+          default_quantity_formula?: string | null;
+          default_rate_type?: string | null;
+          is_system?: boolean;
+          is_active?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Update: {
+          id?: string;
+          organisation_id?: string | null;
+          scope_type_key?: string;
+          component_key?: string;
+          label?: string;
+          default_unit?: string;
+          default_quantity_formula?: string | null;
+          default_rate_type?: string | null;
+          is_system?: boolean;
+          is_active?: boolean;
+          created_at?: string;
+          updated_at?: string;
+        };
+        Relationships: [];
       };
       scope_rates: {
         Row: {
@@ -1882,7 +2068,13 @@ export type ProjectScopeBuilderInput =
 export type ProjectScopeSuggestion =
   Database["public"]["Tables"]["project_scope_suggestions"]["Row"];
 export type ProjectScope = Database["public"]["Tables"]["project_scopes"]["Row"];
+export type ProjectScopePackage =
+  Database["public"]["Tables"]["project_scope_packages"]["Row"];
 export type ProjectTrade = Database["public"]["Tables"]["project_trades"]["Row"];
+export type ProjectAllowance =
+  Database["public"]["Tables"]["project_allowances"]["Row"];
+export type ScopeComponent =
+  Database["public"]["Tables"]["scope_components"]["Row"];
 export type ScopeRate = Database["public"]["Tables"]["scope_rates"]["Row"];
 export type LabourRate = Database["public"]["Tables"]["labour_rates"]["Row"];
 export type MaterialRate = Database["public"]["Tables"]["material_rates"]["Row"];

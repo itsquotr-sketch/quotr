@@ -202,6 +202,21 @@ export function calculateFromTemplate(
           centralEstimate = Math.round(centralEstimate * mod);
           inputs.push("Elevated deck (+15%)");
           assumptions.push("Elevated deck access assumed (+15%)");
+
+          const height = parseNumber(getAnswerValue(answers, "deck.height_m"));
+          if (height && height > 1.5) {
+            centralEstimate = Math.round(centralEstimate * 1.08);
+            inputs.push("Extra height allowance (+8%)");
+          }
+        }
+        if (isYes(getAnswerValue(answers, "deck.has_existing_deck"))) {
+          centralEstimate += 1800;
+          allowances.push("Existing deck removal allowance");
+        }
+        if (isYes(getAnswerValue(answers, "deck.tight_access"))) {
+          centralEstimate = Math.round(centralEstimate * 1.08);
+          inputs.push("Tight access (+8%)");
+          assumptions.push("Tight site access assumed (+8%)");
         }
         if (isYes(getAnswerValue(answers, "deck.has_stairs"))) {
           centralEstimate += 2500;
@@ -212,9 +227,30 @@ export function calculateFromTemplate(
           allowances.push("Pergola allowance");
         }
         if (isYes(getAnswerValue(answers, "deck.has_balustrade"))) {
-          const length = 4 * Math.sqrt(area);
-          centralEstimate += Math.round(length * 400);
-          allowances.push("Balustrade allowance");
+          const balustradeSupply = getAnswerValue(answers, "deck.balustrade_supply");
+          if (balustradeSupply !== "excluded") {
+            const length = 4 * Math.sqrt(area);
+            const balustradeCost =
+              balustradeSupply === "client_supplied"
+                ? Math.round(length * 180)
+                : Math.round(length * 400);
+            centralEstimate += balustradeCost;
+            allowances.push(
+              balustradeSupply === "client_supplied"
+                ? "Balustrade install allowance"
+                : "Balustrade allowance"
+            );
+          }
+        }
+        const materialSupply = getAnswerValue(answers, "deck.material_supply");
+        if (materialSupply === "labour_only") {
+          centralEstimate = Math.round(centralEstimate * 0.65);
+          inputs.push("Labour only (-35% materials)");
+          assumptions.push("Labour only — decking materials excluded");
+        } else if (materialSupply === "client_supplied") {
+          centralEstimate = Math.round(centralEstimate * 0.75);
+          inputs.push("Client-supplied decking (-25%)");
+          assumptions.push("Client-supplied decking materials");
         }
       } else {
         const base = PLACEHOLDER_BASE_RANGES.deck;
@@ -234,9 +270,13 @@ export function calculateFromTemplate(
 
       if (wallArea) {
         quantity = wallArea;
-        centralEstimate = Math.round(wallArea * baseRate);
+        let rate = baseRate;
+        const material = getAnswerValue(answers, "retaining_wall.material");
+        if (material === "timber") rate = Math.round(baseRate * 0.9);
+        if (material === "concrete") rate = Math.round(baseRate * 1.15);
+        centralEstimate = Math.round(wallArea * rate);
         inputs.push(
-          `${template.name}: ${length}m × ${height}m = ${wallArea.toFixed(1)}m² × $${Math.round(baseRate)}/m² (template: ${template.key})`
+          `${template.name}: ${length}m × ${height}m = ${wallArea.toFixed(1)}m² × $${Math.round(rate)}/m² (template: ${template.key})`
         );
 
         if (isYes(getAnswerValue(answers, "retaining_wall.has_drainage"))) {
@@ -250,6 +290,11 @@ export function calculateFromTemplate(
         if (isYes(getAnswerValue(answers, "retaining_wall.has_spoil_removal"))) {
           centralEstimate += 2000;
           allowances.push("Spoil removal allowance");
+        }
+        if (isYes(getAnswerValue(answers, "retaining_wall.surcharge_loading"))) {
+          centralEstimate = Math.round(centralEstimate * 1.12);
+          inputs.push("Surcharge/loading risk (+12%)");
+          assumptions.push("Surcharge or loading above wall assumed (+12%)");
         }
       } else {
         const base = PLACEHOLDER_BASE_RANGES.other;
@@ -285,6 +330,41 @@ export function calculateFromTemplate(
         if (isYes(getAnswerValue(answers, "bathroom.waterproofing_included"))) {
           centralEstimate += 1400;
           allowances.push("Waterproofing allowance");
+        }
+        if (isYes(getAnswerValue(answers, "bathroom.demolition_included"))) {
+          centralEstimate += 2200;
+          allowances.push("Demolition allowance");
+        }
+        if (isYes(getAnswerValue(answers, "bathroom.plumbing_relocation"))) {
+          centralEstimate += 3500;
+          allowances.push("Plumbing relocation allowance");
+        }
+        if (isYes(getAnswerValue(answers, "bathroom.electrical_allowance"))) {
+          centralEstimate += 1800;
+          allowances.push("Electrical allowance");
+        }
+        if (isYes(getAnswerValue(answers, "bathroom.occupied_home"))) {
+          centralEstimate = Math.round(centralEstimate * 1.06);
+          inputs.push("Occupied home (+6%)");
+        }
+        const fixturesSupply = getAnswerValue(
+          answers,
+          "bathroom.fixtures_client_supplied"
+        );
+        if (fixturesSupply === "yes") {
+          centralEstimate = Math.round(centralEstimate * 0.88);
+          inputs.push("Client-supplied fixtures (-12%)");
+          assumptions.push("Fixtures client-supplied — material allowance reduced");
+        } else if (fixturesSupply === "partial") {
+          centralEstimate = Math.round(centralEstimate * 0.94);
+          inputs.push("Partial client-supplied fixtures (-6%)");
+          assumptions.push("Some fixtures client-supplied");
+        }
+        const tilesSupply = getAnswerValue(answers, "bathroom.tiles_supplied_by");
+        if (tilesSupply === "client") {
+          centralEstimate = Math.round(centralEstimate * 0.92);
+          inputs.push("Client-supplied tiles (-8%)");
+          assumptions.push("Tiles client-supplied — tile material excluded");
         }
       } else {
         const base = PLACEHOLDER_BASE_RANGES["bathroom-renovation"];

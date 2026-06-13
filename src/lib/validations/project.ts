@@ -30,9 +30,14 @@ export const projectSchema = z.object({
     .optional()
     .or(z.literal("")),
   siteAddress: z.string().min(1, "Site address is required"),
-  enquirySource: z.enum(enquirySourceValues, {
-    errorMap: () => ({ message: "Select how this enquiry came in" }),
-  }),
+  enquirySource: z
+    .string()
+    .min(1, "Select how this enquiry came in")
+    .pipe(
+      z.enum(enquirySourceValues, {
+        errorMap: () => ({ message: "Select how this enquiry came in" }),
+      })
+    ),
   clientBrief: z.string().optional(),
   priority: z.enum(priorityValues, {
     errorMap: () => ({ message: "Select a priority" }),
@@ -53,4 +58,6 @@ export { DEFAULT_PROJECT_STATUS };
 export type ProjectActionState = {
   error?: string;
   fieldErrors?: Record<string, string[]>;
+  success?: boolean;
+  projectId?: string;
 };

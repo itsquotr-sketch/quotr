@@ -48,6 +48,33 @@ export const retainingWallScope: ScopeDefinition = {
       extractValue: (m) => m[1] ?? null,
     },
     {
+      key: "retaining_wall.material",
+      label: "Wall material",
+      type: "select",
+      required: true,
+      affectsEstimate: true,
+      affectsConfidence: true,
+      questionText: "What material — timber, block or concrete?",
+      options: [
+        { value: "timber", label: "Timber" },
+        { value: "block", label: "Block" },
+        { value: "concrete", label: "Concrete" },
+        { value: "unknown", label: "Not sure yet" },
+      ],
+      extractionPatterns: [
+        /\btimber\s+retaining\b/i,
+        /\bblock\s+wall\b/i,
+        /\bconcrete\s+retaining\b/i,
+      ],
+      extractValue: (m) => {
+        const text = m[0].toLowerCase();
+        if (text.includes("timber")) return "timber";
+        if (text.includes("block")) return "block";
+        if (text.includes("concrete")) return "concrete";
+        return null;
+      },
+    },
+    {
       key: "retaining_wall.has_drainage",
       label: "Drainage",
       type: "select",
@@ -115,15 +142,33 @@ export const retainingWallScope: ScopeDefinition = {
       ],
       extractValue: (m) => m[1] ?? null,
     },
+    {
+      key: "retaining_wall.surcharge_loading",
+      label: "Surcharge / loading risk",
+      type: "select",
+      required: false,
+      affectsEstimate: true,
+      affectsConfidence: true,
+      questionText: "Is there surcharge or loading above the wall?",
+      options: [...YES_NO_UNSURE],
+      extractionPatterns: [
+        /\bsurcharge\b/i,
+        /\bloading\s+(?:above|on)\b/i,
+        /\bdriveway\s+above\b/i,
+      ],
+      extractValue: () => "yes",
+    },
   ],
   pricingDrivers: [
     "retaining_wall.length_m",
     "retaining_wall.height_m",
+    "retaining_wall.material",
     "retaining_wall.has_drainage",
     "retaining_wall.machine_access",
     "retaining_wall.has_backfill",
     "retaining_wall.has_spoil_removal",
     "retaining_wall.carting_distance_m",
+    "retaining_wall.surcharge_loading",
   ],
   constraints: [
     {
@@ -167,6 +212,7 @@ export const retainingWallScope: ScopeDefinition = {
     measurementFactKeys: [
       "retaining_wall.length_m",
       "retaining_wall.height_m",
+      "retaining_wall.material",
       "retaining_wall.has_drainage",
       "retaining_wall.machine_access",
     ],
@@ -174,6 +220,7 @@ export const retainingWallScope: ScopeDefinition = {
       "retaining_wall.has_backfill",
       "retaining_wall.has_spoil_removal",
       "retaining_wall.carting_distance_m",
+      "retaining_wall.surcharge_loading",
     ],
   },
   benchmarkRates: { unit: "m²", low: 550, typical: 850, high: 1300 },
@@ -182,6 +229,7 @@ export const retainingWallScope: ScopeDefinition = {
     requiredFactKeys: [
       "retaining_wall.length_m",
       "retaining_wall.height_m",
+      "retaining_wall.material",
       "retaining_wall.has_drainage",
       "retaining_wall.machine_access",
     ],

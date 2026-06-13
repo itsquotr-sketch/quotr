@@ -15,6 +15,8 @@ export const assistantMessageMetadataSchema = z
         "discovery_summary",
         "constraint_declined",
         "estimate_update",
+        "command_confirmation",
+        "fallback_options",
       ])
       .optional(),
     batchSize: z.number().optional(),

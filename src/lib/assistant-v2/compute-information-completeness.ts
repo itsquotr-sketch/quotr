@@ -1,14 +1,21 @@
 import { getScopeByWorkAreaType } from "@/lib/scopes";
 import {
+  buildScopedMissingLabelsFromItems,
+  getCriticalOrUsefulMissing,
+  getCurrentMissingItems,
+} from "@/lib/assistant-v2/missing/get-current-missing-items";
+import {
   factIsAnsweredFromMap,
   getKnownFactsForScope,
-  getMissingOptionalHighImpact,
   getMissingRequiredFacts,
 } from "@/lib/scopes/missing-facts";
-
 export type WorkAreaCompletenessInput = {
+  scopeId?: string;
+  scopeName?: string;
   workAreaTypeKey: string;
   answers: Record<string, string>;
+  /** When false, excluded from project completeness (default true). */
+  included?: boolean;
 };
 
 export type ScopeCompletenessResult = {
@@ -48,12 +55,13 @@ export function computeScopeCompleteness(
 export function computeProjectCompleteness(
   workAreas: WorkAreaCompletenessInput[]
 ): number {
-  if (workAreas.length === 0) return 0;
+  const included = workAreas.filter((a) => a.included !== false);
+  if (included.length === 0) return 0;
 
   let known = 0;
   let total = 0;
 
-  for (const area of workAreas) {
+  for (const area of included) {
     const scope = getScopeByWorkAreaType(area.workAreaTypeKey);
     if (!scope) continue;
 
@@ -127,42 +135,18 @@ export function formatKnownFactLabels(
   });
 }
 
-const MISSING_FACT_PROMPTS: Record<string, string> = {
-  "deck.level_type": "Is the deck ground-level or elevated?",
-  "deck.area_m2": "What's the deck area?",
-  "deck.material": "What deck material?",
-  "deck.has_balustrade": "Does the deck need balustrades?",
-  "retaining_wall.length_m": "How long is the wall?",
-  "retaining_wall.height_m": "How high is the wall?",
-  "retaining_wall.drainage": "Is drainage required?",
-  "bathroom.area_m2": "What's the bathroom floor area?",
-  "bathroom.tile_extent": "How high are the tiles?",
-};
-
-function plainMissingLabel(factKey: string, fallbackLabel: string): string {
-  return MISSING_FACT_PROMPTS[factKey] ?? `Still need: ${fallbackLabel.toLowerCase()}`;
-}
 
 export function buildMissingInformationLabels(
   workAreas: WorkAreaCompletenessInput[]
 ): string[] {
-  const missing: string[] = [];
-
-  for (const area of workAreas) {
-    for (const fact of getMissingRequiredFacts(
-      area.workAreaTypeKey,
-      area.answers
-    )) {
-      missing.push(plainMissingLabel(fact.key, fact.label));
-    }
-
-    for (const fact of getMissingOptionalHighImpact(
-      area.workAreaTypeKey,
-      area.answers
-    )) {
-      missing.push(plainMissingLabel(fact.key, fact.label));
-    }
-  }
-
-  return [...new Set(missing)];
+  const items = getCurrentMissingItems({
+    workAreas: workAreas.map((area) => ({
+      scopeId: area.scopeId ?? "",
+      scopeName: area.scopeName ?? "Work area",
+      workAreaTypeKey: area.workAreaTypeKey,
+      answers: area.answers,
+      included: area.included !== false,
+    })),
+  });
+  return buildScopedMissingLabelsFromItems(getCriticalOrUsefulMissing(items));
 }

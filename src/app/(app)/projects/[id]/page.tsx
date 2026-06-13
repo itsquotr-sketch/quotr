@@ -43,6 +43,7 @@ export default async function ProjectDetailPage({
       discovery={data.discovery}
       chatMessages={data.chatMessages}
       declinedConstraintSlugs={data.declinedConstraintSlugs}
+      scopePackages={data.scopePackages}
       clientName={clientName(projectWithClient)}
       clientPhone={clientPhone(projectWithClient)}
       clientEmail={clientEmail(projectWithClient)}

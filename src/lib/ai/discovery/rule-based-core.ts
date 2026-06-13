@@ -6,6 +6,7 @@ import type {
   DiscoveryTrade,
   DiscoveryWorkArea,
 } from "@/lib/ai/discovery/types";
+import { applyClassificationToDiscoveryResult } from "@/lib/scopes/classification/process-discovery-items";
 import {
   getQuestionDefsForWorkAreaType,
   questionTextFromDef,
@@ -98,7 +99,11 @@ export class RuleBasedDiscoveryCore implements RuleBasedDiscoveryProvider {
 
   discoverProject(sourceNotes: string): DiscoveryResult {
     const trimmed = sourceNotes.trim();
-    const workAreas = mapWorkAreas(trimmed);
+    const rawWorkAreas = mapWorkAreas(trimmed);
+    const { workAreas } = applyClassificationToDiscoveryResult(
+      rawWorkAreas,
+      trimmed
+    );
     const facts = extractFactsFromNotes(trimmed);
     const constraints = buildConstraintsFromTemplates(workAreas, trimmed);
     const questions = buildQuestionsForWorkAreas(workAreas, facts);

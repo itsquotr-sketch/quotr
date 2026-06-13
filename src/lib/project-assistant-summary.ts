@@ -158,6 +158,7 @@ export function parseQuickEstimateSummary(notes: string | null): {
   centralEstimate?: number | null;
   contingencyPercent?: number;
   rateSourceDetail?: string;
+  stagedRatePrompt?: string | null;
   rateSourceLines?: WorkAreaRateSourceLine[];
   benchmarkScopesForOnboarding?: {
     scopeTypeKey: string;
@@ -268,6 +269,11 @@ export function parseQuickEstimateSummary(notes: string | null): {
         centralEstimate: parsed.centralEstimate ?? null,
         contingencyPercent: parsed.contingencyPercent,
         rateSourceDetail: parsed.rateSourceDetail,
+        stagedRatePrompt:
+          typeof (parsed as { stagedRatePrompt?: unknown }).stagedRatePrompt ===
+          "string"
+            ? (parsed as { stagedRatePrompt: string }).stagedRatePrompt
+            : null,
         rateSourceLines: Array.isArray(parsed.rateSourceLines)
           ? parsed.rateSourceLines
           : [],

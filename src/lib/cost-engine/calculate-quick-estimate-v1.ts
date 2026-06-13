@@ -5,6 +5,7 @@ import {
 } from "@/lib/constants/quick-estimate";
 import { applyConstraintsToCentral } from "@/lib/cost-engine/apply-constraints";
 import { applyQualityLevelToCentral } from "@/lib/cost-engine/apply-quality-level";
+import { constraintSlugsSuppressedByAllowanceKey } from "@/lib/assistant-v2/intent/allowance-keys";
 import { buildMissingInformation } from "@/lib/cost-engine/build-missing-information";
 import {
   computeConfidenceScore,
@@ -47,6 +48,7 @@ import {
 import { getIncludedTradesForWorkAreas } from "@/lib/project-assistant-trades";
 import { calculateFromTemplate } from "@/lib/scope-templates/calculate";
 import { getScopeTemplateByWorkAreaType } from "@/lib/scope-templates";
+import { resolveStagedRateDetail } from "@/lib/cost-engine/resolve-staged-rate-detail";
 import { getScopeByWorkAreaType } from "@/lib/scopes";
 
 const DEFAULT_CONTINGENCY_PERCENT = 5;
@@ -182,6 +184,8 @@ export function calculateQuickEstimateV1(
       qualityLevelNote: "Finish level unknown — estimate range kept wider.",
       ratesSource: "fallback",
       rateSourceDetail: "Rough placeholder",
+      stagedRateLevel: 0,
+      stagedRatePrompt: "Add more rates to make this estimate more accurate.",
       rateSourceLines: [],
       benchmarkScopesForOnboarding: [],
       usedPackageRates: false,
@@ -278,8 +282,35 @@ export function calculateQuickEstimateV1(
     );
   }
 
+  const suppressedConstraintSlugs = new Set<string>();
+  for (const allowance of input.userAllowances ?? []) {
+    for (const slug of constraintSlugsSuppressedByAllowanceKey(
+      allowance.allowance_key
+    )) {
+      suppressedConstraintSlugs.add(slug);
+    }
+  }
+
+  const activeConstraints = input.constraints.filter(
+    (c) => !suppressedConstraintSlugs.has(c.slug)
+  );
+
   const { centralEstimate: afterConstraints, constraintsApplied } =
-    applyConstraintsToCentral(centralEstimate, input.constraints, allAnswers);
+    applyConstraintsToCentral(centralEstimate, activeConstraints, allAnswers);
+
+  const userAllowanceRows = (input.userAllowances ?? []).filter(
+    (a) => a.is_active
+  );
+  const userAllowanceTotal = userAllowanceRows.reduce(
+    (sum, row) => sum + Number(row.amount),
+    0
+  );
+
+  for (const row of userAllowanceRows) {
+    allowances.push(
+      `${row.label}: $${Number(row.amount).toLocaleString("en-NZ")} (user allowance)`
+    );
+  }
 
   // Quality model: template_benchmark selects low/typical/high per finish level inside
   // getBaseRateForScope — skip the global finish multiplier when any work area already
@@ -308,7 +339,7 @@ export function calculateQuickEstimateV1(
         qualityNote: `${effectiveQualityLevel.charAt(0).toUpperCase()}${effectiveQualityLevel.slice(1)} finish selected.`,
       }
     : applyQualityLevelToCentral(afterConstraints, effectiveQualityLevel);
-  const baseCost = qualityAdjustment.centralEstimate;
+  const baseCost = qualityAdjustment.centralEstimate + userAllowanceTotal;
 
   const measuredAreaCount = input.workAreas.filter((area) =>
     hasKeyMeasurementsForArea(area.workAreaTypeKey, area.answers)
@@ -445,9 +476,6 @@ export function calculateQuickEstimateV1(
     });
 
   const primaryArea = areaResults[0];
-  const primaryScopeDef =
-    getScopeRateDefinitionByKey(primaryArea?.scopeTypeKey ?? "") ??
-    getScopeRateDefinition(input.workAreas[0]?.workAreaTypeKey ?? "");
   const finishTraceAdjustments = qualityAdjustment.assumptions.map((a) => ({
     label: a,
     effect: "Finish level adjustment",
@@ -471,6 +499,17 @@ export function calculateQuickEstimateV1(
     centralEstimate: baseCost,
     contingencyPercent,
     workAreas: scaledAreaBreakdown,
+    userAllowances: userAllowanceRows.map((row) => ({
+      label: row.label,
+      amount: Number(row.amount),
+    })),
+  });
+
+  const stagedRateDetail = resolveStagedRateDetail({
+    rateSourceLines,
+    scopeRates: input.scopeRates,
+    labourRates: input.labourRates,
+    materialRates: input.materialRates,
   });
 
   const workAreaTraces: WorkAreaEstimateTrace[] = input.workAreas.map(
@@ -561,10 +600,9 @@ export function calculateQuickEstimateV1(
     qualityLevel: effectiveQualityLevel,
     qualityLevelNote: qualityAdjustment.qualityNote,
     ratesSource,
-    rateSourceDetail: rateSourceLabel(primarySource, {
-      scopeLabel: primaryScopeDef?.label,
-      usesDefaultRateOnly: primaryArea?.usesDefaultRateOnly,
-    }),
+    rateSourceDetail: stagedRateDetail.label,
+    stagedRateLevel: stagedRateDetail.level,
+    stagedRatePrompt: stagedRateDetail.prompt,
     rateSourceLines,
     benchmarkScopesForOnboarding,
     usedPackageRates,
