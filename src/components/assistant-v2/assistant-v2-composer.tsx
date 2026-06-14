@@ -28,7 +28,7 @@ export function AssistantV2Composer({
     syncAssistant,
     clearOptimisticMessages,
   } = useAssistantChat();
-  const { markSaving, markUpdating, markSaved, markIdle, requestBreakdownOpen } =
+  const { markSaving, markUpdating, markSaved, markIdle, requestBreakdownOpen, requestWhyOpen } =
     useEstimateUpdate();
   const [pending, startTransition] = useTransition();
   const [text, setText] = useState("");
@@ -63,6 +63,9 @@ export function AssistantV2Composer({
         clearOptimisticMessages();
         if (result.openBreakdown) {
           requestBreakdownOpen();
+        }
+        if (result.openWhy) {
+          requestWhyOpen();
         }
         if (result.intent && result.intent !== "ask_question" && !result.requiresConfirmation) {
           markSaved({

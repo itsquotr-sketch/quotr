@@ -1,6 +1,7 @@
 import type { QuickEstimateConfidenceLevel } from "@/lib/constants/quick-estimate";
 import type { QualityLevel } from "@/lib/constants/quality-level";
 import type { CostBreakdown } from "@/lib/cost-engine/build-cost-breakdown";
+import type { StructuredEstimateBreakdown } from "@/lib/cost-engine/build-structured-estimate-breakdown";
 import type { RateSource } from "@/lib/cost-engine/rates/get-base-rate-for-scope";
 
 export type EstimateTraceAdjustment = {
@@ -41,6 +42,16 @@ export type WorkAreaRateSourceLine = {
   rateSourceLabel: string;
 };
 
+export type MaterialCategoryTrace = {
+  workAreaName: string;
+  scopeTypeKey: string;
+  factKey: string;
+  categoryLabel: string;
+  categoryValue: string;
+  source: "user_provided" | "assumed";
+  sourceLabel: "User Provided" | "Assumed";
+};
+
 /** Calculation audit trail stored in snapshots and shown behind "Show calculation basis". */
 export type EstimateTrace = {
   scopeKey: string;
@@ -60,7 +71,11 @@ export type EstimateTrace = {
   missingCriticalFacts: string[];
   costBreakdown?: CostBreakdown;
   workAreaTraces?: WorkAreaEstimateTrace[];
+  /** Standardised per-scope breakdown — source of truth for estimate panel UI. */
+  structuredBreakdown?: StructuredEstimateBreakdown;
 
+  /** Per-scope material category selections for estimate audit. */
+  materialCategories?: MaterialCategoryTrace[];
   /** Legacy fields kept for UI compatibility */
   workAreas?: { name: string; typeKey: string; templateKey?: string }[];
   extractedFacts?: {
@@ -101,6 +116,7 @@ export function createEmptyTrace(): EstimateTrace {
     finalSellRange: { low: 0, high: 0 },
     missingCriticalFacts: [],
     workAreaTraces: [],
+    materialCategories: [],
     workAreas: [],
     extractedFacts: [],
     missingFacts: [],

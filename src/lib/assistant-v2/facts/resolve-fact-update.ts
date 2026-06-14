@@ -1,3 +1,7 @@
+import { getTrackableFactsForWorkAreaType } from "@/lib/assistant-v2/discovery/generic-scope-discovery";
+import {
+  resolveMeasurements,
+} from "@/lib/assistant-v2/facts/measurement-resolver";
 import { getAllFactsForScope, getScopeByWorkAreaType } from "@/lib/scopes";
 import type { ScopeFactDefinition } from "@/lib/scopes/types";
 import { normaliseQualityLevel } from "@/lib/constants/quality-level";
@@ -41,15 +45,20 @@ export type ScopeForFactResolution = {
 import { COMMAND_VERB_PATTERN } from "@/lib/assistant-v2/intent/contractor-synonyms";
 import {
   parseBareScopeNumber,
-  parseDimensions,
+  parseLengthWidthDimensions,
   parseNumericForFact,
+  classifyMeasurementContext,
+  hasAreaUnit,
+  HEIGHT_CONTEXT_PATTERN,
+  WALKING_DISTANCE_PATTERN,
 } from "@/lib/assistant-v2/facts/parse-numeric-command";
+import { parseFinishLevelSynonym } from "@/lib/assistant-v2/facts/get-known-facts-for-scope";
 
 const IMPLICIT_CORRECTION_PATTERN =
   /\b(?:actually|correction|it's|it is|the .+ is|size is|area is|make it|change to|update to)\b/i;
 
 const AREA_UNIT_PATTERN =
-  /(\d+(?:\.\d+)?)\s*(?:m²|m2|sqm|square\s*met(?:re|er)s?)/i;
+  /(\d+(?:\.\d+)?)\s*(?:m²|m2|sqm|square\s*met(?:re|er)s?)(?:\b|$)/i;
 
 const LENGTH_UNIT_PATTERN =
   /(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?|lm)\b/i;
@@ -162,6 +171,21 @@ const FACT_PHRASES: FactPhrase[] = [
     scopeHint: /deck/i,
   },
   {
+    patterns: [/fence\s*length|length\s*of\s*(?:the\s+)?fence/i],
+    factKeySuffix: "length_m",
+    scopeHint: /fence|fencing/i,
+  },
+  {
+    patterns: [/fence\s*height|height\s*of\s*(?:the\s+)?fence/i],
+    factKeySuffix: "height_m",
+    scopeHint: /fence|fencing/i,
+  },
+  {
+    patterns: [/timber|metal|paling|composite/i],
+    factKeySuffix: "material_type",
+    scopeHint: /fence|fencing/i,
+  },
+  {
     patterns: [/layout/i],
     factKeySuffix: "layout_changing",
     scopeHint: /bathroom/i,
@@ -235,13 +259,20 @@ const IMPLICIT_AREA_BY_SCOPE: Record<string, string> = {
   deck: "area_m2",
   retaining_wall: "length_m",
   bathroom: "floor_area_m2",
+  fence: "length_m",
 };
 
 function scopePrefix(workAreaTypeKey: string): string | null {
-  if (workAreaTypeKey === "Deck") return "deck";
-  if (workAreaTypeKey === "Retaining Wall") return "retaining_wall";
-  if (workAreaTypeKey === "Bathroom renovation") return "bathroom";
-  return null;
+  const map: Record<string, string> = {
+    Deck: "deck",
+    "Retaining Wall": "retaining_wall",
+    "Bathroom renovation": "bathroom",
+    Fence: "fence",
+    Painting: "painting",
+    "Kitchen renovation": "kitchen",
+    Flooring: "flooring",
+  };
+  return map[workAreaTypeKey] ?? null;
 }
 
 function findScopeByHint(
@@ -287,25 +318,47 @@ function resolveFactForScope(
   factKeySuffix: string
 ): ScopeFactDefinition | null {
   const scopeDef = getScopeByWorkAreaType(scope.workAreaTypeKey);
-  if (!scopeDef) return null;
-
   const prefix = scopePrefix(scope.workAreaTypeKey);
   const fullKey = prefix ? `${prefix}.${factKeySuffix}` : factKeySuffix;
 
-  return (
-    getAllFactsForScope(scopeDef).find((f) => f.key === fullKey) ??
-    getAllFactsForScope(scopeDef).find((f) =>
-      f.key.endsWith(`.${factKeySuffix}`)
-    ) ??
-    null
+  if (scopeDef) {
+    return (
+      getAllFactsForScope(scopeDef).find((f) => f.key === fullKey) ??
+      getAllFactsForScope(scopeDef).find((f) =>
+        f.key.endsWith(`.${factKeySuffix}`)
+      ) ??
+      null
+    );
+  }
+
+  const trackable = getTrackableFactsForWorkAreaType(scope.workAreaTypeKey);
+  const match = trackable.find(
+    (f) => f.key === fullKey || f.key.endsWith(`.${factKeySuffix}`)
   );
+  return (match as ScopeFactDefinition) ?? null;
 }
 
 function detectImplicitScopeAreaUpdate(
   text: string,
   scopes: ScopeForFactResolution[]
 ): { factKey: string; fact: ScopeFactDefinition; scope: ScopeForFactResolution }[] {
-  if (!AREA_UNIT_PATTERN.test(text) && !LENGTH_UNIT_PATTERN.test(text)) {
+  if (HEIGHT_CONTEXT_PATTERN.test(text) && !hasAreaUnit(text)) {
+    return [];
+  }
+  if (WALKING_DISTANCE_PATTERN.test(text) && !hasAreaUnit(text)) {
+    return [];
+  }
+
+  const measurementContext = classifyMeasurementContext(text);
+  if (
+    measurementContext.kind === "height" ||
+    measurementContext.kind === "distance"
+  ) {
+    return [];
+  }
+
+  const hasDimensions = parseLengthWidthDimensions(text).length > 0;
+  if (!AREA_UNIT_PATTERN.test(text) && !LENGTH_UNIT_PATTERN.test(text) && !hasDimensions) {
     return [];
   }
 
@@ -374,10 +427,10 @@ function detectMultiDimensionFacts(
   scope: ScopeForFactResolution;
   newValue: string;
 }[] {
-  const dimensions = parseDimensions(text);
-  const lengthDim = dimensions.find((d) => d.kind === "length_m");
-  const heightDim = dimensions.find((d) => d.kind === "height_m");
-  if (!lengthDim || !heightDim) return [];
+  const measurements = resolveMeasurements(text);
+  const lengthVal = measurements.length_m;
+  const heightVal = measurements.height_m;
+  if (lengthVal == null || heightVal == null) return [];
 
   const candidateScopes = findScopeByHint(scopes, /retaining|wall/i, text);
   if (candidateScopes.length !== 1) return [];
@@ -398,7 +451,7 @@ function detectMultiDimensionFacts(
       factKey: lengthFact.key,
       fact: lengthFact,
       scope,
-      newValue: String(lengthDim.value),
+      newValue: String(lengthVal),
     });
   }
   if (heightFact) {
@@ -406,7 +459,7 @@ function detectMultiDimensionFacts(
       factKey: heightFact.key,
       fact: heightFact,
       scope,
-      newValue: String(heightDim.value),
+      newValue: String(heightVal),
     });
   }
 
@@ -675,6 +728,151 @@ function buildAmbiguousFactMessage(
   return `Which ${scopeName.toLowerCase()} detail should I update — ${labels.join(" or ")}?`;
 }
 
+function detectDeckDimensionUpdate(
+  text: string,
+  scopes: ScopeForFactResolution[]
+): FactUpdateResolution | null {
+  const dims = parseLengthWidthDimensions(text);
+  if (dims.length === 0) return null;
+
+  const deck = scopes.find((s) => s.workAreaTypeKey === "Deck");
+  if (!deck) return null;
+
+  const dim = dims[0]!;
+  const areaFact = resolveFactForScope(deck, "area_m2");
+  if (!areaFact) return null;
+
+  const additionalFacts: NonNullable<FactUpdateResolution["additionalFacts"]> =
+    [];
+
+  const lengthFact = resolveFactForScope(deck, "length_m");
+  const widthFact = resolveFactForScope(deck, "width_m");
+  if (lengthFact) {
+    additionalFacts.push({
+      factKey: lengthFact.key,
+      factLabel: lengthFact.label,
+      newValue: String(dim.length_m),
+      previousValue: deck.answers[lengthFact.key],
+      unit: lengthFact.unit,
+    });
+  }
+  if (widthFact) {
+    additionalFacts.push({
+      factKey: widthFact.key,
+      factLabel: widthFact.label,
+      newValue: String(dim.width_m),
+      previousValue: deck.answers[widthFact.key],
+      unit: widthFact.unit,
+    });
+  }
+
+  return {
+    matched: true,
+    confidence: 0.92,
+    scopeId: deck.scopeId,
+    scopeTypeKey: deck.workAreaTypeKey,
+    scopeName: deck.scopeName,
+    factKey: areaFact.key,
+    factLabel: areaFact.label,
+    currentValue: deck.answers[areaFact.key],
+    newValue: String(dim.area_m2),
+    unit: areaFact.unit,
+    additionalFacts: additionalFacts.length > 0 ? additionalFacts : undefined,
+    requiresConfirmation: false,
+  };
+}
+
+function detectHeightUpdate(
+  text: string,
+  scopes: ScopeForFactResolution[]
+): FactUpdateResolution | null {
+  if (hasAreaUnit(text)) return null;
+  if (!/deck/i.test(text)) return null;
+  if (/retaining\s*wall|wall\s+is\s+\d/i.test(text) && !/deck/i.test(text)) {
+    return null;
+  }
+
+  const context = classifyMeasurementContext(text);
+  if (context.kind !== "height" && context.kind !== "ambiguous") return null;
+
+  const deck = scopes.find((s) => s.workAreaTypeKey === "Deck");
+  if (!deck || context.value == null) return null;
+
+  const heightFact = resolveFactForScope(deck, "height_m");
+  const levelFact = resolveFactForScope(deck, "level_type");
+  if (!heightFact) return null;
+
+  const unusual = context.value > 10;
+  const additionalFacts: NonNullable<FactUpdateResolution["additionalFacts"]> =
+    [];
+
+  if (levelFact && (context.kind === "height" || unusual)) {
+    additionalFacts.push({
+      factKey: levelFact.key,
+      factLabel: levelFact.label,
+      newValue: "elevated",
+      previousValue: deck.answers[levelFact.key],
+    });
+  }
+
+  return {
+    matched: true,
+    confidence: unusual ? 0.7 : 0.9,
+    scopeId: deck.scopeId,
+    scopeTypeKey: deck.workAreaTypeKey,
+    scopeName: deck.scopeName,
+    factKey: heightFact.key,
+    factLabel: heightFact.label,
+    currentValue: deck.answers[heightFact.key],
+    newValue: String(context.value),
+    unit: heightFact.unit,
+    additionalFacts: additionalFacts.length > 0 ? additionalFacts : undefined,
+    requiresConfirmation: unusual || context.kind === "ambiguous",
+    confirmationMessage: unusual
+      ? `Just checking — did you mean the deck is ${context.value}m above ground, or ${context.value}m² in area?`
+      : context.kind === "ambiguous"
+        ? `Just checking — did you mean the deck is ${context.value}m above ground, or ${context.value}m² in area?`
+        : undefined,
+  };
+}
+
+function detectFinishLevelSynonymUpdate(
+  text: string,
+  scopes: ScopeForFactResolution[]
+): FactUpdateResolution | null {
+  const level = parseFinishLevelSynonym(text);
+  if (!level) return null;
+
+  if (/\bstandard\s+timber\b/i.test(text)) {
+    return {
+      matched: true,
+      confidence: 0.55,
+      requiresConfirmation: true,
+      confirmationMessage:
+        "Do you mean standard finish level, or standard timber material?",
+    };
+  }
+
+  const scope = findScopeByHint(scopes, /deck|bathroom/i, text)[0] ?? scopes[0];
+  if (!scope) return null;
+
+  const fact = resolveFactForScope(scope, "finish_level");
+  if (!fact) return null;
+
+  return {
+    matched: true,
+    confidence: 0.88,
+    scopeId: scope.scopeId,
+    scopeTypeKey: scope.workAreaTypeKey,
+    scopeName: scope.scopeName,
+    factKey: fact.key,
+    factLabel: fact.label,
+    currentValue: scope.answers[fact.key],
+    newValue: level,
+    requiresConfirmation: false,
+  };
+}
+
 function detectClientSupplyUpdate(
   text: string,
   scopes: ScopeForFactResolution[]
@@ -866,6 +1064,15 @@ export function resolveFactUpdate(
     return { matched: false, confidence: 0, requiresConfirmation: false };
   }
 
+  const deckDims = detectDeckDimensionUpdate(text, scopes);
+  if (deckDims) return deckDims;
+
+  const heightUpdate = detectHeightUpdate(text, scopes);
+  if (heightUpdate) return heightUpdate;
+
+  const finishSynonym = detectFinishLevelSynonymUpdate(text, scopes);
+  if (finishSynonym) return finishSynonym;
+
   const clientSupply = detectClientSupplyUpdate(text, scopes);
   if (clientSupply) {
     return clientSupply;
@@ -1001,7 +1208,9 @@ export function resolveFactUpdate(
     /machine\s+access|no\s+machine\s+access|no\s+stairs|include\s+stairs|exclude\s+/i.test(
       text
     );
-  const confidence = hasExplicitVerb ? 0.92 : 0.82;
+  const hasExplicitAreaUnit = hasAreaUnit(text) && fact.key.includes("area");
+  let confidence = hasExplicitVerb ? 0.92 : 0.82;
+  if (hasExplicitAreaUnit) confidence = 0.92;
 
   const requiresConfirmation =
     confidence < 0.85 ||

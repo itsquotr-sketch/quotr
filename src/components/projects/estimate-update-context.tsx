@@ -25,11 +25,13 @@ type EstimateUpdateContextValue = {
   lastUpdatedAt: Date | null;
   lastChange: EstimateChangeSummary | null;
   breakdownOpenRequest: number;
+  whyOpenRequest: number;
   markSaving: () => void;
   markUpdating: () => void;
   markSaved: (change?: EstimateChangeSummary) => void;
   markIdle: () => void;
   requestBreakdownOpen: () => void;
+  requestWhyOpen: () => void;
   recordEstimateSnapshot: (
     costMid: number | null,
     completeness: number
@@ -51,6 +53,7 @@ export function EstimateUpdateProvider({ children }: { children: ReactNode }) {
     null
   );
   const [breakdownOpenRequest, setBreakdownOpenRequest] = useState(0);
+  const [whyOpenRequest, setWhyOpenRequest] = useState(0);
   const recalcInFlightRef = useRef(false);
   const snapshotRef = useRef<{
     costMid: number | null;
@@ -67,6 +70,11 @@ export function EstimateUpdateProvider({ children }: { children: ReactNode }) {
   const markIdle = useCallback(() => setStatus("idle"), []);
   const requestBreakdownOpen = useCallback(
     () => setBreakdownOpenRequest((n) => n + 1),
+    []
+  );
+
+  const requestWhyOpen = useCallback(
+    () => setWhyOpenRequest((n) => n + 1),
     []
   );
 
@@ -108,11 +116,13 @@ export function EstimateUpdateProvider({ children }: { children: ReactNode }) {
       lastUpdatedAt,
       lastChange,
       breakdownOpenRequest,
+      whyOpenRequest,
       markSaving,
       markUpdating,
       markSaved,
       markIdle,
       requestBreakdownOpen,
+      requestWhyOpen,
       recordEstimateSnapshot,
       runGuardedRefresh,
     }),
@@ -121,11 +131,13 @@ export function EstimateUpdateProvider({ children }: { children: ReactNode }) {
       lastUpdatedAt,
       lastChange,
       breakdownOpenRequest,
+      whyOpenRequest,
       markSaving,
       markUpdating,
       markSaved,
       markIdle,
       requestBreakdownOpen,
+      requestWhyOpen,
       recordEstimateSnapshot,
       runGuardedRefresh,
     ]

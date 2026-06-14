@@ -1,4 +1,5 @@
 import { normalizeQuestionKey } from "@/lib/question-keys";
+import { getDiscoveryQuestionDefsForWorkArea } from "@/lib/assistant-v2/discovery/generic-scope-discovery";
 import { getTemplateQuestionDefs } from "@/lib/scope-templates";
 import type { Json } from "@/types/database";
 
@@ -40,6 +41,7 @@ export function resolveWorkAreaTypeKey(
   if (lowerName.includes("kitchen")) return "Kitchen renovation";
   if (lowerName.includes("deck")) return "Deck";
   if (lowerName.includes("retaining")) return "Retaining Wall";
+  if (lowerName.includes("fence") || lowerName.includes("fencing")) return "Fence";
   if (lowerName.includes("paint")) return "Painting";
   if (lowerName.includes("internal") || lowerName.includes("alteration")) {
     return "Internal Alteration";
@@ -66,7 +68,7 @@ export function resolveWorkAreaTypeKey(
     if (typeLower.includes("kitchen")) return "Kitchen renovation";
     if (typeLower.includes("deck")) return "Deck";
     if (typeLower.includes("retaining")) return "Retaining Wall";
-    if (typeLower.includes("internal")) return "Internal Alteration";
+    if (typeLower.includes("fence") || typeLower.includes("fencing")) return "Fence";
   }
 
   return scopeTypeName ?? "Custom Scope";
@@ -176,49 +178,15 @@ const WORK_AREA_QUESTION_DEFS: Record<string, ScopeQuestionDef[]> = {
   ],
 };
 
-const GENERIC_QUESTION_DEFS: ScopeQuestionDef[] = [
-  {
-    key: "access_restrictions",
-    text: "Is access tight?",
-    inputType: "select",
-    options: [...YES_NO_UNSURE],
-  },
-  {
-    key: "client_materials",
-    text: "Is the client supplying materials?",
-    inputType: "select",
-    options: [...YES_NO_UNSURE],
-  },
-  {
-    key: "rubbish_removal",
-    text: "Is rubbish removal required?",
-    inputType: "select",
-    options: [...YES_NO_UNSURE],
-  },
-  {
-    key: "time_constraints",
-    text: "Are working hours restricted?",
-    inputType: "select",
-    options: [...YES_NO_UNSURE],
-  },
-  {
-    key: "client_budget_known",
-    text: "Is the client budget known?",
-    inputType: "select",
-    options: [
-      { value: "yes", label: "Yes — client shared a budget" },
-      { value: "rough", label: "Rough idea only" },
-      { value: "no", label: "No — not discussed" },
-    ],
-  },
-];
-
 export function getQuestionDefsForWorkAreaType(
-  workAreaTypeKey: string
+  workAreaTypeKey: string,
+  scopeName?: string
 ): ScopeQuestionDef[] {
   const templateDefs = getTemplateQuestionDefs(workAreaTypeKey);
   if (templateDefs.length > 0) return templateDefs;
-  return WORK_AREA_QUESTION_DEFS[workAreaTypeKey] ?? GENERIC_QUESTION_DEFS;
+  const legacy = WORK_AREA_QUESTION_DEFS[workAreaTypeKey];
+  if (legacy && legacy.length > 0) return legacy;
+  return getDiscoveryQuestionDefsForWorkArea(workAreaTypeKey, scopeName);
 }
 
 export function questionTextFromDef(def: ScopeQuestionDef): string {

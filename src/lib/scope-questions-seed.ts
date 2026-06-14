@@ -58,7 +58,7 @@ export async function syncScopeQuestionsForScope(
   scope: ScopeWithType
 ): Promise<{ inserted: number; error: string | null }> {
   const typeKey = resolveWorkAreaTypeKey(scope.scope_types?.name, scope.name);
-  const defs = getQuestionDefsForWorkAreaType(typeKey);
+  const defs = getQuestionDefsForWorkAreaType(typeKey, scope.name);
   if (defs.length === 0) {
     return { inserted: 0, error: null };
   }

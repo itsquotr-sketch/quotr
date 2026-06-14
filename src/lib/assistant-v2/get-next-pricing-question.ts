@@ -1,5 +1,11 @@
 import { buildMergedAnswersForScope } from "@/lib/assistant-v2/build-merged-answers";
+import { shouldSuppressQuestionForDerivedValue } from "@/lib/assistant-v2/facts/measurement-resolver";
+import {
+  getKnownFactsForScope,
+  shouldSkipQuestion,
+} from "@/lib/assistant-v2/facts/get-known-facts-for-scope";
 import type { DiscoveryResult } from "@/lib/ai/discovery/types";
+import type { QualityLevel } from "@/lib/constants/quality-level";
 import {
   resolveQuestionDef,
   resolveWorkAreaTypeKey,
@@ -78,8 +84,19 @@ function isRequiredFact(
 function isKnownQuestion(
   question: ScopeQuestionWithAnswers,
   typeKey: string,
-  mergedAnswers: Record<string, string>
+  mergedAnswers: Record<string, string>,
+  knownFactsInput?: {
+    scopeId: string;
+    qualityLevel?: QualityLevel;
+    selectedConstraintSlugs?: string[];
+    discovery: DiscoveryResult | null;
+  }
 ): boolean {
+  const key = normalizeQuestionKey(question.question_key);
+  if (key && shouldSuppressQuestionForDerivedValue(key, mergedAnswers)) {
+    return true;
+  }
+
   const row = question.scope_answers?.[0];
   const def = resolveQuestionDef(question, typeKey);
   const inputType = question.question_type ?? def?.inputType ?? "text";
@@ -98,7 +115,37 @@ function isKnownQuestion(
     return true;
   }
 
-  return isFactKnownForScope(typeKey, question.question_key, mergedAnswers);
+  if (isFactKnownForScope(typeKey, question.question_key, mergedAnswers)) {
+    return true;
+  }
+
+  if (knownFactsInput) {
+    const knownFacts = getKnownFactsForScope({
+      scopeId: knownFactsInput.scopeId,
+      scopeTypeKey: typeKey,
+      answers: mergedAnswers,
+      discovery: knownFactsInput.discovery,
+      qualityLevel: knownFactsInput.qualityLevel,
+      selectedConstraintSlugs: knownFactsInput.selectedConstraintSlugs,
+    });
+
+    const key = normalizeQuestionKey(question.question_key);
+    if (key && knownFacts.facts[key]) {
+      return true;
+    }
+
+    const scope = getScopeByWorkAreaType(typeKey);
+    const fact = scope
+      ? [...scope.requiredFacts, ...scope.optionalFacts].find(
+          (f) => f.key === key
+        )
+      : null;
+    if (fact && shouldSkipQuestion(knownFacts, fact, mergedAnswers)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function toPricingQuestion(
@@ -190,6 +237,8 @@ function collectRankedQuestions(
     discovery: DiscoveryResult | null;
     scopeQuestions: ScopeQuestionWithAnswers[];
     answeredQuestionKeys?: Set<string>;
+    qualityLevel?: QualityLevel;
+    selectedConstraintSlugs?: string[];
   },
   requiredOnly: boolean
 ): RankedQuestion[] {
@@ -222,7 +271,16 @@ function collectRankedQuestions(
 
       const key = normalizeQuestionKey(question.question_key);
       if (key && answered.has(key)) continue;
-      if (isKnownQuestion(question, typeKey, merged)) continue;
+      if (
+        isKnownQuestion(question, typeKey, merged, {
+          scopeId: group.scopeId,
+          qualityLevel: input.qualityLevel,
+          selectedConstraintSlugs: input.selectedConstraintSlugs,
+          discovery: input.discovery,
+        })
+      ) {
+        continue;
+      }
 
       const pq = toPricingQuestion(question, group, requiredOnly);
       if (!pq) continue;
@@ -244,6 +302,8 @@ export function getNextPricingQuestions(
     discovery: DiscoveryResult | null;
     scopeQuestions: ScopeQuestionWithAnswers[];
     answeredQuestionKeys?: Set<string>;
+    qualityLevel?: QualityLevel;
+    selectedConstraintSlugs?: string[];
   },
   maxCount = MAX_BATCH_QUESTIONS
 ): PricingQuestion[] {

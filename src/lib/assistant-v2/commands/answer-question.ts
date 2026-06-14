@@ -8,7 +8,8 @@ import {
 } from "@/lib/assistant-v2/commands/build-question-responses";
 import type { AskQuestionPayload } from "@/lib/assistant-v2/intent/types";import type { CommandResult } from "@/lib/assistant-v2/commands/update-allowance";
 import { contractorRateSourceLabel } from "@/lib/cost-engine/contractor-rate-source-label";
-import { parseQuickEstimateSummary } from "@/lib/project-assistant-summary";
+import { buildExplainEstimateResponse } from "@/lib/cost-engine/trace/format-trace-for-ui";
+import { resolveCalculationTrace, parseQuickEstimateSummary } from "@/lib/project-assistant-summary";
 import { getQuickEstimateForProject } from "@/lib/quick-estimate-data";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database";
@@ -144,7 +145,7 @@ export async function executeAskQuestion(
     userId: string;
     payload: AskQuestionPayload;
   }
-): Promise<CommandResult & { openBreakdown?: boolean }> {
+): Promise<CommandResult & { openBreakdown?: boolean; openWhy?: boolean }> {
   const { data: quickEstimate } = await getQuickEstimateForProject(
     supabase,
     params.organisationId,
@@ -166,8 +167,17 @@ export async function executeAskQuestion(
 
   let message: string;
   let openBreakdown = false;
+  let openWhy = false;
+
+  const calculationTrace = resolveCalculationTrace(quickEstimate);
 
   switch (params.payload.questionType) {
+    case "explain_estimate":
+      message = calculationTrace
+        ? buildExplainEstimateResponse(calculationTrace)
+        : buildSensitivitySummary(summary);
+      openWhy = true;
+      break;
     case "confidence":
       message = buildConfidenceExplanation(summary);
       break;
@@ -259,6 +269,8 @@ export async function executeAskQuestion(
   const responseType =
     params.payload.questionType === "confidence"
       ? "confidence_explanation"
+      : params.payload.questionType === "explain_estimate"
+        ? "estimate_explanation"
       : params.payload.questionType === "sensitivity"
         ? "sensitivity_summary"
         : params.payload.questionType === "rates"
@@ -281,6 +293,7 @@ export async function executeAskQuestion(
       commandIntent: "ask_question",
       questionType: params.payload.questionType,
       openBreakdown,
+      openWhy,
     },
   });
 
@@ -289,5 +302,6 @@ export async function executeAskQuestion(
     message,
     estimateRecalculated: false,
     openBreakdown,
+    openWhy,
   };
 }

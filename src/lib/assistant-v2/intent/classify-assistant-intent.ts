@@ -3,6 +3,10 @@ import {
   resolveFactUpdate,
   type ScopeForFactResolution,
 } from "@/lib/assistant-v2/facts/resolve-fact-update";
+import {
+  extractMessageActions,
+  partitionActionsByConfidence,
+} from "@/lib/assistant-v2/intent/extract-message-actions";
 import { parseMoneyAmount, parsePercentAmount } from "@/lib/assistant-v2/facts/parse-numeric-command";
 import {
   ALLOWANCE_DEFINITIONS,
@@ -12,6 +16,7 @@ import {
   ASSUMPTIONS_QUESTION_PATTERN,
   COMMAND_VERB_PATTERN,
   CONFIDENCE_QUESTION_PATTERN,
+  EXPLAIN_ESTIMATE_QUESTION_PATTERN,
   EXCLUDED_QUESTION_PATTERN,
   FINISH_LEVEL_SYNONYMS,
   INCLUDED_QUESTION_PATTERN,
@@ -24,6 +29,7 @@ import {
   assistantIntentSchema,
   CONFIDENCE_EXECUTE_THRESHOLD,
   type AssistantIntent,
+  type MessageAction,
   type ClassifiedAssistantIntent,
   type UpdateAllowancePayload,
   type RemoveAllowancePayload,
@@ -102,11 +108,83 @@ function extractAllowanceSubject(text: string): string | null {
   return null;
 }
 
+function primaryFactAction(actions: MessageAction[]): MessageAction | undefined {
+  const factActions = actions.filter((a) => a.intent === "update_existing_fact");
+  if (factActions.length === 0) return undefined;
+
+  const priority = (factKey?: string) => {
+    if (!factKey) return 50;
+    if (factKey.includes("length") || factKey.includes("area")) return 0;
+    if (factKey.includes("width")) return 1;
+    if (factKey.includes("height")) return 2;
+    return 10;
+  };
+
+  return [...factActions].sort(
+    (a, b) => priority(a.factKey) - priority(b.factKey)
+  )[0];
+}
+
 function classifyUpdateScopeFact(
   text: string,
   context: IntentClassificationContext
 ): ClassifiedAssistantIntent | null {
   if (!context.scopes?.length) return null;
+
+  const extracted = extractMessageActions(context.scopes, text);
+  const { apply, confirm } = partitionActionsByConfidence(extracted);
+
+  const factActions = [...apply, ...confirm].filter(
+    (a) => a.intent === "update_existing_fact"
+  );
+  const uniqueFactKeys = new Set(
+    apply.filter((a) => a.factKey).map((a) => a.factKey)
+  );
+  const hasMultiIntent =
+    apply.length > 1 &&
+    (uniqueFactKeys.size > 1 ||
+      apply.some((a) => a.intent !== "update_existing_fact"));
+
+  if (hasMultiIntent) {
+    const primary = primaryFactAction(apply) ?? factActions[0];
+    if (primary?.scopeId && primary.factKey) {
+      const requiresConfirmation =
+        confirm.length > 0 || apply.some((a) => a.requiresConfirmation);
+      const confirmationMessage =
+        extracted.unknowns[0] ??
+        (confirm.length > 0
+          ? `I'll apply ${apply.length} update${apply.length > 1 ? "s" : ""}. Confirm ${confirm.length} more?`
+          : undefined);
+
+      const payload: UpdateScopeFactPayload = {
+        scopeId: primary.scopeId,
+        scopeName:
+          primary.scopeTypeKey === "Deck"
+            ? "Deck"
+            : primary.scopeTypeKey ?? "Work area",
+        factKey: primary.factKey,
+        factLabel: primary.factLabel ?? primary.factKey,
+        newValue: primary.value,
+        unit: primary.unit,
+        batchActions: apply.length > 0 ? apply : factActions,
+        confirmActions: confirm.length > 0 ? confirm : undefined,
+      };
+
+      return {
+        intent: "update_existing_fact",
+        confidence: apply.length > 0 ? 0.9 : 0.65,
+        extractedPayload: payload,
+        requiresConfirmation,
+        confirmationMessage,
+        confirmationOptions: requiresConfirmation
+          ? [
+              { id: "confirm", label: "Yes, apply updates" },
+              { id: "ignore", label: "No, ignore" },
+            ]
+          : undefined,
+      };
+    }
+  }
 
   const resolution = resolveFactUpdate(context.scopes, text);
   if (!resolution.matched) return null;
@@ -756,6 +834,18 @@ function classifyAskQuestion(text: string): ClassifiedAssistantIntent | null {
     };
   }
 
+  if (EXPLAIN_ESTIMATE_QUESTION_PATTERN.test(lower)) {
+    return {
+      intent: "ask_question",
+      confidence: 0.95,
+      extractedPayload: {
+        questionType: "explain_estimate",
+      } satisfies AskQuestionPayload,
+      requiresConfirmation: false,
+      responseType: "estimate_explanation",
+    };
+  }
+
   if (SENSITIVITY_QUESTION_PATTERN.test(lower)) {
     const cheaper = /cheaper/i.test(lower);
     const expensive = /more expensive|cost drivers/i.test(lower);
@@ -938,9 +1028,9 @@ function ruleBasedClassify(
     () => classifyRefinementQuestion(trimmed, context),
     () => classifyAskQuestion(trimmed),
     () => classifyFinishLevel(trimmed),
+    () => classifyConstraint(trimmed),
     () => classifyUpdateScopeFact(trimmed, context),
     () => classifyRemoveAllowance(trimmed),
-    () => classifyConstraint(trimmed),
     () => classifyUpdateAllowance(trimmed, context),
     () => classifyUpdateMargin(trimmed),
     () => classifyWorkAreaCommand(trimmed, context),
@@ -948,11 +1038,11 @@ function ruleBasedClassify(
 
   const discoveryClassifiers = [
     () => classifyFinishLevel(trimmed),
+    () => classifyConstraint(trimmed),
     () => classifyUpdateScopeFact(trimmed, context),
     () => classifyRemoveAllowance(trimmed),
     () => classifyRefinementQuestion(trimmed, context),
     () => classifyAskQuestion(trimmed),
-    () => classifyConstraint(trimmed),
     () => classifyUpdateAllowance(trimmed, context),
     () => classifyUpdateMargin(trimmed),
     () => classifyWorkAreaCommand(trimmed, context),

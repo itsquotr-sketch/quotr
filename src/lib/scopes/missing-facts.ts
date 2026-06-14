@@ -4,6 +4,7 @@ import {
   getScopeByWorkAreaType,
 } from "@/lib/scopes/index";
 import type { ScopeDefinition, ScopeFactDefinition } from "@/lib/scopes/types";
+import { isMaterialFactAnsweredForKey } from "@/lib/scopes/material-categories";
 import {
   isAnswered,
   isAnsweredSelect,
@@ -63,7 +64,9 @@ export function factIsAnsweredFromMap(
   }
 
   if (fact.type === "select" && fact.options?.length) {
-    return fact.options.some((o) => o.value === trimmed);
+    if (fact.options.some((o) => o.value === trimmed)) return true;
+    if (isMaterialFactAnsweredForKey(fact.key, trimmed)) return true;
+    return false;
   }
 
   if (fact.type === "number") {

@@ -23,6 +23,7 @@ import {
   buildScopeBreakdown,
   type ScopeBreakdownItem,
 } from "@/lib/cost-engine/build-scope-breakdown";
+import { buildWhatEstimateCovers } from "@/lib/cost-engine/contractor-estimate-labels";
 import type { EstimateChangeEvent } from "@/lib/cost-engine/recalculate-quick-estimate";
 import { resolveRateSourceBanner } from "@/lib/cost-engine/resolve-rate-source-banner";
 import { formatCurrencyRange } from "@/lib/format-currency";
@@ -36,8 +37,10 @@ import {
 } from "@/components/assistant-v2/scope-rate-onboarding-dialog";
 import type { WorkAreaRateSourceLine } from "@/lib/cost-engine/estimate-trace";
 import type { EstimateTrace } from "@/lib/cost-engine/estimate-trace";
+import type { EstimateTrace as CalculationTrace } from "@/lib/cost-engine/trace/types";
 import { isBenchmarkRateSource } from "@/lib/cost-engine/rates/get-base-rate-for-scope";
 import { AddMoreDetailButton } from "@/components/assistant-v2/assistant-refinement-trigger";
+import { WhyThisEstimateSection } from "@/components/assistant-v2/why-this-estimate-section";
 import type { CurrentMissingItem } from "@/lib/assistant-v2/missing/get-current-missing-items";
 import {
   buildMissingItemPrompt,
@@ -74,6 +77,8 @@ interface AssistantV2LiveEstimatePanelProps {
   qualityLevelRaw?: QualityLevel;
   rangeWidthPercent?: number | null;
   estimateTrace?: EstimateTrace | null;
+  calculationTrace?: CalculationTrace | null;
+  whyOpenRequest?: number;
   actionableMissingItems?: CurrentMissingItem[];
   workAreaTypeKeys?: Record<string, string>;
   onMissingItemClick?: (item: CurrentMissingItem, prompt: MissingItemPrompt) => void;
@@ -181,6 +186,8 @@ export function AssistantV2LiveEstimatePanel({
   qualityLevelRaw = "unknown",
   rangeWidthPercent = null,
   estimateTrace = null,
+  calculationTrace = null,
+  whyOpenRequest = 0,
   actionableMissingItems = [],
   workAreaTypeKeys = {},
   onMissingItemClick,
@@ -189,7 +196,6 @@ export function AssistantV2LiveEstimatePanel({
 }: AssistantV2LiveEstimatePanelProps) {
   const { status, lastUpdatedAt } = useEstimateUpdate();
   const [breakdownOpen, setBreakdownOpen] = useState(false);
-  const [scopeBreakdownOpen, setScopeBreakdownOpen] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
 
   useEffect(() => {
@@ -206,14 +212,15 @@ export function AssistantV2LiveEstimatePanel({
     quickEstimate.estimated_cost_high != null;
 
   const scopeBreakdownItems: ScopeBreakdownItem[] = useMemo(() => {
-    const traces = estimateTrace?.workAreaTraces ?? [];
-    if (traces.length === 0 || !quickEstimate) return [];
+    if (!quickEstimate) return [];
     return buildScopeBreakdown({
-      workAreaTraces: traces,
+      structuredBreakdown: estimateTrace?.structuredBreakdown,
+      workAreaTraces: estimateTrace?.workAreaTraces ?? [],
       rateSourceLines,
       confidenceScore,
       targetMarginPercent: Number(quickEstimate.target_margin_percent ?? 5),
       contingencyPercent: estimateTrace?.contingencyPercent ?? 5,
+      costBreakdown: costBreakdown ?? estimateTrace?.costBreakdown ?? null,
       missingItems: actionableMissingItems,
       globalAllowances: allowancesIncluded,
       globalConstraints: constraintsIncluded,
@@ -223,10 +230,60 @@ export function AssistantV2LiveEstimatePanel({
     rateSourceLines,
     confidenceScore,
     quickEstimate,
+    costBreakdown,
     actionableMissingItems,
     allowancesIncluded,
     constraintsIncluded,
   ]);
+
+  const totalAllocations = useMemo(() => {
+    if (costBreakdown) {
+      return {
+        labour: costBreakdown.labour,
+        materials: costBreakdown.materials,
+        subcontractors: costBreakdown.subcontractors,
+        allowances: costBreakdown.allowances,
+        contingency: costBreakdown.contingency,
+      };
+    }
+    const structured = estimateTrace?.structuredBreakdown;
+    if (!structured?.scopes.length) return null;
+    return structured.scopes.reduce(
+      (acc, scope) => ({
+        labour: acc.labour + scope.allocations.labour,
+        materials: acc.materials + scope.allocations.materials,
+        subcontractors: acc.subcontractors + scope.allocations.subcontractors,
+        allowances: acc.allowances + scope.allocations.allowances,
+        contingency: acc.contingency + scope.allocations.contingency,
+      }),
+      { labour: 0, materials: 0, subcontractors: 0, allowances: 0, contingency: 0 }
+    );
+  }, [costBreakdown, estimateTrace?.structuredBreakdown]);
+
+  const whatEstimateCovers = useMemo(
+    () =>
+      buildWhatEstimateCovers({
+        scopeNames: estimateIncludes,
+        allowances: allowancesIncluded,
+        constraints: constraintsIncluded,
+      }),
+    [estimateIncludes, allowancesIncluded, constraintsIncluded]
+  );
+
+  const expandedExclusions = useMemo(() => {
+    const fromScopes = scopeBreakdownItems.flatMap((scope) => scope.exclusions);
+    return [...new Set([...estimateExcludes, ...fromScopes])].slice(0, 6);
+  }, [scopeBreakdownItems, estimateExcludes]);
+
+  const compactCostSplit = useMemo(() => {
+    if (!totalAllocations) return [];
+    const rows: { label: string; amount: number }[] = [
+      { label: "Labour", amount: totalAllocations.labour },
+      { label: "Materials", amount: totalAllocations.materials },
+      { label: "Allowances", amount: totalAllocations.allowances },
+    ];
+    return rows.filter((row) => row.amount > 0);
+  }, [totalAllocations]);
 
   if (!quickEstimate || !hasResults) {
     return (
@@ -254,12 +311,7 @@ export function AssistantV2LiveEstimatePanel({
           ? `Updated ${formatLastUpdated(lastUpdatedAt) ?? "just now"}`
           : null;
 
-  const includesList = [
-    ...estimateIncludes,
-    ...constraintsIncluded,
-    ...allowancesIncluded,
-  ].filter(Boolean);
-  const excludesList = estimateExcludes.filter(Boolean);
+  const includesList = whatEstimateCovers;
 
   const metFactors = qualityFactors.filter((f) => f.met);
   const changeDisplay =
@@ -502,108 +554,46 @@ export function AssistantV2LiveEstimatePanel({
             </div>
           )}
 
-          {(includesList.length > 0 || excludesList.length > 0) && !compact && (
+          {includesList.length > 0 && !compact && (
             <div className="rounded-lg border bg-muted/20 px-3 py-2 text-xs">
-              {includesList.length > 0 && (
-                <div>
-                  <p className="font-medium text-foreground">Estimate includes</p>
-                  <ul className="mt-1 space-y-0.5 text-muted-foreground">
-                    {includesList.slice(0, 6).map((item) => (
-                      <li key={item}>• {item}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-              {excludesList.length > 0 && (
-                <div className={includesList.length > 0 ? "mt-2" : ""}>
-                  <p className="font-medium text-foreground">
-                    Not included
-                  </p>
-                  <ul className="mt-1 space-y-0.5 text-muted-foreground">
-                    {excludesList.slice(0, 4).map((item) => (
-                      <li key={item}>• {item}</li>
-                    ))}
-                  </ul>
-                </div>
-              )}
+              <p className="font-medium text-foreground">
+                What this estimate covers
+              </p>
+              <ul className="mt-1 space-y-0.5 text-muted-foreground">
+                {includesList.map((item) => (
+                  <li key={item}>• {item}</li>
+                ))}
+              </ul>
             </div>
           )}
 
-          {scopeBreakdownItems.length > 0 && !compact && (
-            <div className="border-t pt-3">
-              <button
-                type="button"
-                onClick={() => setScopeBreakdownOpen((open) => !open)}
-                className="flex w-full items-center justify-between text-left"
-              >
-                <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                  Breakdown by scope
-                </span>
-                <ChevronDown
-                  className={cn(
-                    "h-4 w-4 text-muted-foreground transition-transform",
-                    scopeBreakdownOpen && "rotate-180"
-                  )}
-                />
-              </button>
-              {scopeBreakdownOpen && (
-                <div className="mt-3 space-y-3 text-xs">
-                  {scopeBreakdownItems.map((scope) => (
-                    <div
-                      key={scope.scopeName}
-                      className="rounded-lg border bg-muted/20 px-3 py-2"
-                    >
-                      <p className="font-medium text-foreground">
-                        {scope.scopeName}
-                      </p>
-                      <p className="mt-1 text-muted-foreground">
-                        Cost:{" "}
-                        <span className="font-medium text-foreground">
-                          {formatCurrencyRange(scope.costLow, scope.costHigh)}
-                        </span>
-                      </p>
-                      {!isQualityUnknown && (
-                        <p className="mt-0.5 text-muted-foreground">
-                          Sell:{" "}
-                          <span className="font-medium text-foreground">
-                            {formatCurrencyRange(scope.sellLow, scope.sellHigh)}
-                          </span>
-                        </p>
-                      )}
-                      <p className="mt-0.5 text-muted-foreground">
-                        Rate source:{" "}
-                        <span className="text-foreground">
-                          {scope.rateSourceLabel}
-                        </span>
-                      </p>
-                      {scope.quantityLabel && (
-                        <p className="mt-0.5 text-muted-foreground">
-                          Quantity:{" "}
-                          <span className="text-foreground">
-                            {scope.quantityLabel}
-                          </span>
-                        </p>
-                      )}
-                      {scope.includes.length > 0 && (
-                        <p className="mt-1 text-muted-foreground">
-                          Includes: {scope.includes.join(", ")}
-                        </p>
-                      )}
-                      {scope.missing.length > 0 && (
-                        <p className="mt-0.5 text-muted-foreground">
-                          {scope.missing.join("; ")}
-                        </p>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
+          {!compact && (
+            <WhyThisEstimateSection
+              calculationTrace={calculationTrace}
+              openRequest={whyOpenRequest}
+            />
+          )}
+
+          {!compact && !breakdownOpen && compactCostSplit.length > 0 && (
+            <div className="rounded-lg border bg-muted/10 px-3 py-2 text-xs">
+              <p className="font-medium text-foreground">Cost split</p>
+              <ul className="mt-1 space-y-0.5">
+                {compactCostSplit.map((row) => (
+                  <li
+                    key={row.label}
+                    className="flex justify-between gap-2 text-muted-foreground"
+                  >
+                    <span>{row.label}</span>
+                    <span className="text-foreground">
+                      {formatCurrencyCompact(row.amount)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
 
-          {costBreakdown &&
-            (costBreakdown.byWorkArea?.length ?? 0) > 0 &&
-            !compact && (
+          {!compact && (
             <div className="border-t pt-3">
               <button
                 type="button"
@@ -611,7 +601,7 @@ export function AssistantV2LiveEstimatePanel({
                 className="flex w-full items-center justify-between text-left"
               >
                 <span className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-                  Show breakdown
+                  {breakdownOpen ? "Hide cost breakdown" : "Show cost breakdown"}
                 </span>
                 <ChevronDown
                   className={cn(
@@ -621,59 +611,95 @@ export function AssistantV2LiveEstimatePanel({
                 />
               </button>
               {breakdownOpen && (
-                <div className="mt-3 space-y-3 text-xs">
-                  <div>
-                    <p className="font-medium text-foreground">By work area</p>
-                    <ul className="mt-1.5 space-y-1">
-                      {(costBreakdown.byWorkArea ?? []).map((area) => (
-                        <li
-                          key={area.name}
-                          className="flex items-center justify-between gap-2"
-                        >
-                          <span className="text-muted-foreground">{area.name}</span>
-                          <span className="font-medium">
-                            {formatCurrencyCompact(area.total)}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                  <div>
-                    <p className="font-medium text-foreground">Cost allocation</p>
-                    <ul className="mt-1.5 space-y-1">
-                      <li className="flex justify-between gap-2">
-                        <span className="text-muted-foreground">Labour</span>
-                        <span>{formatCurrencyCompact(costBreakdown.labour)}</span>
-                      </li>
-                      <li className="flex justify-between gap-2">
-                        <span className="text-muted-foreground">Materials</span>
-                        <span>{formatCurrencyCompact(costBreakdown.materials)}</span>
-                      </li>
-                      <li className="flex justify-between gap-2">
-                        <span className="text-muted-foreground">
-                          Subcontractors / trades
-                        </span>
-                        <span>
-                          {formatCurrencyCompact(costBreakdown.subcontractors)}
-                        </span>
-                      </li>
-                      <li className="flex justify-between gap-2">
-                        <span className="text-muted-foreground">Allowances</span>
-                        <span>
-                          {formatCurrencyCompact(costBreakdown.allowances)}
-                        </span>
-                      </li>
-                      <li className="flex justify-between gap-2">
-                        <span className="text-muted-foreground">Contingency</span>
-                        <span>
-                          {formatCurrencyCompact(costBreakdown.contingency)}
-                        </span>
-                      </li>
-                    </ul>
-                  </div>
-                  <p className="text-[10px] text-muted-foreground">
-                    Indicative allocation only — not a detailed quote.
-                  </p>
+                <div className="mt-3 space-y-4 text-xs">
+                  {scopeBreakdownItems.length === 0 ? (
+                    <p className="text-muted-foreground">
+                      No breakdown available yet.
+                    </p>
+                  ) : (
+                    <>
+                      <div>
+                        <p className="font-medium text-foreground">
+                          Breakdown by scope
+                        </p>
+                        <div className="mt-2 space-y-3">
+                          {scopeBreakdownItems.map((scope) => (
+                            <ScopeBreakdownCard
+                              key={scope.scopeName}
+                              scope={scope}
+                              isQualityUnknown={isQualityUnknown}
+                            />
+                          ))}
+                        </div>
+                      </div>
+
+                      {totalAllocations && (
+                        <div>
+                          <p className="font-medium text-foreground">
+                            Cost allocation
+                          </p>
+                          <ul className="mt-1.5 space-y-1">
+                            <li className="flex justify-between gap-2">
+                              <span className="text-muted-foreground">Labour</span>
+                              <span>
+                                {formatCurrencyCompact(totalAllocations.labour)}
+                              </span>
+                            </li>
+                            <li className="flex justify-between gap-2">
+                              <span className="text-muted-foreground">
+                                Materials
+                              </span>
+                              <span>
+                                {formatCurrencyCompact(totalAllocations.materials)}
+                              </span>
+                            </li>
+                            <li className="flex justify-between gap-2">
+                              <span className="text-muted-foreground">
+                                Subcontractors
+                              </span>
+                              <span>
+                                {formatCurrencyCompact(
+                                  totalAllocations.subcontractors
+                                )}
+                              </span>
+                            </li>
+                            <li className="flex justify-between gap-2">
+                              <span className="text-muted-foreground">
+                                Allowances
+                              </span>
+                              <span>
+                                {formatCurrencyCompact(totalAllocations.allowances)}
+                              </span>
+                            </li>
+                            <li className="flex justify-between gap-2">
+                              <span className="text-muted-foreground">
+                                Contingency
+                              </span>
+                              <span>
+                                {formatCurrencyCompact(totalAllocations.contingency)}
+                              </span>
+                            </li>
+                          </ul>
+                          <p className="mt-2 text-[10px] text-muted-foreground">
+                            Indicative only — not a detailed quote.
+                          </p>
+                        </div>
+                      )}
+
+                      {expandedExclusions.length > 0 && (
+                        <div>
+                          <p className="font-medium text-foreground">
+                            Not included
+                          </p>
+                          <ul className="mt-1 space-y-0.5 text-muted-foreground">
+                            {expandedExclusions.map((item) => (
+                              <li key={item}>• {item}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
               )}
             </div>
@@ -828,6 +854,79 @@ export function AssistantV2LiveEstimatePanel({
         open={onboardingOpen}
         onOpenChange={setOnboardingOpen}
       />
+    </div>
+  );
+}
+
+function ScopeBreakdownCard({
+  scope,
+  isQualityUnknown,
+}: {
+  scope: ScopeBreakdownItem;
+  isQualityUnknown: boolean;
+}) {
+  return (
+    <div className="rounded-lg border bg-muted/20 px-3 py-2">
+      <p className="font-medium text-foreground">{scope.scopeName}</p>
+      {scope.costLow > 0 || scope.costHigh > 0 ? (
+        <p className="mt-1 text-muted-foreground">
+          Cost:{" "}
+          <span className="font-medium text-foreground">
+            {formatCurrencyRange(scope.costLow, scope.costHigh)}
+          </span>
+        </p>
+      ) : null}
+      {!isQualityUnknown && (scope.sellLow > 0 || scope.sellHigh > 0) && (
+        <p className="mt-0.5 text-muted-foreground">
+          Sell:{" "}
+          <span className="font-medium text-foreground">
+            {formatCurrencyRange(scope.sellLow, scope.sellHigh)}
+          </span>
+        </p>
+      )}
+      {scope.quantityLabel && (
+        <p className="mt-0.5 text-muted-foreground">
+          Quantity:{" "}
+          <span className="text-foreground">{scope.quantityLabel}</span>
+        </p>
+      )}
+      <p className="mt-0.5 text-muted-foreground">
+        Rate source:{" "}
+        <span className="text-foreground">{scope.rateSourceLabel}</span>
+      </p>
+
+      {scope.costDrivers.length > 0 && (
+        <div className="mt-2">
+          <p className="font-medium text-foreground">Key cost drivers</p>
+          <ul className="mt-1 space-y-0.5 text-muted-foreground">
+            {scope.costDrivers.map((driver) => (
+              <li key={driver}>• {driver}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {scope.missing.length > 0 && (
+        <div className="mt-2">
+          <p className="font-medium text-foreground">Missing / not confirmed</p>
+          <ul className="mt-1 space-y-0.5 text-muted-foreground">
+            {scope.missing.map((item) => (
+              <li key={item}>• {item}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {scope.assumptions.length > 0 && (
+        <div className="mt-2">
+          <p className="font-medium text-foreground">Assumptions</p>
+          <ul className="mt-1 space-y-0.5 text-muted-foreground">
+            {scope.assumptions.map((item) => (
+              <li key={item}>• {item}</li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

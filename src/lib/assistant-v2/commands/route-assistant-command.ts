@@ -6,6 +6,7 @@ import { executeUpdateFinishLevel } from "@/lib/assistant-v2/commands/update-fin
 import { executeUpdateAllowance } from "@/lib/assistant-v2/commands/update-allowance";
 import { executeUpdateMargin } from "@/lib/assistant-v2/commands/update-margin";
 import { executeUpdateScopeFact } from "@/lib/assistant-v2/commands/update-scope-fact";
+import { executeBatchMessageActions } from "@/lib/assistant-v2/commands/execute-batch-message-actions";
 import {
   executeAddWorkArea,
   executeExcludeWorkArea,
@@ -60,6 +61,17 @@ export async function routeAssistantCommand(
           intent: "update_existing_fact",
         };
       }
+
+      if (parsed.data.batchActions && parsed.data.batchActions.length > 0) {
+        const result = await executeBatchMessageActions(supabase, {
+          organisationId: params.organisationId,
+          projectId: params.projectId,
+          userId: params.userId,
+          actions: parsed.data.batchActions,
+        });
+        return { ...result, intent: "update_existing_fact" };
+      }
+
       const result = await executeUpdateScopeFact(supabase, {
         organisationId: params.organisationId,
         projectId: params.projectId,

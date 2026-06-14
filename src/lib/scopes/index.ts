@@ -41,6 +41,16 @@ export {
 
 export { scopeToTemplate } from "@/lib/scopes/to-template";
 
+export {
+  ALL_CANONICAL_SCOPE_TEMPLATES,
+  getCanonicalScopeTemplate,
+  getCanonicalScopeTemplateByWorkAreaType,
+  getCanonicalTemplateByAlias,
+  isPricingSupportedScope,
+  isPricingSupportedWorkAreaType,
+  UNSUPPORTED_SCOPE_PRICING_MESSAGE,
+} from "@/lib/scopes/templates";
+
 const ALL_SCOPES: ScopeDefinition[] = [
   bathroomRenovationScope,
   deckScope,

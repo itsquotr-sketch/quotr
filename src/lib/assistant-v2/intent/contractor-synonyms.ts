@@ -49,7 +49,11 @@ export const CONFIDENCE_QUESTION_PATTERN =
 
 /** Sensitivity / cost driver question phrasing */
 export const SENSITIVITY_QUESTION_PATTERN =
-  /\b(?:what\s+would\s+change\s+this\s+estimate|what\s+would\s+make\s+it\s+cheaper|what\s+would\s+make\s+it\s+more\s+expensive|what\s+are\s+the\s+biggest\s+cost\s+drivers)\b/i;
+  /\b(?:what\s+would\s+change\s+this\s+estimate|what\s+would\s+make\s+it\s+cheaper|what\s+would\s+make\s+it\s+more\s+expensive|what\s+are\s+the\s+biggest\s+cost\s+drivers|what\s+is\s+driving\s+the\s+cost)\b/i;
+
+/** Explain estimate / why this price question phrasing */
+export const EXPLAIN_ESTIMATE_QUESTION_PATTERN =
+  /\b(?:why\s+is\s+(?:it|the\s+estimate)\s+(?:this\s+price|so\s+high|this\s+number)|why\s+is\s+this\s+price|explain\s+(?:the\s+)?estimate|where\s+did\s+the\s+number\s+come\s+from|what\s+is\s+driving\s+the\s+cost)\b/i;
 
 /** Refinement / missing detail question phrasing */
 export const REFINEMENT_QUESTION_PATTERN =

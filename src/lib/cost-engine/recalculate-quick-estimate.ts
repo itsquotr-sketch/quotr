@@ -251,6 +251,7 @@ export async function recalculateQuickEstimate(
     rangeHighDrivers: result.rangeHighDrivers,
     qualityFactors: result.qualityFactors,
     estimateTrace: result.estimateTrace,
+    calculationTrace: result.calculationTrace,
     rangeChangedMessage: result.rangeChangedMessage,
     lastEstimateChange: estimateChangeEvent,
   });
@@ -267,6 +268,10 @@ export async function recalculateQuickEstimate(
         confidence_level: result.confidenceLevel,
         budget_fit: result.budgetFit,
         notes: summaryNote,
+        trace: JSON.parse(
+          JSON.stringify(result.calculationTrace)
+        ) as Json,
+        trace_version: result.calculationTrace.traceVersion,
       }
     : {
         status: "in_progress" as const,
@@ -328,7 +333,7 @@ export async function recalculateQuickEstimate(
           rate_source: rateSourceKey,
           trigger_event: options?.triggerEvent ?? "recalculate",
           calculation_trace: JSON.parse(
-            JSON.stringify(result.estimateTrace)
+            JSON.stringify(result.calculationTrace)
           ) as Json,
         });
 

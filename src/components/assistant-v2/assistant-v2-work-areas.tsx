@@ -229,13 +229,40 @@ function WorkAreaCard({
             display.confidencePercent < 80 &&
             !isBroad &&
             (criticalMissing.length > 0 || optionalMissing.length > 0) && (
-              <AddMoreDetailButton
-                projectId={projectId}
-                scopeId={scope.id}
-                label="Improve confidence"
-                variant="ghost"
-                className="mt-1 h-7 px-0 text-primary hover:bg-transparent"
-              />
+              <div className="mt-1 space-y-1">
+                <AddMoreDetailButton
+                  projectId={projectId}
+                  scopeId={scope.id}
+                  label="Improve confidence"
+                  variant="ghost"
+                  className="h-7 px-0 text-primary hover:bg-transparent"
+                />
+                <div className="text-xs text-muted-foreground">
+                  <p className="font-medium">Still missing:</p>
+                  <ul className="mt-0.5 space-y-0.5">
+                    {[...criticalMissing, ...optionalMissing]
+                      .slice(0, 3)
+                      .map((item) => (
+                        <li key={item.factKey}>
+                          •{" "}
+                          {item.label
+                            .replace(/^[^:]+:\s*/, "")
+                            .replace(/ not confirmed$/, "")}
+                        </li>
+                      ))}
+                  </ul>
+                  <p className="mt-1">
+                    {criticalMissing.length + optionalMissing.length} item
+                    {criticalMissing.length + optionalMissing.length === 1
+                      ? ""
+                      : "s"}{" "}
+                    remaining
+                    {criticalMissing.length === 0 && optionalMissing.length > 0
+                      ? " — critical items complete"
+                      : ""}
+                  </p>
+                </div>
+              </div>
             )}
         </div>
         {isBroad && visiblePackages.length > 0 && (

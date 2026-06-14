@@ -1,5 +1,7 @@
 import type { EvaluateWorkAreaInput } from "@/lib/assistant-v2/completeness/evaluate-project-completeness";
 import type { EstimateTrace } from "@/lib/cost-engine/estimate-trace";
+import { getTrackableFactsForWorkAreaType } from "@/lib/assistant-v2/discovery/generic-scope-discovery";
+import { shouldSuppressQuestionForDerivedValue } from "@/lib/assistant-v2/facts/measurement-resolver";
 import { getScopeByWorkAreaType } from "@/lib/scopes";
 import {
   factIsAnsweredFromMap,
@@ -49,7 +51,10 @@ function formatMissingLabel(scopeName: string, factLabel: string): string {
 }
 
 function factToMissingItem(
-  fact: ScopeFactDefinition,
+  fact: Pick<
+    ScopeFactDefinition,
+    "key" | "label" | "affectsEstimate" | "required"
+  >,
   area: EvaluateWorkAreaInput,
   importance: MissingItemImportance,
   status: MissingItemStatus
@@ -81,6 +86,16 @@ function getMissingOptionalLowImpact(
   );
 }
 
+function isTrackableFactAnswered(
+  fact: ReturnType<typeof getTrackableFactsForWorkAreaType>[number],
+  answers: Record<string, string>
+): boolean {
+  if (shouldSuppressQuestionForDerivedValue(fact.key, answers)) {
+    return true;
+  }
+  return factIsAnsweredFromMap(fact as ScopeFactDefinition, answers);
+}
+
 /**
  * Single source of truth for missing scope facts across Assistant V2 UI.
  */
@@ -93,18 +108,12 @@ export function getCurrentMissingItems(
   for (const area of input.workAreas) {
     if (area.included === false) continue;
 
-    const scope = getScopeByWorkAreaType(area.workAreaTypeKey);
-    if (!scope) continue;
-
-    const allTrackableFacts = [
-      ...scope.requiredFacts,
-      ...scope.optionalFacts.filter(
-        (f) => f.affectsEstimate || f.affectsConfidence
-      ),
-    ];
+    const allTrackableFacts = getTrackableFactsForWorkAreaType(
+      area.workAreaTypeKey
+    );
 
     for (const fact of allTrackableFacts) {
-      const answered = factIsAnsweredFromMap(fact, area.answers);
+      const answered = isTrackableFactAnswered(fact, area.answers);
       const isSkipped = skipped.has(fact.key);
 
       if (answered) {
@@ -113,12 +122,17 @@ export function getCurrentMissingItems(
 
       if (isSkipped) {
         items.push(
-          factToMissingItem(fact, area, classifyImportance(fact, area), "skipped")
+          factToMissingItem(
+            fact,
+            area,
+            classifyImportanceForFact(fact, area),
+            "skipped"
+          )
         );
         continue;
       }
 
-      const importance = classifyImportance(fact, area);
+      const importance = classifyImportanceForFact(fact, area);
       items.push(factToMissingItem(fact, area, importance, "missing"));
     }
   }
@@ -147,14 +161,24 @@ export function getCurrentMissingItems(
   return items;
 }
 
-function classifyImportance(
-  fact: ScopeFactDefinition,
+function classifyImportanceForFact(
+  fact: { key: string; required?: boolean },
   area: EvaluateWorkAreaInput
 ): MissingItemImportance {
   if (fact.required) return "critical";
 
   const scope = getScopeByWorkAreaType(area.workAreaTypeKey);
-  if (!scope) return "optional";
+  if (!scope) {
+    if (
+      fact.key.includes("material") ||
+      fact.key.includes("length") ||
+      fact.key.includes("area") ||
+      fact.key.includes("height")
+    ) {
+      return "useful";
+    }
+    return "optional";
+  }
 
   const highImpact = new Set(scope.confidenceRules.highImpactOptionalKeys);
   if (highImpact.has(fact.key)) return "useful";

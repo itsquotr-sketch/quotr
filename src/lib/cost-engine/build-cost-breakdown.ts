@@ -1,5 +1,7 @@
 import type { ScopeRateAllocation } from "@/lib/cost-engine/rates/scope-rate-utils";
 
+import { getCanonicalScopeTemplateByWorkAreaType } from "@/lib/scopes/templates";
+
 export type CostBreakdown = {
   labour: number;
   materials: number;
@@ -60,6 +62,17 @@ const DEFAULT_ALLOCATION: Allocation = {
 };
 
 function getTemplateAllocation(workAreaTypeKey: string): Allocation {
+  const canonical = getCanonicalScopeTemplateByWorkAreaType(workAreaTypeKey);
+  if (canonical) {
+    const a = canonical.pricing.defaultAllocations;
+    return {
+      labour: a.labour / 100,
+      materials: a.materials / 100,
+      subcontractors: a.subcontractors / 100,
+      allowances: a.allowances / 100,
+      contingency: a.contingency / 100,
+    };
+  }
   return WORK_AREA_ALLOCATIONS[workAreaTypeKey] ?? DEFAULT_ALLOCATION;
 }
 

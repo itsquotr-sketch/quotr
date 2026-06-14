@@ -32,6 +32,7 @@ export const ASSISTANT_RESPONSE_TYPES = [
   "clarification_required",
   "included_excluded_summary",
   "confidence_explanation",
+  "estimate_explanation",
   "sensitivity_summary",
   "rate_source_summary",
   "command_echo",
@@ -76,6 +77,27 @@ export const scopeFactUpdateItemSchema = z.object({
   unit: z.string().optional(),
 });
 
+export const messageActionSchema = z.object({
+  intent: z.enum([
+    "update_existing_fact",
+    "update_constraint",
+    "update_finish_level",
+  ]),
+  scopeTypeKey: z.string().optional(),
+  scopeId: z.string().uuid().optional(),
+  factKey: z.string().optional(),
+  factLabel: z.string().optional(),
+  value: z.string(),
+  unit: z.string().optional(),
+  confidence: z.number(),
+  requiresConfirmation: z.boolean(),
+  reason: z.string(),
+  constraintSlug: z.string().optional(),
+  constraintLabel: z.string().optional(),
+});
+
+export type MessageAction = z.infer<typeof messageActionSchema>;
+
 export const updateScopeFactPayloadSchema = z.object({
   scopeId: z.string().uuid(),
   scopeName: z.string(),
@@ -85,6 +107,8 @@ export const updateScopeFactPayloadSchema = z.object({
   previousValue: z.string().optional(),
   unit: z.string().optional(),
   additionalFacts: z.array(scopeFactUpdateItemSchema).optional(),
+  batchActions: z.array(messageActionSchema).optional(),
+  confirmActions: z.array(messageActionSchema).optional(),
 });
 
 export const onlyIncludeWorkAreasPayloadSchema = z.object({
@@ -100,6 +124,7 @@ export const askQuestionPayloadSchema = z.object({
     "confidence",
     "sensitivity",
     "rates",
+    "explain_estimate",
     "sharpen_estimate",
     "internal_alteration",
     "general",

@@ -1,4 +1,5 @@
 import { YES_NO_UNSURE } from "@/lib/scopes/shared";
+import { BATHROOM_MATERIAL_CATEGORIES } from "@/lib/scopes/material-categories";
 import type { ScopeDefinition } from "@/lib/scopes/types";
 
 export const bathroomRenovationScope: ScopeDefinition = {
@@ -41,13 +42,11 @@ export const bathroomRenovationScope: ScopeDefinition = {
       required: true,
       affectsEstimate: true,
       affectsConfidence: true,
-      questionText: "What finish level is expected?",
-      options: [
-        { value: "budget", label: "Budget / basic" },
-        { value: "standard", label: "Standard / mid-range" },
-        { value: "premium", label: "Premium / high-end" },
-        { value: "unknown", label: "Not sure yet" },
-      ],
+      questionText: BATHROOM_MATERIAL_CATEGORIES.questionText,
+      options: BATHROOM_MATERIAL_CATEGORIES.categories.map(({ value, label }) => ({
+        value,
+        label,
+      })),
     },
     {
       key: "bathroom.layout_changing",

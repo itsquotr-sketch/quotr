@@ -1,4 +1,5 @@
 import { YES_NO_UNSURE } from "@/lib/scopes/shared";
+import { DECK_MATERIAL_CATEGORIES } from "@/lib/scopes/material-categories";
 import type { ScopeDefinition } from "@/lib/scopes/types";
 
 export const deckScope: ScopeDefinition = {
@@ -41,21 +42,23 @@ export const deckScope: ScopeDefinition = {
       required: true,
       affectsEstimate: true,
       affectsConfidence: true,
-      questionText: "Timber or composite decking?",
-      options: [
-        { value: "timber", label: "Timber" },
-        { value: "composite", label: "Composite" },
-        { value: "unknown", label: "Not sure yet" },
-      ],
+      questionText: DECK_MATERIAL_CATEGORIES.questionText,
+      options: DECK_MATERIAL_CATEGORIES.categories.map(({ value, label }) => ({
+        value,
+        label,
+      })),
       extractionPatterns: [
         /\bcomposite\s+deck/i,
-        /\btimber\s+deck/i,
+        /\btreated\s+pine/i,
         /\bhardwood\s+deck/i,
+        /\btimber\s+deck/i,
       ],
       extractValue: (m) => {
         const text = m[0].toLowerCase();
         if (text.includes("composite")) return "composite";
-        if (text.includes("timber") || text.includes("hardwood")) return "timber";
+        if (text.includes("hardwood")) return "hardwood_timber";
+        if (text.includes("treated")) return "treated_pine";
+        if (text.includes("timber")) return "treated_pine";
         return null;
       },
     },
@@ -126,6 +129,28 @@ export const deckScope: ScopeDefinition = {
     },
   ],
   optionalFacts: [
+    {
+      key: "deck.length_m",
+      label: "Deck length",
+      type: "number",
+      unit: "m",
+      required: false,
+      affectsEstimate: false,
+      affectsConfidence: true,
+      questionText: "Deck length?",
+      placeholder: "e.g. 7",
+    },
+    {
+      key: "deck.width_m",
+      label: "Deck width",
+      type: "number",
+      unit: "m",
+      required: false,
+      affectsEstimate: false,
+      affectsConfidence: true,
+      questionText: "Deck width?",
+      placeholder: "e.g. 3.5",
+    },
     {
       key: "deck.has_stairs",
       label: "Stairs",

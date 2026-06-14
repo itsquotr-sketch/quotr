@@ -853,6 +853,8 @@ export interface Database {
           client_budget: number | null;
           quality_level: string;
           notes: string | null;
+          trace: Json | null;
+          trace_version: string | null;
           created_by: string | null;
           created_at: string;
           updated_at: string;
@@ -874,6 +876,8 @@ export interface Database {
           client_budget?: number | null;
           quality_level?: string;
           notes?: string | null;
+          trace?: Json | null;
+          trace_version?: string | null;
           created_by?: string | null;
           created_at?: string;
           updated_at?: string;
@@ -895,6 +899,8 @@ export interface Database {
           client_budget?: number | null;
           quality_level?: string;
           notes?: string | null;
+          trace?: Json | null;
+          trace_version?: string | null;
           created_by?: string | null;
           created_at?: string;
           updated_at?: string;

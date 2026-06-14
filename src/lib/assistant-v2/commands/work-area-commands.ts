@@ -14,6 +14,10 @@ import type { EstimateChangeEvent } from "@/lib/cost-engine/recalculate-quick-es
 import { formatCurrencyRange } from "@/lib/format-currency";
 import { listScopeQuestionsForProject } from "@/lib/project-assistant-data";
 import { getScopeByAlias } from "@/lib/scopes";
+import {
+  getCanonicalTemplateByAlias,
+  UNSUPPORTED_SCOPE_PRICING_MESSAGE,
+} from "@/lib/scopes/templates";
 import { ensureQuestionsForProjectScopes } from "@/lib/scope-questions-seed";
 import { syncScopeQuestionsForScope } from "@/lib/scope-questions-seed";
 import { logSupabaseError } from "@/lib/supabase/log-error";
@@ -25,6 +29,10 @@ const TEMPLATE_SCOPE_TYPE_SLUGS: Record<string, string> = {
   deck: "deck",
   retaining_wall: "other",
   bathroom_renovation: "bathroom-renovation",
+  fence: "other",
+  painting_project: "other",
+  kitchen_renovation: "other",
+  flooring_project: "other",
 };
 
 function formatEstimateDelta(
@@ -314,12 +322,20 @@ export async function executeAddWorkArea(
   }
 
   const supportedScope = getScopeByAlias(name);
-  const isCustom = params.payload.isCustom ?? !supportedScope;
-  const includeInEstimate = !isCustom;
+  const canonicalTemplate = getCanonicalTemplateByAlias(name);
+  const pricingSupported =
+    supportedScope != null ||
+    (canonicalTemplate?.pricing.supported ?? false);
+  const isCustom =
+    params.payload.isCustom ?? (!pricingSupported && !canonicalTemplate);
+  const includeInEstimate =
+    pricingSupported && !(canonicalTemplate && !canonicalTemplate.pricing.supported);
 
   let scopeTypeId: string | null = null;
-  if (supportedScope) {
-    const slug = TEMPLATE_SCOPE_TYPE_SLUGS[supportedScope.id] ?? "other";
+  const templateKey =
+    supportedScope?.id ?? canonicalTemplate?.scopeTypeKey ?? null;
+  if (templateKey) {
+    const slug = TEMPLATE_SCOPE_TYPE_SLUGS[templateKey] ?? "other";
     const { data: scopeType } = await supabase
       .from("scope_types")
       .select("id")
@@ -335,7 +351,8 @@ export async function executeAddWorkArea(
     scopeTypeId = otherType?.id ?? null;
   }
 
-  const displayName = supportedScope?.name ?? name;
+  const displayName =
+    supportedScope?.name ?? canonicalTemplate?.label ?? name;
 
   const { data: maxSort } = await supabase
     .from("project_scopes")
@@ -388,7 +405,9 @@ export async function executeAddWorkArea(
 
   const message = isCustom
     ? `Added ${displayName} as a custom work area. Needs pricing before the estimate can include this — it is excluded from the quick estimate for now.`
-    : `Added ${displayName} to the project and included it in the quick estimate.`;
+    : canonicalTemplate && !canonicalTemplate.pricing.supported
+      ? `Added ${displayName} to the project. ${UNSUPPORTED_SCOPE_PRICING_MESSAGE} It is excluded from the quick estimate for now.`
+      : `Added ${displayName} to the project and included it in the quick estimate.`;
 
   await insertAssistantMessage(supabase, {
     organisationId: params.organisationId,

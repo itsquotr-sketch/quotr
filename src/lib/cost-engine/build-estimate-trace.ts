@@ -10,10 +10,15 @@ import {
   getMissingFactsForWorkArea,
 } from "@/lib/scopes/missing-facts";
 import type { CostBreakdown } from "@/lib/cost-engine/build-cost-breakdown";
+import { buildStructuredEstimateBreakdown } from "@/lib/cost-engine/build-structured-estimate-breakdown";
 import { getAnswerValue } from "@/lib/question-keys";
 import type { QuickEstimateWorkAreaInput } from "@/lib/cost-engine/quick-estimate-input";
 import { computeRangeWidthPercent } from "@/lib/cost-engine/range-quality";
+import type { RangeQuality } from "@/lib/cost-engine/range-quality";
 import { toLegacyConfidenceLevel } from "@/lib/cost-engine/confidence/level";
+import { getScopeByWorkAreaType } from "@/lib/scopes";
+import { resolveMaterialCategory } from "@/lib/scopes/material-categories";
+import type { MaterialCategoryTrace } from "@/lib/cost-engine/estimate-trace";
 
 export function buildEstimateTrace(input: {
   workAreas: QuickEstimateWorkAreaInput[];
@@ -38,11 +43,34 @@ export function buildEstimateTrace(input: {
   finishLevel: QualityLevel;
   costBreakdown?: CostBreakdown;
   workAreaTraces?: WorkAreaEstimateTrace[];
+  rangeQuality?: RangeQuality | string;
+  scopeAllowances?: Record<string, string[]>;
+  scopeAssumptions?: Record<string, string[]>;
 }): EstimateTrace {
   const extractedFacts: NonNullable<EstimateTrace["extractedFacts"]> = [];
   const missingFacts: NonNullable<EstimateTrace["missingFacts"]> = [];
+  const materialCategories: MaterialCategoryTrace[] = [];
 
   for (const area of input.workAreas) {
+    const scope = getScopeByWorkAreaType(area.workAreaTypeKey);
+    const resolved = resolveMaterialCategory({
+      scopeTypeKey: scope?.id,
+      workAreaTypeKey: area.workAreaTypeKey,
+      answers: area.answers,
+    });
+
+    if (resolved) {
+      materialCategories.push({
+        workAreaName: area.name,
+        scopeTypeKey: resolved.scopeTypeKey,
+        factKey: resolved.factKey,
+        categoryLabel: resolved.categoryLabel,
+        categoryValue: resolved.categoryValue,
+        source: resolved.source,
+        sourceLabel: resolved.source === "user_provided" ? "User Provided" : "Assumed",
+      });
+    }
+
     for (const fact of getKnownFactsForScope(
       area.workAreaTypeKey,
       area.answers
@@ -82,6 +110,24 @@ export function buildEstimateTrace(input: {
     input.centralEstimate
   );
 
+  const structuredBreakdown = buildStructuredEstimateBreakdown({
+    workAreas: input.workAreas,
+    workAreaTraces: input.workAreaTraces ?? [],
+    confidenceScore: input.confidenceScore,
+    contingencyPercent: input.contingencyPercent,
+    marginPercent: input.marginPercent,
+    costLow: input.costLow,
+    costHigh: input.costHigh,
+    costCentral: input.centralEstimate,
+    sellLow: input.sellLow,
+    sellHigh: input.sellHigh,
+    finishLevel: input.finishLevel,
+    rangeQuality: input.rangeQuality ?? "rough",
+    costBreakdown: input.costBreakdown,
+    scopeAllowances: input.scopeAllowances,
+    scopeAssumptions: input.scopeAssumptions,
+  });
+
   return {
     scopeKey: input.scopeKey,
     quantity: input.quantity,
@@ -100,6 +146,8 @@ export function buildEstimateTrace(input: {
     missingCriticalFacts: input.missingCriticalFacts,
     costBreakdown: input.costBreakdown,
     workAreaTraces: input.workAreaTraces ?? [],
+    structuredBreakdown,
+    materialCategories,
     workAreas: input.workAreas.map((a) => ({
       name: a.name,
       typeKey: a.workAreaTypeKey,

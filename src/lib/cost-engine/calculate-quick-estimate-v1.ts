@@ -16,9 +16,15 @@ import {
 } from "@/lib/cost-engine/confidence/level";
 import { buildCostBreakdown } from "@/lib/cost-engine/build-cost-breakdown";
 import { buildEstimateTrace } from "@/lib/cost-engine/build-estimate-trace";
-import { createEmptyTrace } from "@/lib/cost-engine/estimate-trace";
+import { createEmptyTrace, type WorkAreaEstimateTrace } from "@/lib/cost-engine/estimate-trace";
+import { buildScopeTrace } from "@/lib/cost-engine/trace/build-scope-trace";
+import { buildTotalTrace } from "@/lib/cost-engine/trace/build-total-trace";
+import {
+  createEmptyEstimateTrace,
+  type EstimateTrace as CalculationTrace,
+} from "@/lib/cost-engine/trace/types";
 import { isSiteConstraintsAssessed } from "@/lib/cost-engine/estimate-quality";
-import type { WorkAreaEstimateTrace } from "@/lib/cost-engine/estimate-trace";
+import type { EstimateTraceDriver } from "@/lib/cost-engine/trace/types";
 import {
   getScopeRateDefinition,
   getScopeRateDefinitionByKey,
@@ -84,6 +90,7 @@ type AreaCalcResult = {
   usesDefaultRateOnly?: boolean;
   scopeAllocation?: ScopeRateAllocation | null;
   allocationBreakdown?: WorkAreaEstimateTrace["allocationBreakdown"];
+  traceDrivers?: EstimateTraceDriver[];
 };
 
 function calcGenericArea(name: string): AreaCalcResult {
@@ -99,6 +106,7 @@ function calcGenericArea(name: string): AreaCalcResult {
     inputs: [`${name} (generic)`],
     allowances: [`Generic allowance for ${name}`],
     assumptions: [],
+    traceDrivers: [],
   };
 }
 
@@ -202,6 +210,10 @@ export function calculateQuickEstimateV1(
       rangeHighDrivers: [],
       qualityFactors: [],
       estimateTrace: createEmptyTrace(),
+      calculationTrace: createEmptyEstimateTrace(
+        input.project.id,
+        input.organisationId
+      ),
       rangeChangedMessage: null,
     };
   }
@@ -252,6 +264,7 @@ export function calculateQuickEstimateV1(
         usesDefaultRateOnly: calc.usesDefaultRateOnly,
         scopeAllocation: calc.scopeAllocation,
         allocationBreakdown: calc.allocationBreakdown,
+        traceDrivers: calc.traceDrivers,
       };
       templatesUsed.push(template.key);
       rateSources.push(calc.rateSource);
@@ -533,6 +546,15 @@ export function calculateQuickEstimateV1(
     }
   );
 
+  const scopeAllowances: Record<string, string[]> = {};
+  const scopeAssumptions: Record<string, string[]> = {};
+  for (let i = 0; i < input.workAreas.length; i++) {
+    const area = input.workAreas[i];
+    const result = areaResults[i];
+    scopeAllowances[area.name] = result.allowances;
+    scopeAssumptions[area.name] = result.assumptions;
+  }
+
   const estimateTrace = buildEstimateTrace({
     workAreas: input.workAreas,
     scopeKey: primaryArea?.templateKey ?? "generic",
@@ -557,6 +579,59 @@ export function calculateQuickEstimateV1(
     finishLevel: effectiveQualityLevel,
     costBreakdown,
     workAreaTraces,
+    rangeQuality: rangeQualityResult.level,
+    scopeAllowances,
+    scopeAssumptions,
+  });
+
+  const scopeTraces = input.workAreas.map((area, index) => {
+    const result = areaResults[index];
+    const scaledCentral =
+      scaledAreaBreakdown[index]?.centralEstimate ?? result.centralEstimate;
+    return buildScopeTrace({
+      workArea: area,
+      scopeTypeKey: result.scopeTypeKey ?? result.templateKey ?? "generic",
+      templateKey: result.templateKey,
+      quantity: result.quantity,
+      unit: result.unit,
+      baseRate: result.baseRate,
+      rateSource: result.rateSource,
+      usesDefaultRateOnly: result.usesDefaultRateOnly,
+      centralEstimate: result.centralEstimate,
+      scaledCentral,
+      effectiveQualityLevel,
+      confidenceScore: confidenceResult.score,
+      contingencyPercent,
+      marginPercent: targetMarginPercent,
+      inputs: result.inputs,
+      allowances: result.allowances,
+      assumptions: result.assumptions,
+      traceDrivers: result.traceDrivers,
+      costBreakdown,
+    });
+  });
+
+  const calculationTrace: CalculationTrace = buildTotalTrace({
+    projectId: input.project.id,
+    organisationId: input.organisationId,
+    scopeTraces,
+    costCentral: baseCost,
+    costLow,
+    costHigh,
+    sellLow: recommendedSellLow,
+    sellHigh: recommendedSellHigh,
+    marginPercent: targetMarginPercent,
+    contingencyPercent,
+    rangeQuality: rangeQualityResult.level,
+    rangeWidthPercent,
+    confidenceScore: confidenceResult.score,
+    confidenceReasons: confidenceResult.reasons,
+    tightenSuggestions: rangeDrivers.tightenSuggestions,
+    constraintsApplied,
+    qualityAdjustmentAssumptions: qualityAdjustment.assumptions,
+    effectiveQualityLevel,
+    userAllowances: userAllowanceRows,
+    missingInformation,
   });
 
   const tightenMessage =
@@ -619,6 +694,7 @@ export function calculateQuickEstimateV1(
     rangeHighDrivers: rangeDrivers.highDrivers,
     qualityFactors,
     estimateTrace,
+    calculationTrace,
     rangeChangedMessage: null,
   };
 }

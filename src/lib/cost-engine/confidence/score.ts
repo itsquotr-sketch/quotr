@@ -3,6 +3,11 @@ import type { RateSource } from "@/lib/cost-engine/rates/get-base-rate-for-scope
 import type { QualityLevel } from "@/lib/constants/quality-level";
 import { getScopeByWorkAreaType } from "@/lib/scopes";
 import { getMissingRequiredFacts } from "@/lib/scopes/missing-facts";
+import {
+  isMaterialCategoryAnswered,
+  isMaterialCategoryUserProvided,
+  resolveMaterialCategory,
+} from "@/lib/scopes/material-categories";
 import type { QuickEstimateWorkAreaInput } from "@/lib/cost-engine/quick-estimate-input";
 import { isSiteConstraintsAssessed } from "@/lib/cost-engine/estimate-quality";
 
@@ -10,6 +15,7 @@ export type ConfidenceSignal =
   | "SCOPE_IDENTIFIED"
   | "AREA_OR_QUANTITY_MEASURED"
   | "MATERIAL_SPECIFIED"
+  | "MATERIAL_ASSUMED"
   | "FINISH_LEVEL_KNOWN"
   | "ACCESS_KNOWN"
   | "CLIENT_BUDGET_KNOWN"
@@ -30,6 +36,7 @@ const SIGNAL_WEIGHTS: Record<ConfidenceSignal, number> = {
   SCOPE_IDENTIFIED: 15,
   AREA_OR_QUANTITY_MEASURED: 15,
   MATERIAL_SPECIFIED: 10,
+  MATERIAL_ASSUMED: 5,
   FINISH_LEVEL_KNOWN: 10,
   ACCESS_KNOWN: 10,
   CLIENT_BUDGET_KNOWN: 5,
@@ -59,7 +66,8 @@ export type ConfidenceScoreResult = {
 const SIGNAL_LABELS: Partial<Record<ConfidenceSignal, string>> = {
   SCOPE_IDENTIFIED: "Work area identified",
   AREA_OR_QUANTITY_MEASURED: "Key measurements provided",
-  MATERIAL_SPECIFIED: "Material specified",
+  MATERIAL_SPECIFIED: "Material category confirmed",
+  MATERIAL_ASSUMED: "Material assumed (default benchmark)",
   FINISH_LEVEL_KNOWN: "Finish level known",
   ACCESS_KNOWN: "Access conditions known",
   CLIENT_BUDGET_KNOWN: "Client budget known",
@@ -124,14 +132,47 @@ export function computeConfidenceScore(input: {
     }
   }
 
-  const materialKnown = input.workAreas.some((area) =>
-    Object.entries(area.answers).some(
-      ([key, val]) => key.includes("material") && val && val !== "unknown"
-    )
-  );
-  if (materialKnown) {
+  let materialUserProvided = false;
+  let materialAssumed = false;
+
+  for (const area of input.workAreas) {
+    const scope = getScopeByWorkAreaType(area.workAreaTypeKey);
+    const resolved = resolveMaterialCategory({
+      scopeTypeKey: scope?.id,
+      workAreaTypeKey: area.workAreaTypeKey,
+      answers: area.answers,
+    });
+
+    if (resolved?.source === "user_provided") {
+      materialUserProvided = true;
+    } else if (
+      resolved?.source === "assumed" &&
+      isMaterialCategoryAnswered(area.answers, scope?.id, area.workAreaTypeKey)
+    ) {
+      materialAssumed = true;
+    } else if (
+      isMaterialCategoryUserProvided(area.answers, scope?.id, area.workAreaTypeKey)
+    ) {
+      materialUserProvided = true;
+    }
+  }
+
+  if (materialUserProvided) {
     score += SIGNAL_WEIGHTS.MATERIAL_SPECIFIED;
     positive.push("MATERIAL_SPECIFIED");
+  } else if (materialAssumed) {
+    score += SIGNAL_WEIGHTS.MATERIAL_ASSUMED;
+    positive.push("MATERIAL_ASSUMED");
+  } else {
+    const legacyMaterialKnown = input.workAreas.some((area) =>
+      Object.entries(area.answers).some(
+        ([key, val]) => key.includes("material") && val && val !== "unknown"
+      )
+    );
+    if (legacyMaterialKnown) {
+      score += SIGNAL_WEIGHTS.MATERIAL_SPECIFIED;
+      positive.push("MATERIAL_SPECIFIED");
+    }
   }
 
   if (input.qualityLevel !== "unknown") {

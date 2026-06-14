@@ -55,7 +55,7 @@ function CommandConfirmationActions({
   options?: { id: string; label: string }[];
 }) {
   const { syncAssistant } = useAssistantChat();
-  const { markUpdating, markSaved, markIdle, requestBreakdownOpen } =
+  const { markUpdating, markSaved, markIdle, requestBreakdownOpen, requestWhyOpen } =
     useEstimateUpdate();
   const [pending, setPending] = useState(false);
   const [resolved, setResolved] = useState(false);
@@ -86,6 +86,7 @@ function CommandConfirmationActions({
 
     await syncAssistant();
     if (result.openBreakdown) requestBreakdownOpen();
+    if (result.openWhy) requestWhyOpen();
     if (confirmed) {
       markSaved({
         costDelta: null,

@@ -121,6 +121,20 @@ export function EstimateTracePanel({ trace }: EstimateTracePanelProps) {
             )}
           </p>
 
+          {(trace.materialCategories?.length ?? 0) > 0 && (
+            <div>
+              <p className="font-medium text-muted-foreground">Material categories</p>
+              <ul className="mt-0.5 space-y-0.5">
+                {(trace.materialCategories ?? []).map((m) => (
+                  <li key={`${m.workAreaName}-${m.factKey}`}>
+                    <span className="text-muted-foreground">{m.workAreaName}: </span>
+                    Material Category: {m.categoryLabel} · Source: {m.sourceLabel}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
           {(trace.missingCriticalFacts?.length ?? 0) > 0 && (
             <div>
               <p className="font-medium text-muted-foreground">Missing facts</p>

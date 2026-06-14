@@ -9,6 +9,8 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type Dispatch,
+  type SetStateAction,
 } from "react";
 import {
   autoSaveQualityLevel,
@@ -35,6 +37,37 @@ export type OptimisticMessage = {
   pending?: boolean;
   error?: string;
 };
+
+const LOADING_TIMEOUT_MS = 15000;
+
+function resolvePendingAssistantMessages(
+  setOptimisticMessages: Dispatch<SetStateAction<OptimisticMessage[]>>,
+  outcome: "success" | "error" | "unchanged",
+  errorMessage?: string
+): void {
+  setOptimisticMessages((prev) => {
+    const hasPending = prev.some((m) => m.pending);
+    if (!hasPending) return prev;
+
+    if (outcome === "success") return [];
+
+    const finalContent =
+      outcome === "unchanged"
+        ? "No estimate change needed."
+        : errorMessage ?? "Could not update estimate. Try again.";
+
+    return prev.map((m) =>
+      m.pending
+        ? {
+            ...m,
+            pending: false,
+            content: finalContent,
+            error: outcome === "error" ? finalContent : undefined,
+          }
+        : m
+    );
+  });
+}
 
 type ScopeAnswerItem = {
   questionId: string;
@@ -105,7 +138,7 @@ export function AssistantChatProvider({
   onSync?: (payload: AssistantSyncPayload) => void;
   children: ReactNode;
 }) {
-  const { markSaving, markUpdating, markSaved, markIdle, requestBreakdownOpen } =
+  const { markSaving, markUpdating, markSaved, markIdle, requestBreakdownOpen, requestWhyOpen } =
     useEstimateUpdate();
   const [persistedMessages, setPersistedMessages] =
     useState<AssistantMessageRow[]>(initialMessages);
@@ -133,6 +166,28 @@ export function AssistantChatProvider({
   const [flushInFlight, setFlushInFlight] = useState(false);
 
   const flushInFlightRef = useRef(false);
+  const loadingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearLoadingTimeout = useCallback(() => {
+    if (loadingTimeoutRef.current) {
+      clearTimeout(loadingTimeoutRef.current);
+      loadingTimeoutRef.current = null;
+    }
+  }, []);
+
+  const startLoadingTimeout = useCallback(() => {
+    clearLoadingTimeout();
+    loadingTimeoutRef.current = setTimeout(() => {
+      resolvePendingAssistantMessages(
+        setOptimisticMessages,
+        "error",
+        "Could not update estimate. Try again."
+      );
+      markIdle();
+      flushInFlightRef.current = false;
+      setFlushInFlight(false);
+    }, LOADING_TIMEOUT_MS);
+  }, [clearLoadingTimeout, markIdle]);
 
   useEffect(() => {
     setPersistedMessages(initialMessages);
@@ -249,6 +304,7 @@ export function AssistantChatProvider({
 
       applyOptimisticScopeAnswers(answers);
       markUpdating();
+      startLoadingTimeout();
 
       try {
         const result = await batchSaveAssistantScopeAnswers(projectId, answers);
@@ -266,7 +322,8 @@ export function AssistantChatProvider({
           }))
         );
 
-        setOptimisticMessages([]);
+        clearLoadingTimeout();
+        resolvePendingAssistantMessages(setOptimisticMessages, "success");
 
         const syncResult = await syncAssistantState(projectId);
         if (syncResult.data) {
@@ -288,16 +345,16 @@ export function AssistantChatProvider({
                 : `after updating ${answers.length} details`,
           });
         }
-      } catch (error) {
+      } catch {
+        clearLoadingTimeout();
         markIdle();
-        const message =
-          error instanceof Error ? error.message : "Could not save.";
-        setOptimisticMessages((prev) =>
-          prev.map((m) =>
-            m.pending ? { ...m, pending: false, content: message, error: message } : m
-          )
+        resolvePendingAssistantMessages(
+          setOptimisticMessages,
+          "error",
+          "Could not update estimate. Try again."
         );
       } finally {
+        clearLoadingTimeout();
         flushInFlightRef.current = false;
         setFlushInFlight(false);
       }
@@ -312,6 +369,8 @@ export function AssistantChatProvider({
       applyOptimisticScopeAnswers,
       applySyncPayload,
       applyEstimateChangeFromPayload,
+      startLoadingTimeout,
+      clearLoadingTimeout,
     ]
   );
 
@@ -352,6 +411,7 @@ export function AssistantChatProvider({
       ]);
 
       markUpdating();
+      startLoadingTimeout();
 
       try {
         const result = await batchSaveAssistantConstraintAnswers(
@@ -360,7 +420,8 @@ export function AssistantChatProvider({
         );
         if (result.error) throw new Error(result.error);
 
-        setOptimisticMessages([]);
+        clearLoadingTimeout();
+        resolvePendingAssistantMessages(setOptimisticMessages, "success");
 
         const syncResult = await syncAssistantState(projectId);
         if (syncResult.data) {
@@ -382,7 +443,8 @@ export function AssistantChatProvider({
                 : "site conditions confirmed",
           });
         }
-      } catch (error) {
+      } catch {
+        clearLoadingTimeout();
         markIdle();
         setOptimisticDeclinedSlugs((prev) =>
           prev.filter((slug) => !declinedSlugs.includes(slug))
@@ -392,21 +454,13 @@ export function AssistantChatProvider({
             prev.filter((slug) => slug !== s.slug)
           );
         }
-        const message =
-          error instanceof Error ? error.message : "Could not save.";
-        setOptimisticMessages((prev) =>
-          prev.map((m) =>
-            m.pending
-              ? {
-                  ...m,
-                  pending: false,
-                  content: "Could not save site conditions. Try again.",
-                  error: message,
-                }
-              : m
-          )
+        resolvePendingAssistantMessages(
+          setOptimisticMessages,
+          "error",
+          "Could not save site conditions. Try again."
         );
       } finally {
+        clearLoadingTimeout();
         flushInFlightRef.current = false;
         setFlushInFlight(false);
       }
@@ -419,6 +473,8 @@ export function AssistantChatProvider({
       markIdle,
       applySyncPayload,
       applyEstimateChangeFromPayload,
+      startLoadingTimeout,
+      clearLoadingTimeout,
     ]
   );
 
@@ -430,6 +486,7 @@ export function AssistantChatProvider({
       setFlushInFlight(true);
       markSaving();
       markUpdating();
+      startLoadingTimeout();
 
       setOptimisticMessages((prev) => [
         ...prev,
@@ -446,7 +503,8 @@ export function AssistantChatProvider({
         const result = await confirmAssistantWorkAreas(projectId, selections);
         if (result.error) throw new Error(result.error);
 
-        setOptimisticMessages([]);
+        clearLoadingTimeout();
+        resolvePendingAssistantMessages(setOptimisticMessages, "success");
 
         const syncResult = await syncAssistantState(projectId);
         if (syncResult.data) {
@@ -460,16 +518,16 @@ export function AssistantChatProvider({
             changeLabel: "work areas confirmed",
           });
         }
-      } catch (error) {
+      } catch {
+        clearLoadingTimeout();
         markIdle();
-        const message =
-          error instanceof Error ? error.message : "Could not save work areas.";
-        setOptimisticMessages((prev) =>
-          prev.map((m) =>
-            m.pending ? { ...m, pending: false, error: message } : m
-          )
+        resolvePendingAssistantMessages(
+          setOptimisticMessages,
+          "error",
+          "Could not update estimate. Try again."
         );
       } finally {
+        clearLoadingTimeout();
         flushInFlightRef.current = false;
         setFlushInFlight(false);
       }
@@ -482,6 +540,8 @@ export function AssistantChatProvider({
       markIdle,
       applySyncPayload,
       applyEstimateChangeFromPayload,
+      startLoadingTimeout,
+      clearLoadingTimeout,
     ]
   );
 
@@ -656,6 +716,7 @@ export function AssistantChatProvider({
       addOptimisticAssistantMessage("Processing…");
       markSaving();
       markUpdating();
+      startLoadingTimeout();
 
       try {
         const formData = new FormData();
@@ -667,6 +728,8 @@ export function AssistantChatProvider({
           return;
         }
         resolveOptimisticMessage(optimisticId);
+        clearLoadingTimeout();
+        resolvePendingAssistantMessages(setOptimisticMessages, "success");
         const syncResult = await syncAssistantState(projectId);
         if (syncResult.data) {
           applySyncPayload(syncResult.data);
@@ -676,6 +739,9 @@ export function AssistantChatProvider({
         if (result.openBreakdown) {
           requestBreakdownOpen();
         }
+        if (result.openWhy) {
+          requestWhyOpen();
+        }
         markSaved({
           costDelta: null,
           previousCompleteness: null,
@@ -683,10 +749,16 @@ export function AssistantChatProvider({
           changeLabel: "after update",
         });
       } catch (error) {
+        clearLoadingTimeout();
         markIdle();
         const message =
           error instanceof Error ? error.message : "Could not send message.";
         resolveOptimisticMessage(optimisticId, message);
+        resolvePendingAssistantMessages(
+          setOptimisticMessages,
+          "error",
+          "Could not update estimate. Try again."
+        );
       }
     },
     [
@@ -702,6 +774,9 @@ export function AssistantChatProvider({
       applyEstimateChangeFromPayload,
       clearOptimisticMessages,
       requestBreakdownOpen,
+      requestWhyOpen,
+      startLoadingTimeout,
+      clearLoadingTimeout,
     ]
   );
 

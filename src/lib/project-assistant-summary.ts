@@ -1,11 +1,30 @@
 import type { EstimateChangeEvent } from "@/lib/cost-engine/recalculate-quick-estimate";
 import type { EstimateQualityFactor } from "@/lib/cost-engine/estimate-quality";
 import type { CostBreakdown } from "@/lib/cost-engine/build-cost-breakdown";
+import type { StructuredEstimateBreakdown } from "@/lib/cost-engine/build-structured-estimate-breakdown";
 import type {
   EstimateTrace,
+  WorkAreaEstimateTrace,
   WorkAreaRateSourceLine,
 } from "@/lib/cost-engine/estimate-trace";
 import type { RangeQuality } from "@/lib/cost-engine/range-quality";
+import type { RateSource } from "@/lib/cost-engine/rates/get-base-rate-for-scope";
+import type { EstimateTrace as CalculationTrace } from "@/lib/cost-engine/trace/types";
+import { parseEstimateTrace } from "@/lib/cost-engine/trace/types";
+
+import type { QuickEstimate } from "@/types/database";
+
+export function resolveCalculationTrace(
+  quickEstimate:
+    | Pick<QuickEstimate, "notes" | "trace">
+    | null
+    | undefined
+): CalculationTrace | undefined {
+  if (!quickEstimate) return undefined;
+  const fromColumn = parseEstimateTrace(quickEstimate.trace);
+  if (fromColumn) return fromColumn;
+  return parseQuickEstimateSummary(quickEstimate.notes ?? null)?.calculationTrace;
+}
 
 function asStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
@@ -52,6 +71,104 @@ function normalizeCostBreakdown(value: unknown): CostBreakdown | undefined {
   };
 }
 
+function normalizeWorkAreaTraces(value: unknown): WorkAreaEstimateTrace[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .filter(
+      (row): row is WorkAreaEstimateTrace =>
+        Boolean(row) &&
+        typeof row === "object" &&
+        typeof (row as { workAreaName?: unknown }).workAreaName === "string"
+    )
+    .map((row) => ({
+      scopeTypeKey: row.scopeTypeKey ?? "generic",
+      workAreaName: row.workAreaName,
+      workAreaTypeKey: row.workAreaTypeKey ?? "",
+      quantity: Number(row.quantity ?? 0),
+      unit: row.unit ?? "each",
+      rate: Number(row.rate ?? 0),
+      rateSource: (row.rateSource ?? "placeholder") as RateSource,
+      finishLevel: row.finishLevel ?? "unknown",
+      centralEstimate: Number(row.centralEstimate ?? 0),
+      allocationBreakdown: row.allocationBreakdown,
+      assumptions: Array.isArray(row.assumptions)
+        ? row.assumptions.filter((item): item is string => typeof item === "string")
+        : [],
+    }));
+}
+
+function normalizeStructuredBreakdown(
+  value: unknown
+): StructuredEstimateBreakdown | undefined {
+  if (!value || typeof value !== "object") return undefined;
+
+  const row = value as Partial<StructuredEstimateBreakdown>;
+  if (!Array.isArray(row.scopes) || row.scopes.length === 0) return undefined;
+
+  const total = row.total;
+  if (!total || typeof total !== "object") return undefined;
+
+  return {
+    total: {
+      costLow: Number(total.costLow ?? 0),
+      costHigh: Number(total.costHigh ?? 0),
+      costCentral: Number(total.costCentral ?? 0),
+      sellLow: Number(total.sellLow ?? 0),
+      sellHigh: Number(total.sellHigh ?? 0),
+      sellCentral: Number(total.sellCentral ?? 0),
+      marginPercent: Number(total.marginPercent ?? 0),
+      rangeQuality: total.rangeQuality ?? "rough",
+    },
+    scopes: row.scopes.map((scope) => ({
+      scopeId: scope.scopeId ?? "",
+      scopeTypeKey: scope.scopeTypeKey ?? "generic",
+      label: scope.label ?? "Work area",
+      included: scope.included ?? true,
+      quantity: Number(scope.quantity ?? 0),
+      unit: scope.unit ?? "each",
+      rateSource: scope.rateSource ?? "placeholder",
+      rateLabel: scope.rateLabel ?? "",
+      rateUsed: Number(scope.rateUsed ?? 0),
+      qualityLevel: scope.qualityLevel ?? "unknown",
+      costLow: Number(scope.costLow ?? 0),
+      costHigh: Number(scope.costHigh ?? 0),
+      costCentral: Number(scope.costCentral ?? 0),
+      sellLow: Number(scope.sellLow ?? 0),
+      sellHigh: Number(scope.sellHigh ?? 0),
+      sellCentral: Number(scope.sellCentral ?? 0),
+      allocations: {
+        labour: Number(scope.allocations?.labour ?? 0),
+        materials: Number(scope.allocations?.materials ?? 0),
+        subcontractors: Number(scope.allocations?.subcontractors ?? 0),
+        allowances: Number(scope.allocations?.allowances ?? 0),
+        contingency: Number(scope.allocations?.contingency ?? 0),
+      },
+      components: Array.isArray(scope.components)
+        ? scope.components.map((component) => ({
+            key: component.key ?? "",
+            label: component.label ?? "",
+            category: component.category ?? "other",
+            amount:
+              component.amount == null ? null : Number(component.amount),
+            source: component.source ?? "none",
+            included: component.included ?? false,
+            assumption: component.assumption ?? null,
+          }))
+        : [],
+      assumptions: Array.isArray(scope.assumptions)
+        ? scope.assumptions.filter((item): item is string => typeof item === "string")
+        : [],
+      exclusions: Array.isArray(scope.exclusions)
+        ? scope.exclusions.filter((item): item is string => typeof item === "string")
+        : [],
+      missing: Array.isArray(scope.missing)
+        ? scope.missing.filter((item): item is string => typeof item === "string")
+        : [],
+    })),
+  };
+}
+
 function normalizeEstimateTrace(value: unknown): EstimateTrace | undefined {
   if (!value || typeof value !== "object") return undefined;
 
@@ -83,6 +200,8 @@ function normalizeEstimateTrace(value: unknown): EstimateTrace | undefined {
         )
       : [],
     costBreakdown: normalizeCostBreakdown(row.costBreakdown),
+    workAreaTraces: normalizeWorkAreaTraces(row.workAreaTraces),
+    structuredBreakdown: normalizeStructuredBreakdown(row.structuredBreakdown),
     workAreas: Array.isArray(row.workAreas) ? row.workAreas : [],
     extractedFacts: Array.isArray(row.extractedFacts) ? row.extractedFacts : [],
     missingFacts: Array.isArray(row.missingFacts) ? row.missingFacts : [],
@@ -151,6 +270,7 @@ export function parseQuickEstimateSummary(notes: string | null): {
   rangeHighDrivers?: string[];
   qualityFactors?: EstimateQualityFactor[];
   estimateTrace?: EstimateTrace;
+  calculationTrace?: CalculationTrace;
   confidenceScore?: number;
   confidenceLevelLabel?: string;
   confidenceReasons?: string[];
@@ -204,6 +324,7 @@ export function parseQuickEstimateSummary(notes: string | null): {
       rangeHighDrivers?: string[];
       qualityFactors?: EstimateQualityFactor[];
       estimateTrace?: EstimateTrace;
+      calculationTrace?: CalculationTrace;
       confidenceScore?: number;
       confidenceLevelLabel?: string;
       confidenceReasons?: string[];
@@ -262,6 +383,13 @@ export function parseQuickEstimateSummary(notes: string | null): {
           ? parsed.qualityFactors
           : [],
         estimateTrace,
+        calculationTrace:
+          parseEstimateTrace(parsed.calculationTrace) ??
+          parseEstimateTrace(
+            (parsed as { estimateTrace?: { calculationTrace?: unknown } })
+              .estimateTrace?.calculationTrace
+          ) ??
+          undefined,
         confidenceScore: parsed.confidenceScore,
         confidenceLevelLabel: parsed.confidenceLevelLabel,
         confidenceReasons: asStringArray(parsed.confidenceReasons),

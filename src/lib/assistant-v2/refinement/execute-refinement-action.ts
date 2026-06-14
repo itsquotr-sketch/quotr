@@ -1,4 +1,7 @@
 import {
+  buildRefinementPathForward,
+} from "@/lib/assistant-v2/refinement/build-refinement-path-forward";
+import {
   insertAssistantMessage,
   listAssistantMessages,
   updateAssistantMessageMetadata,
@@ -554,26 +557,46 @@ export async function executeRefinementAddMoreDetail(
   ].slice(0, MAX_REFINEMENT_QUESTIONS);
 
   if (eligible.length === 0) {
+    const scopeName = params.scopeId
+      ? workAreas.find((a) => a.scopeId === params.scopeId)?.scopeName
+      : undefined;
+    const pathForward = buildRefinementPathForward(missingItems, { scopeName });
+
+    await insertAssistantMessage(supabase, {
+      organisationId: params.organisationId,
+      projectId: params.projectId,
+      userId: params.userId,
+      role: "assistant",
+      content: pathForward.message,
+      metadata: {
+        messageType: "refinement_path_forward",
+        pathType: pathForward.pathType,
+        addMoreDetail: true,
+      },
+    });
+
     return {
-      success: false,
-      error: "No optional details left to add right now.",
+      success: true,
+      message: pathForward.message,
+      estimateRecalculated: false,
     };
   }
 
   const suggestions: ScopeRefinementSuggestion[] = eligible.map((item) => {
-    const scope = getScopeByWorkAreaType(
-      workAreas.find((a) => a.scopeId === item.scopeId)?.workAreaTypeKey ?? ""
-    );
+    const area = workAreas.find((a) => a.scopeId === item.scopeId);
+    const scope = getScopeByWorkAreaType(area?.workAreaTypeKey ?? "");
     const fact =
       scope?.requiredFacts.find((f) => f.key === item.factKey) ??
       scope?.optionalFacts.find((f) => f.key === item.factKey);
+
+    const shortLabel = item.label.replace(/^[^:]+:\s*/, "").replace(/ not confirmed$/, "");
 
     return scopeRefinementSuggestionSchema.parse({
       factKey: item.factKey,
       label: item.label,
       question: fact?.questionText
         ? `For ${item.scopeLabel}, ${fact.questionText.charAt(0).toLowerCase()}${fact.questionText.slice(1)}`
-        : item.label.replace(/ not confirmed$/, "?"),
+        : `For ${item.scopeLabel}, ${shortLabel}?`,
       reason: "would improve estimate accuracy",
       impact:
         item.importance === "critical"
@@ -615,13 +638,35 @@ export async function executeRefinementAddMoreDetail(
   ).map((q) => refinementAnswerQuestionSchema.parse(q));
 
   if (questions.length === 0) {
+    const scopeName = params.scopeId
+      ? workAreas.find((a) => a.scopeId === params.scopeId)?.scopeName
+      : undefined;
+    const pathForward = buildRefinementPathForward(missingItems, { scopeName });
+
+    await insertAssistantMessage(supabase, {
+      organisationId: params.organisationId,
+      projectId: params.projectId,
+      userId: params.userId,
+      role: "assistant",
+      content: pathForward.message,
+      metadata: {
+        messageType: "refinement_path_forward",
+        pathType: pathForward.pathType,
+        addMoreDetail: true,
+      },
+    });
+
     return {
-      success: false,
-      error: "Could not prepare questions for optional details.",
+      success: true,
+      message: pathForward.message,
+      estimateRecalculated: false,
     };
   }
 
-  const intro = "Add a few more details to sharpen this estimate.";
+  const intro =
+    getCriticalOrUsefulMissing(missingItems).length > 0
+      ? "These details would improve confidence — add a few more to sharpen this estimate."
+      : "Add a few more details to narrow the estimate range.";
 
   await insertAssistantMessage(supabase, {
     organisationId: params.organisationId,

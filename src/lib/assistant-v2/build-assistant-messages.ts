@@ -115,13 +115,16 @@ const PLAIN_QUESTION_LABELS: Record<string, string> = {
   "deck.has_balustrade": "Does the deck need balustrades?",
   "deck.has_stairs": "Are stairs included?",
   "deck.area_m2": "What's the deck area in square metres?",
-  "deck.material": "What material is the deck?",
+  "deck.material_type": "What type of decking should I assume?",
   "retaining_wall.length_m": "How long is the retaining wall?",
   "retaining_wall.height_m": "How high is the retaining wall?",
+  "retaining_wall.material": "What type of retaining wall should I assume?",
   "retaining_wall.drainage": "Is drainage required behind the wall?",
   "bathroom.area_m2": "What's the bathroom floor area?",
+  "bathroom.finish_level": "What finish level should I assume for fixtures and finishes?",
   "bathroom.tile_extent": "How high are the tiles going?",
   "bathroom.layout_change": "Is the layout staying the same?",
+  "fence.material_type": "What type of fencing should I assume?",
 };
 
 export function contextualQuestionText(question: PricingQuestion): string {

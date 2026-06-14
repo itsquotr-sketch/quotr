@@ -40,6 +40,7 @@ export type QuickEstimateConstraintInput = {
 };
 
 export type QuickEstimateInput = {
+  organisationId: string;
   project: Pick<Project, "id" | "title">;
   quickEstimate: Pick<
     QuickEstimate,
@@ -122,6 +123,7 @@ export type QuickEstimateOutput = {
   rangeHighDrivers: string[];
   qualityFactors: EstimateQualityFactor[];
   estimateTrace: EstimateTrace;
+  calculationTrace: import("@/lib/cost-engine/trace/types").EstimateTrace;
   rangeChangedMessage: string | null;
 };
 

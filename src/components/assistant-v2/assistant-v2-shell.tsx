@@ -28,7 +28,7 @@ import {
   type WorkAreaCompletenessInput,
 } from "@/lib/assistant-v2/compute-information-completeness";
 import type { ScopeGroupInput } from "@/lib/assistant-v2/get-next-pricing-question";
-import { parseQuickEstimateSummary } from "@/lib/project-assistant-summary";
+import { parseQuickEstimateSummary, resolveCalculationTrace } from "@/lib/project-assistant-summary";
 import { labelForQualityLevel, normaliseQualityLevel } from "@/lib/constants/quality-level";
 import {
   buildEstimateQualityFactors,
@@ -38,6 +38,7 @@ import type { QuickEstimateConfidenceLevel } from "@/lib/constants/quick-estimat
 import type { DiscoveryResult } from "@/lib/ai/discovery/types";
 import type { ScopeQuestionWithAnswers } from "@/lib/project-assistant-data";
 import { resolveWorkAreaTypeKey } from "@/lib/project-assistant-questions";
+import { isMaterialCategoryUserProvided } from "@/lib/scopes/material-categories";
 import type {
   Project,
   ProjectScope,
@@ -91,7 +92,7 @@ function AssistantV2ShellInner({
 }: AssistantV2ShellProps) {
   const router = useRouter();
   const [resetPending, startReset] = useTransition();
-  const { recordEstimateSnapshot, breakdownOpenRequest } = useEstimateUpdate();
+  const { recordEstimateSnapshot, breakdownOpenRequest, whyOpenRequest } = useEstimateUpdate();
 
   const [liveEstimate, setLiveEstimate] = useState(quickEstimate);
   const [liveScopeQuestions, setLiveScopeQuestions] = useState(scopeQuestions);
@@ -248,8 +249,10 @@ function AssistantV2ShellInner({
   const qualityFactors = useMemo(() => {
     const included = workAreas.filter((a) => a.included !== false);
     const materialsKnown = included.some((area) =>
-      Object.entries(area.answers).some(
-        ([key, val]) => key.includes("material") && val && val !== "unknown"
+      isMaterialCategoryUserProvided(
+        area.answers,
+        undefined,
+        area.workAreaTypeKey
       )
     );
     const accessKnown = included.some((area) =>
@@ -330,6 +333,7 @@ function AssistantV2ShellInner({
       projectCompleteness.projectStatus === "enough_for_draft" ||
       projectCompleteness.projectStatus === "quote_ready",
     estimateTrace: estimateSummary?.estimateTrace ?? null,
+    calculationTrace: resolveCalculationTrace(liveEstimate) ?? null,
     finishLevel: labelForQualityLevel(finishLevel),
     estimateIncludes: estimateSummary?.workAreasIncluded ?? [],
     estimateExcludes: estimateSummary?.workAreasExcluded ?? [],
@@ -339,6 +343,7 @@ function AssistantV2ShellInner({
     rateSourceDetail: estimateSummary?.rateSourceDetail ?? null,
     stagedRatePrompt: estimateSummary?.stagedRatePrompt ?? null,
     breakdownOpenRequest,
+    whyOpenRequest,
     benchmarkScopesForOnboarding:
       estimateSummary?.benchmarkScopesForOnboarding ?? [],
     rangeWidthPercent: estimateSummary?.rangeWidthPercent ?? null,

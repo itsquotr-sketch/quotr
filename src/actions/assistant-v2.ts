@@ -58,6 +58,7 @@ export type AssistantV2ActionState = {
   usedFallback?: boolean;
   requiresConfirmation?: boolean;
   openBreakdown?: boolean;
+  openWhy?: boolean;
   intent?: string;
   navigateTo?: string;
   rateScopes?: {
@@ -190,6 +191,7 @@ export async function submitAssistantNotes(
     usedFallback: result.usedFallback,
     requiresConfirmation: result.requiresConfirmation,
     openBreakdown: result.openBreakdown,
+    openWhy: result.openWhy,
     intent: result.intent,
   };
 }
@@ -231,6 +233,7 @@ export async function confirmAssistantCommand(
     success: true,
     message: result.message,
     openBreakdown: result.openBreakdown,
+    openWhy: result.openWhy,
     intent: result.intent,
   };
 }

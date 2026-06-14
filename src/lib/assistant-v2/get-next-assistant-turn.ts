@@ -4,6 +4,9 @@ import {
   getUnknownSiteConditions,
   type ConstraintQuestion,
 } from "@/lib/assistant-v2/get-next-constraint-question";
+import { buildMergedAnswersForScope } from "@/lib/assistant-v2/build-merged-answers";
+import { getKnownFactsForScope } from "@/lib/assistant-v2/facts/get-known-facts-for-scope";
+import { resolveWorkAreaTypeKey } from "@/lib/project-assistant-questions";
 import {
   getNextPricingQuestions,
   type PricingQuestion,
@@ -11,6 +14,7 @@ import {
 } from "@/lib/assistant-v2/get-next-pricing-question";
 import type { ScopeQuestionWithAnswers } from "@/lib/project-assistant-data";
 import { normalizeQuestionKey } from "@/lib/question-keys";
+import { getMaterialQuestionTextForWorkArea } from "@/lib/scopes/material-categories";
 
 export type QualityTurn = {
   kind: "quality";
@@ -52,7 +56,10 @@ function contextualScopePrompt(q: PricingQuestion): string {
   if (key.includes("level")) return "Is the deck ground-level or elevated?";
   if (key.includes("balustrade")) return "Is a balustrade required?";
   if (key.includes("stair")) return "Are stairs required?";
-  if (key.includes("material")) return "What material should I assume?";
+  if (key.includes("material") || key.includes("finish_level")) {
+    const scopeSpecific = getMaterialQuestionTextForWorkArea(q.workAreaTypeKey);
+    if (scopeSpecific) return scopeSpecific;
+  }
   if (key.includes("area")) return "What's the approximate area?";
   return q.questionText;
 }
@@ -73,6 +80,8 @@ export function getNextAssistantTurn(input: {
       discovery: input.discovery,
       scopeQuestions: input.scopeQuestions,
       answeredQuestionKeys: input.answeredQuestionKeys,
+      qualityLevel: input.qualityLevel,
+      selectedConstraintSlugs: input.selectedConstraintSlugs,
     },
     3
   );
@@ -89,15 +98,40 @@ export function getNextAssistantTurn(input: {
   }
 
   if (input.qualityLevel === "unknown" && input.scopeGroups.length > 0) {
-    return {
-      kind: "quality",
-      turn: {
+    const finishStillMissing = input.scopeGroups.some((group) => {
+      const typeKey = resolveWorkAreaTypeKey(
+        group.scopeTypeName,
+        group.scopeName
+      );
+      const merged = buildMergedAnswersForScope(
+        group.scopeId,
+        group.scopeName,
+        group.scopeTypeName,
+        input.scopeQuestions,
+        input.discovery
+      );
+      const known = getKnownFactsForScope({
+        scopeId: group.scopeId,
+        scopeTypeKey: typeKey,
+        answers: merged,
+        discovery: input.discovery,
+        qualityLevel: input.qualityLevel,
+        selectedConstraintSlugs: input.selectedConstraintSlugs,
+      });
+      return !Object.keys(known.facts).some((k) => k.includes("finish_level"));
+    });
+
+    if (finishStillMissing) {
+      return {
         kind: "quality",
-        prompt: "What finish level should I assume?",
-        currentLevel: input.qualityLevel,
-        options: QUALITY_OPTIONS,
-      },
-    };
+        turn: {
+          kind: "quality",
+          prompt: "What finish level should I assume?",
+          currentLevel: input.qualityLevel,
+          options: QUALITY_OPTIONS,
+        },
+      };
+    }
   }
 
   const discoverySlugs =

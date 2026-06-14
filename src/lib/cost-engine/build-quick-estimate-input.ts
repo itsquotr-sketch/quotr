@@ -294,6 +294,7 @@ export async function buildQuickEstimateInput(
 
   return {
     input: {
+      organisationId,
       project: {
         id: project.id,
         title: project.title,

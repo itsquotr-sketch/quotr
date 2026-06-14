@@ -1,9 +1,12 @@
 import type { EstimateTrace } from "@/lib/cost-engine/estimate-trace";
 import type { EvaluateWorkAreaInput } from "@/lib/assistant-v2/completeness/evaluate-project-completeness";
+import { getTrackableFactsForWorkAreaType } from "@/lib/assistant-v2/discovery/generic-scope-discovery";
+import { shouldSuppressQuestionForDerivedValue } from "@/lib/assistant-v2/facts/measurement-resolver";
 import { getCurrentMissingItems, getCriticalOrUsefulMissing } from "@/lib/assistant-v2/missing/get-current-missing-items";
 import {
   getMissingOptionalHighImpact,
   getMissingRequiredFacts,
+  factIsAnsweredFromMap,
 } from "@/lib/scopes/missing-facts";import { getScopeByWorkAreaType } from "@/lib/scopes";
 import type { ScopeFactDefinition } from "@/lib/scopes/types";
 import { z } from "zod";
@@ -138,6 +141,38 @@ function factToSuggestion(
   });
 }
 
+function suggestionsFromStubWorkArea(
+  area: EvaluateWorkAreaInput
+): ScopeRefinementSuggestion[] {
+  const trackable = getTrackableFactsForWorkAreaType(area.workAreaTypeKey);
+  const suggestions: ScopeRefinementSuggestion[] = [];
+
+  for (const fact of trackable) {
+    if (shouldSuppressQuestionForDerivedValue(fact.key, area.answers)) continue;
+    if (factIsAnsweredFromMap(fact as import("@/lib/scopes/types").ScopeFactDefinition, area.answers)) {
+      continue;
+    }
+
+    suggestions.push(
+      scopeRefinementSuggestionSchema.parse({
+        factKey: fact.key,
+        label: `${area.scopeName} ${fact.label.charAt(0).toLowerCase()}${fact.label.slice(1)}`,
+        question: `For ${area.scopeName}, ${fact.label.toLowerCase()}?`,
+        reason: fact.required
+          ? `needed to scope ${area.scopeName.toLowerCase()}`
+          : `would improve confidence for ${area.scopeName.toLowerCase()}`,
+        impact: fact.required ? "high" : "medium",
+        affectsEstimate: fact.affectsEstimate,
+        scopeId: area.scopeId,
+        scopeName: area.scopeName,
+        required: fact.required,
+      })
+    );
+  }
+
+  return suggestions;
+}
+
 function suggestionsFromWorkArea(
   area: EvaluateWorkAreaInput
 ): ScopeRefinementSuggestion[] {
@@ -214,8 +249,11 @@ export function getScopeRefinementSuggestions(
   const suggestions: ScopeRefinementSuggestion[] = [];
 
   for (const area of sortedAreas) {
-    if (!getScopeByWorkAreaType(area.workAreaTypeKey)) continue;
-    suggestions.push(...suggestionsFromWorkArea(area));
+    if (getScopeByWorkAreaType(area.workAreaTypeKey)) {
+      suggestions.push(...suggestionsFromWorkArea(area));
+    } else {
+      suggestions.push(...suggestionsFromStubWorkArea(area));
+    }
   }
 
   const traceFacts = input.estimateTrace?.missingCriticalFacts ?? [];

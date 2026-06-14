@@ -78,6 +78,7 @@ export type HandleAssistantMessageResult = {
   estimateRecalculated?: boolean;
 
   openBreakdown?: boolean;
+  openWhy?: boolean;
 
   usedFallback?: boolean;
 

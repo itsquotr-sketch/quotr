@@ -15,6 +15,7 @@ function deckInput(
   userAllowances: ProjectAllowance[] = []
 ): QuickEstimateInput {
   return {
+    organisationId: "org-test",
     project: { id: "test", title: "Test" },
     quickEstimate: {
       id: "qe-1",

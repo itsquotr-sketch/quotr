@@ -1,4 +1,5 @@
 import { YES_NO_UNSURE } from "@/lib/scopes/shared";
+import { RETAINING_WALL_MATERIAL_CATEGORIES } from "@/lib/scopes/material-categories";
 import type { ScopeDefinition } from "@/lib/scopes/types";
 
 export const retainingWallScope: ScopeDefinition = {
@@ -54,23 +55,27 @@ export const retainingWallScope: ScopeDefinition = {
       required: true,
       affectsEstimate: true,
       affectsConfidence: true,
-      questionText: "What material — timber, block or concrete?",
-      options: [
-        { value: "timber", label: "Timber" },
-        { value: "block", label: "Block" },
-        { value: "concrete", label: "Concrete" },
-        { value: "unknown", label: "Not sure yet" },
-      ],
+      questionText: RETAINING_WALL_MATERIAL_CATEGORIES.questionText,
+      options: RETAINING_WALL_MATERIAL_CATEGORIES.categories.map(({ value, label }) => ({
+        value,
+        label,
+      })),
       extractionPatterns: [
         /\btimber\s+retaining\b/i,
         /\bblock\s+wall\b/i,
+        /\bconcrete\s+sleeper\b/i,
         /\bconcrete\s+retaining\b/i,
+        /\bkeystone\b/i,
+        /\bstone\s+wall\b/i,
       ],
       extractValue: (m) => {
         const text = m[0].toLowerCase();
         if (text.includes("timber")) return "timber";
-        if (text.includes("block")) return "block";
-        if (text.includes("concrete")) return "concrete";
+        if (text.includes("keystone")) return "keystone";
+        if (text.includes("stone")) return "stone";
+        if (text.includes("sleeper")) return "concrete_sleeper";
+        if (text.includes("block")) return "concrete_block";
+        if (text.includes("concrete")) return "concrete_sleeper";
         return null;
       },
     },

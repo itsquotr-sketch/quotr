@@ -1,3 +1,5 @@
+import { getTrackableFactsForWorkAreaType } from "@/lib/assistant-v2/discovery/generic-scope-discovery";
+import { shouldSuppressQuestionForDerivedValue } from "@/lib/assistant-v2/facts/measurement-resolver";
 import { getScopeByWorkAreaType } from "@/lib/scopes";
 import {
   buildScopedMissingLabelsFromItems,
@@ -7,7 +9,6 @@ import {
 import {
   factIsAnsweredFromMap,
   getKnownFactsForScope,
-  getMissingRequiredFacts,
 } from "@/lib/scopes/missing-facts";
 export type WorkAreaCompletenessInput = {
   scopeId?: string;
@@ -28,23 +29,26 @@ export type ScopeCompletenessResult = {
 export function computeScopeCompleteness(
   input: WorkAreaCompletenessInput
 ): ScopeCompletenessResult {
-  const scope = getScopeByWorkAreaType(input.workAreaTypeKey);
-  if (!scope) {
+  const trackableFacts = getTrackableFactsForWorkAreaType(input.workAreaTypeKey);
+  if (trackableFacts.length === 0) {
     return { percent: 0, knownCount: 0, totalCount: 0, requiredComplete: false };
   }
 
-  const highImpact = new Set(scope.confidenceRules.highImpactOptionalKeys);
-  const trackableFacts = [
-    ...scope.requiredFacts,
-    ...scope.optionalFacts.filter((f) => highImpact.has(f.key)),
-  ];
-
-  const knownCount = trackableFacts.filter((fact) =>
-    factIsAnsweredFromMap(fact, input.answers)
-  ).length;
+  const knownCount = trackableFacts.filter((fact) => {
+    if (shouldSuppressQuestionForDerivedValue(fact.key, input.answers)) {
+      return true;
+    }
+    return factIsAnsweredFromMap(fact as import("@/lib/scopes/types").ScopeFactDefinition, input.answers);
+  }).length;
   const totalCount = trackableFacts.length;
-  const requiredComplete =
-    getMissingRequiredFacts(input.workAreaTypeKey, input.answers).length === 0;
+  const requiredComplete = trackableFacts
+    .filter((f) => f.required)
+    .every((fact) => {
+      if (shouldSuppressQuestionForDerivedValue(fact.key, input.answers)) {
+        return true;
+      }
+      return factIsAnsweredFromMap(fact as import("@/lib/scopes/types").ScopeFactDefinition, input.answers);
+    });
 
   const percent =
     totalCount > 0 ? Math.round((knownCount / totalCount) * 100) : 0;
@@ -62,19 +66,16 @@ export function computeProjectCompleteness(
   let total = 0;
 
   for (const area of included) {
-    const scope = getScopeByWorkAreaType(area.workAreaTypeKey);
-    if (!scope) continue;
-
-    const highImpact = new Set(scope.confidenceRules.highImpactOptionalKeys);
-    const trackableFacts = [
-      ...scope.requiredFacts,
-      ...scope.optionalFacts.filter((f) => highImpact.has(f.key)),
-    ];
+    const trackableFacts = getTrackableFactsForWorkAreaType(area.workAreaTypeKey);
+    if (trackableFacts.length === 0) continue;
 
     total += trackableFacts.length;
-    known += trackableFacts.filter((fact) =>
-      factIsAnsweredFromMap(fact, area.answers)
-    ).length;
+    known += trackableFacts.filter((fact) => {
+      if (shouldSuppressQuestionForDerivedValue(fact.key, area.answers)) {
+        return true;
+      }
+      return factIsAnsweredFromMap(fact as import("@/lib/scopes/types").ScopeFactDefinition, area.answers);
+    }).length;
   }
 
   if (total === 0) return 0;
