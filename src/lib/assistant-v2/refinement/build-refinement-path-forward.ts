@@ -3,6 +3,8 @@ import {
   getCriticalOrUsefulMissing,
   getOptionalMissing,
 } from "@/lib/assistant-v2/missing/get-current-missing-items";
+import type { ConfidenceEvaluationResult } from "@/lib/assistant-v2/confidence/evaluate-confidence";
+import { buildProjectConfidenceMessage } from "@/lib/assistant-v2/confidence/evaluate-confidence";
 
 export type RefinementPathForward = {
   success: true;
@@ -16,7 +18,7 @@ export type RefinementPathForward = {
  */
 export function buildRefinementPathForward(
   missingItems: CurrentMissingItem[],
-  options?: { scopeName?: string }
+  options?: { scopeName?: string; confidence?: ConfidenceEvaluationResult }
 ): RefinementPathForward {
   const critical = getCriticalOrUsefulMissing(missingItems);
   const optional = getOptionalMissing(missingItems);
@@ -62,13 +64,11 @@ export function buildRefinementPathForward(
     success: true,
     pathType: "highly_refined",
     message: [
-      "You've provided enough information for a strong estimate.",
+      options?.confidence
+        ? buildProjectConfidenceMessage(options.confidence)
+        : "You've provided the key information.",
       "",
-      "Next steps:",
-      "• Review assumptions in the estimate breakdown",
-      "• Review the cost breakdown",
-      "• Add contractor rates for tighter pricing",
-      "• Generate a detailed estimate when ready",
+      "You can review the breakdown or add your own rates to improve pricing.",
     ].join("\n"),
   };
 }

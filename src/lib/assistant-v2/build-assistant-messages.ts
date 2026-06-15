@@ -125,6 +125,8 @@ const PLAIN_QUESTION_LABELS: Record<string, string> = {
   "bathroom.tile_extent": "How high are the tiles going?",
   "bathroom.layout_change": "Is the layout staying the same?",
   "fence.material_type": "What type of fencing should I assume?",
+  "fence.fence_type": "What type of fence should I assume?",
+  "fence.height_m": "What height should I allow for?",
 };
 
 export function contextualQuestionText(question: PricingQuestion): string {

@@ -9,7 +9,8 @@ import {
   userFacingSupabaseError,
 } from "@/lib/supabase/log-error";
 import { recalculateQuickEstimate } from "@/lib/cost-engine/recalculate-quick-estimate";
-import { revalidateProjectAssistant } from "@/lib/assistant-v2/revalidate";
+import { revalidateEstimateOnly } from "@/lib/assistant-v2/revalidate";
+import { invalidatePricingContext } from "@/lib/cost-engine/cache/load-pricing-context";
 import { formatCurrencyRange } from "@/lib/format-currency";
 import {
   labourRateSchema,
@@ -701,6 +702,8 @@ export async function saveScopeRateAndRecalculate(
     };
   }
 
+  invalidatePricingContext(organisationId);
+
   const recalc = await recalculateQuickEstimate(
     supabase,
     organisationId,
@@ -715,7 +718,7 @@ export async function saveScopeRateAndRecalculate(
     return { error: recalc.error ?? "Rate saved but estimate could not update." };
   }
 
-  await revalidateProjectAssistant(projectId);
+  revalidateEstimateOnly(projectId);
 
   const prevLow = previousEstimate?.estimated_cost_low;
   const prevHigh = previousEstimate?.estimated_cost_high;

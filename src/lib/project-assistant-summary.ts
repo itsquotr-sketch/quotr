@@ -1,5 +1,6 @@
 import type { EstimateChangeEvent } from "@/lib/cost-engine/recalculate-quick-estimate";
 import type { EstimateQualityFactor } from "@/lib/cost-engine/estimate-quality";
+import type { ConfidenceEvaluationResult } from "@/lib/assistant-v2/confidence/evaluate-confidence";
 import type { CostBreakdown } from "@/lib/cost-engine/build-cost-breakdown";
 import type { StructuredEstimateBreakdown } from "@/lib/cost-engine/build-structured-estimate-breakdown";
 import type {
@@ -269,6 +270,7 @@ export function parseQuickEstimateSummary(notes: string | null): {
   rangeLowDrivers?: string[];
   rangeHighDrivers?: string[];
   qualityFactors?: EstimateQualityFactor[];
+  confidenceEvaluation?: ConfidenceEvaluationResult;
   estimateTrace?: EstimateTrace;
   calculationTrace?: CalculationTrace;
   confidenceScore?: number;
@@ -293,6 +295,10 @@ export function parseQuickEstimateSummary(notes: string | null): {
   rangeChangedMessage?: string | null;
   lastEstimateChange?: EstimateChangeEvent | null;
   costBreakdown?: CostBreakdown;
+  estimateStatus?: "draft" | "ready" | "failed" | "partial";
+  failureReason?: string | null;
+  unpricedWorkAreas?: { name: string; workAreaTypeKey: string; reason: string }[];
+  traceWarning?: string | null;
 } | null {
   if (!notes) return null;
   try {
@@ -323,6 +329,7 @@ export function parseQuickEstimateSummary(notes: string | null): {
       rangeLowDrivers?: string[];
       rangeHighDrivers?: string[];
       qualityFactors?: EstimateQualityFactor[];
+      confidenceEvaluation?: ConfidenceEvaluationResult;
       estimateTrace?: EstimateTrace;
       calculationTrace?: CalculationTrace;
       confidenceScore?: number;
@@ -345,6 +352,14 @@ export function parseQuickEstimateSummary(notes: string | null): {
       rangeFactor?: number | null;
       rangeChangedMessage?: string | null;
       lastEstimateChange?: EstimateChangeEvent | null;
+      estimateStatus?: "draft" | "ready" | "failed" | "partial";
+      failureReason?: string | null;
+      unpricedWorkAreas?: {
+        name: string;
+        workAreaTypeKey: string;
+        reason: string;
+      }[];
+      traceWarning?: string | null;
     };
     if (Array.isArray(parsed.includedTrades) || Array.isArray(parsed.workAreasIncluded)) {
       const estimateTrace = normalizeEstimateTrace(parsed.estimateTrace);
@@ -382,6 +397,11 @@ export function parseQuickEstimateSummary(notes: string | null): {
         qualityFactors: Array.isArray(parsed.qualityFactors)
           ? parsed.qualityFactors
           : [],
+        confidenceEvaluation:
+          parsed.confidenceEvaluation &&
+          typeof parsed.confidenceEvaluation === "object"
+            ? (parsed.confidenceEvaluation as ConfidenceEvaluationResult)
+            : undefined,
         estimateTrace,
         calculationTrace:
           parseEstimateTrace(parsed.calculationTrace) ??
@@ -418,6 +438,12 @@ export function parseQuickEstimateSummary(notes: string | null): {
           normalizeCostBreakdown(
             (parsed as { costBreakdown?: unknown }).costBreakdown
           ),
+        estimateStatus: parsed.estimateStatus,
+        failureReason: parsed.failureReason ?? null,
+        unpricedWorkAreas: Array.isArray(parsed.unpricedWorkAreas)
+          ? parsed.unpricedWorkAreas
+          : [],
+        traceWarning: parsed.traceWarning ?? null,
       };
     }
   } catch {

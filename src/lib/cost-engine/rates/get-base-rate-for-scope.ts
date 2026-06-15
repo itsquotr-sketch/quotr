@@ -94,6 +94,20 @@ const SCOPE_KEYWORDS: Record<string, string[]> = {
     "wet area",
     "reno",
   ],
+  "kitchen-renovation": [
+    "kitchen",
+    "cabinetry",
+    "benchtops",
+    "joinery",
+    "appliances",
+  ],
+  kitchen_renovation: [
+    "kitchen",
+    "cabinetry",
+    "benchtops",
+    "joinery",
+    "appliances",
+  ],
 };
 
 function normaliseKey(key: string): string {
@@ -310,8 +324,15 @@ export function getBaseRateForScope(
 
 export function rateSourceLabel(
   source: RateSource,
-  options?: { scopeLabel?: string; usesDefaultRateOnly?: boolean }
+  options?: {
+    scopeLabel?: string;
+    usesDefaultRateOnly?: boolean;
+    roughAllowance?: boolean;
+  }
 ): string {
+  if (options?.roughAllowance) {
+    return "Rough allowance";
+  }
   switch (source) {
     case "scope_rate":
       if (options?.usesDefaultRateOnly) {

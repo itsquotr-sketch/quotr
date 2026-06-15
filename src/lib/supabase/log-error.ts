@@ -50,6 +50,19 @@ export function isMissingProjectEstimateDriversTableError(
   return isMissingTableError(error, "project_estimate_drivers");
 }
 
+export function isMissingQuickEstimateTraceColumnError(
+  error: PostgrestError
+): boolean {
+  const message = error.message.toLowerCase();
+  return (
+    error.code === "PGRST204" &&
+    (message.includes("trace") ||
+      message.includes("estimate_status") ||
+      message.includes("failure_reason") ||
+      message.includes("last_calculated_at"))
+  );
+}
+
 export function userFacingSupabaseError(
   error: PostgrestError,
   fallback: string

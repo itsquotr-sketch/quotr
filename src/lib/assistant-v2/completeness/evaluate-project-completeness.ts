@@ -11,6 +11,11 @@ import {
   getMissingOptionalHighImpact,
   getMissingRequiredFacts,
 } from "@/lib/scopes/missing-facts";
+import { isFinishLevelKnown } from "@/lib/scopes/resolve-effective-finish";
+import {
+  describeFlowStatusMessage,
+  resolveAssistantFlowState,
+} from "@/lib/assistant-v2/flow/resolve-assistant-flow-state";
 import type { ScopeFactDefinition } from "@/lib/scopes/types";
 
 export const projectStatusSchema = z.enum([
@@ -146,6 +151,33 @@ export function buildScopedMissingInformationLabels(
   return [...new Set(labels)];
 }
 
+function allScopesReadyForConstraints(
+  includedAreas: EvaluateWorkAreaInput[]
+): boolean {
+  return (
+    includedAreas.length > 0 &&
+    includedAreas.every(
+      (area) =>
+        getMissingRequiredFacts(area.workAreaTypeKey, area.answers).length === 0
+    )
+  );
+}
+
+function projectFinishLevelResolved(
+  input: EvaluateProjectCompletenessInput,
+  includedAreas: EvaluateWorkAreaInput[]
+): boolean {
+  if (input.qualityLevel !== "unknown") return true;
+
+  return includedAreas.every((area) =>
+    isFinishLevelKnown({
+      scopeTypeKey: area.workAreaTypeKey,
+      answers: area.answers,
+      projectQualityLevel: input.qualityLevel,
+    })
+  );
+}
+
 function scopeHasMeasurementOrBenchmark(
   workAreaTypeKey: string,
   answers: Record<string, string>
@@ -178,7 +210,8 @@ function scopeMeetsDraftThreshold(area: EvaluateWorkAreaInput): boolean {
 }
 
 function buildWorkAreaCompleteness(
-  area: EvaluateWorkAreaInput
+  area: EvaluateWorkAreaInput,
+  projectQualityLevel?: QualityLevel
 ): WorkAreaCompleteness {
   const scope = getScopeByWorkAreaType(area.workAreaTypeKey);
   const { percent, requiredComplete } = computeScopeCompleteness({
@@ -188,7 +221,8 @@ function buildWorkAreaCompleteness(
 
   const missingCritical = getMissingRequiredFacts(
     area.workAreaTypeKey,
-    area.answers
+    area.answers,
+    { projectQualityLevel }
   ).map((f) => f.label);
 
   const missingUseful = getMissingOptionalHighImpact(
@@ -197,7 +231,9 @@ function buildWorkAreaCompleteness(
   ).map((f) => f.label);
 
   const nextBestQuestions = [
-    ...getMissingRequiredFacts(area.workAreaTypeKey, area.answers),
+    ...getMissingRequiredFacts(area.workAreaTypeKey, area.answers, {
+      projectQualityLevel,
+    }),
     ...getMissingOptionalHighImpact(area.workAreaTypeKey, area.answers),
   ]
     .slice(0, 3)
@@ -231,7 +267,7 @@ function resolveNextBestAction(
   if (projectStatus === "needs_scope_confirmation") {
     return {
       type: "confirm_scopes",
-      label: "Confirm work areas",
+      label: "Here's what I'll estimate",
       reason: "Work areas from discovery still need confirmation.",
     };
   }
@@ -243,15 +279,41 @@ function resolveNextBestAction(
   );
 
   if (incompleteScope) {
+    const factLabel = incompleteScope.missingCriticalFacts[0] ?? "details";
+    const shortLabel =
+      factLabel.toLowerCase().includes("height")
+        ? `Add ${incompleteScope.label.toLowerCase()} height`
+        : factLabel.toLowerCase().includes("material") ||
+            factLabel.toLowerCase().includes("type")
+          ? `Add ${incompleteScope.label.toLowerCase()} details`
+          : `Answer ${incompleteScope.label.toLowerCase()} details`;
     return {
       type: "ask_questions",
-      label: `Answer ${incompleteScope.label} questions`,
+      label: shortLabel,
       scopeId: incompleteScope.scopeId,
       reason: `${incompleteScope.label} is missing key pricing details.`,
     };
   }
 
-  if (input.qualityLevel === "unknown" && includedAreas.length > 0) {
+  const incompleteUseful = workAreaResults.find(
+    (w) =>
+      includedAreas.some((a) => a.scopeId === w.scopeId) &&
+      w.missingUsefulFacts.length > 0
+  );
+
+  if (incompleteUseful) {
+    return {
+      type: "ask_questions",
+      label: `Answer ${incompleteUseful.label} questions`,
+      scopeId: incompleteUseful.scopeId,
+      reason: `${incompleteUseful.label} has useful details that would sharpen the estimate.`,
+    };
+  }
+
+  if (
+    !projectFinishLevelResolved(input, includedAreas) &&
+    includedAreas.length > 0
+  ) {
     return {
       type: "select_finish",
       label: "Select finish level",
@@ -259,10 +321,10 @@ function resolveNextBestAction(
     };
   }
 
-  if (pendingConstraints > 0) {
+  if (pendingConstraints > 0 && allScopesReadyForConstraints(includedAreas)) {
     return {
       type: "assess_constraints",
-      label: "Review site conditions",
+      label: "Confirm site conditions",
       reason: "Site conditions affect access, waste, and programme.",
     };
   }
@@ -270,14 +332,22 @@ function resolveNextBestAction(
   if (projectStatus === "quote_ready") {
     return {
       type: "quote_ready",
-      label: "Move to detailed pricing",
+      label: "View estimate detail",
       reason: "Estimate has enough detail for quote-ready pricing.",
+    };
+  }
+
+  if (projectStatus === "enough_for_draft") {
+    return {
+      type: "ready_for_draft",
+      label: "View estimate detail",
+      reason: "Enough detail for a draft quick estimate.",
     };
   }
 
   return {
     type: "ready_for_draft",
-    label: "Review draft estimate",
+    label: "Generate quick estimate",
     reason: "Enough detail for a draft quick estimate.",
   };
 }
@@ -286,7 +356,9 @@ export function evaluateProjectCompleteness(
   input: EvaluateProjectCompletenessInput
 ): ProjectCompletenessResult {
   const includedAreas = input.workAreas.filter((a) => a.included);
-  const workAreaResults = input.workAreas.map(buildWorkAreaCompleteness);
+  const workAreaResults = input.workAreas.map((area) =>
+    buildWorkAreaCompleteness(area, input.qualityLevel)
+  );
 
   const includedResults = workAreaResults.filter((w) =>
     includedAreas.some((a) => a.scopeId === w.scopeId)
@@ -326,6 +398,9 @@ export function evaluateProjectCompleteness(
     (w) => w.missingCriticalFacts.length > 0
   );
 
+  const finishResolved = projectFinishLevelResolved(input, includedAreas);
+  const constraintsReady = allScopesReadyForConstraints(includedAreas);
+
   let projectStatus: ProjectStatus;
 
   if ((input.pendingSuggestionCount ?? 0) > 0) {
@@ -335,8 +410,10 @@ export function evaluateProjectCompleteness(
   } else if (anyMissingCritical) {
     projectStatus = "needs_questions";
   } else if (
-    input.qualityLevel === "unknown" ||
-    (!siteConstraintsAssessed && pendingConstraints > 0)
+    !finishResolved ||
+    (constraintsReady &&
+      !siteConstraintsAssessed &&
+      pendingConstraints > 0)
   ) {
     projectStatus = "needs_constraints";
   } else if (
@@ -374,8 +451,18 @@ export type CompletenessStatusMessage = {
 };
 
 export function describeCompletenessStatus(
-  result: ProjectCompletenessResult
+  result: ProjectCompletenessResult,
+  options?: {
+    flowState?: ReturnType<typeof resolveAssistantFlowState>["state"];
+    hasUsefulGaps?: boolean;
+  }
 ): CompletenessStatusMessage {
+  if (options?.flowState) {
+    return describeFlowStatusMessage(options.flowState, {
+      hasUsefulGaps: options.hasUsefulGaps,
+    });
+  }
+
   switch (result.projectStatus) {
     case "quote_ready":
       return {
@@ -385,8 +472,8 @@ export function describeCompletenessStatus(
     case "enough_for_draft":
       if (result.overallCompleteness >= 70) {
         return {
-          title: "Good draft",
-          subtitle: "A few details would sharpen it — check the live estimate.",
+          title: "Solid draft — a few details would sharpen it.",
+          subtitle: "Optional details would tighten the range — check the live estimate.",
         };
       }
       return {
@@ -401,15 +488,15 @@ export function describeCompletenessStatus(
       };
     case "needs_scope_confirmation":
       return {
-        title: "Confirm work areas",
+        title: "Here's what I'll estimate",
         subtitle: "Confirm which work areas belong in this estimate.",
       };
     case "needs_questions":
     default:
       return {
-        title: "A few details would help",
+        title: "I need a few details before pricing this properly.",
         subtitle:
-          "I can give a rough range, but a few details would sharpen it.",
+          "Answer the scope questions below — site conditions come after.",
       };
   }
 }

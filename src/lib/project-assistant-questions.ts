@@ -75,44 +75,6 @@ export function resolveWorkAreaTypeKey(
 }
 
 const WORK_AREA_QUESTION_DEFS: Record<string, ScopeQuestionDef[]> = {
-  "Kitchen renovation": [
-    {
-      key: "cabinetry",
-      text: "Is cabinetry included?",
-      inputType: "select",
-      options: [...YES_NO_UNSURE],
-    },
-    {
-      key: "benchtops",
-      text: "Are benchtops included?",
-      inputType: "select",
-      options: [...YES_NO_UNSURE],
-    },
-    {
-      key: "appliances_client",
-      text: "Are appliances supplied by the client?",
-      inputType: "select",
-      options: [...YES_NO_UNSURE],
-    },
-    {
-      key: "plumbing_changes",
-      text: "Are plumbing changes required?",
-      inputType: "select",
-      options: [...YES_NO_UNSURE],
-    },
-    {
-      key: "electrical_changes",
-      text: "Are electrical changes required?",
-      inputType: "select",
-      options: [...YES_NO_UNSURE],
-    },
-    {
-      key: "splashback",
-      text: "Is splashback/tiling included?",
-      inputType: "select",
-      options: [...YES_NO_UNSURE],
-    },
-  ],
   "Internal Alteration": [
     {
       key: "walls_removed",

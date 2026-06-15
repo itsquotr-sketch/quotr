@@ -104,7 +104,7 @@ export function buildDiscoveryAssistantText(input: {
       return "I found possible work areas. Please confirm.";
     }
 
-    return "I found these work areas. Confirm what should be included in this estimate.";
+    return "I found these work areas. Here's what I'll estimate — confirm what should be included.";
   }
 
   if (input.analyseSuccess) {

@@ -9,13 +9,22 @@ import {
   getCurrentMissingItems,
   getOptionalMissing,
 } from "@/lib/assistant-v2/missing/get-current-missing-items";
+import { resolveAssistantFlowState } from "@/lib/assistant-v2/flow/resolve-assistant-flow-state";
+import {
+  resolveFlowPanelAction,
+  type FlowPanelAction,
+} from "@/lib/assistant-v2/flow/resolve-flow-panel-action";
+import { collectAnsweredQuestionKeys } from "@/lib/assistant-v2/get-next-assistant-turn";
 import { buildMissingItemPrompt } from "@/lib/assistant-v2/missing/build-missing-item-prompt";
 import {
-  describeEstimateQualityTier,
-  resolveEstimateQualityTier,
-} from "@/lib/cost-engine/estimate-quality";
+  evaluateConfidence,
+  buildQualityFactorsFromEvaluation,
+  confidenceStatusToTier,
+} from "@/lib/assistant-v2/confidence/evaluate-confidence";
+import { describeEstimateQualityTier } from "@/lib/cost-engine/estimate-quality";
 import type { QuickEstimateConfidenceLevel } from "@/lib/constants/quick-estimate";
 import type { QualityLevel } from "@/lib/constants/quality-level";
+import { resolveEstimatePanelState } from "@/lib/cost-engine/resolve-estimate-panel-state";
 
 type BasePanelProps = Omit<
   ComponentProps<typeof AssistantV2LiveEstimatePanel>,
@@ -25,6 +34,7 @@ type BasePanelProps = Omit<
   | "optionalOnlyMissing"
   | "estimateQualityTier"
   | "qualityTierDescription"
+  | "qualityFactors"
   | "actionableMissingItems"
   | "workAreaTypeKeys"
   | "onMissingItemClick"
@@ -38,27 +48,38 @@ type BasePanelProps = Omit<
   hasKeyMeasurements: boolean;
   workAreasConfirmed: boolean;
   siteConstraintsAssessed: boolean;
+  pendingSuggestionCount?: number;
+  sourceNotes?: string;
   estimateTrace?: import("@/lib/cost-engine/estimate-trace").EstimateTrace | null;
   rangeWidthPercent?: number | null;
 };
 
 export function AssistantV2ConnectedEstimatePanel({
   qualityLevel,
-  confidenceLevel,
-  confidenceScore,
-  hasKeyMeasurements,
-  workAreasConfirmed,
   siteConstraintsAssessed,
   estimateTrace,
   rangeWidthPercent = null,
+  pendingSuggestionCount = 0,
+  sourceNotes = "",
+  scopeQuestions = [],
+  discovery = null,
+  selectedConstraintSlugs = [],
+  declinedConstraintSlugs = [],
   ...panelProps
-}: BasePanelProps) {
+}: BasePanelProps & {
+  scopeQuestions?: import("@/lib/project-assistant-data").ScopeQuestionWithAnswers[];
+  discovery?: import("@/lib/ai/discovery/types").DiscoveryResult | null;
+  selectedConstraintSlugs?: string[];
+  declinedConstraintSlugs?: string[];
+}) {
   const {
     workAreas,
     optimisticAnswers,
     submitChatMessage,
     prefillComposer,
     submitQualityLevel,
+    effectiveDeclinedConstraintSlugs,
+    optimisticConstraintSlugs,
   } = useAssistantChat();
 
   const mergedWorkAreas = useMemo(
@@ -92,9 +113,6 @@ export function AssistantV2ConnectedEstimatePanel({
     [allMissingItems]
   );
 
-  const optionalOnlyMissing =
-    criticalMissing.length === 0 && optionalMissing.length > 0;
-
   const workAreaTypeKeys = useMemo(() => {
     const map: Record<string, string> = {};
     for (const area of mergedWorkAreas) {
@@ -105,31 +123,36 @@ export function AssistantV2ConnectedEstimatePanel({
     return map;
   }, [mergedWorkAreas]);
 
-  const estimateQualityTier = useMemo(
+  const confidenceEvaluation = useMemo(
     () =>
-      resolveEstimateQualityTier({
-        confidenceLevel,
-        confidenceScore,
-        hasKeyMeasurements,
-        workAreasConfirmed,
+      evaluateConfidence({
+        workAreas: mergedWorkAreas,
         qualityLevel,
         siteConstraintsAssessed,
-        missingInformationCount: criticalMissing.length + optionalMissing.length,
-        criticalOrUsefulMissingCount: criticalMissing.length,
-        optionalOnlyMissing,
+        rateSourceLines: panelProps.rateSourceLines,
       }),
     [
-      confidenceLevel,
-      confidenceScore,
-      hasKeyMeasurements,
-      workAreasConfirmed,
+      mergedWorkAreas,
       qualityLevel,
       siteConstraintsAssessed,
-      criticalMissing.length,
-      optionalMissing.length,
-      optionalOnlyMissing,
+      panelProps.rateSourceLines,
     ]
   );
+
+  const optionalOnlyMissing =
+    confidenceEvaluation.optionalOnlyMissing ||
+    (criticalMissing.length === 0 && optionalMissing.length > 0);
+
+  const estimateQualityTier = confidenceStatusToTier(
+    confidenceEvaluation.overallStatus
+  );
+
+  const engineQualityFactors = useMemo(
+    () => buildQualityFactorsFromEvaluation(confidenceEvaluation),
+    [confidenceEvaluation]
+  );
+
+  const resolvedConfidenceScore = confidenceEvaluation.overallScore;
 
   const qualityTierDescription = describeEstimateQualityTier(
     estimateQualityTier,
@@ -137,6 +160,71 @@ export function AssistantV2ConnectedEstimatePanel({
   );
 
   const missingInformation = criticalMissing.map((item) => item.label);
+
+  const flowPanelAction: FlowPanelAction | null = useMemo(() => {
+    const flowWorkAreas = mergedWorkAreas.map((area) => ({
+      scopeId: area.scopeId,
+      scopeName: area.scopeName,
+      workAreaTypeKey: area.workAreaTypeKey,
+      answers: area.answers,
+      included: area.included !== false,
+    }));
+
+    const answeredKeys = collectAnsweredQuestionKeys(scopeQuestions);
+    for (const key of Object.keys(optimisticAnswers)) {
+      answeredKeys.add(key);
+    }
+
+    const flow = resolveAssistantFlowState({
+      workAreas: flowWorkAreas,
+      pendingSuggestionCount,
+      qualityLevel,
+      selectedConstraintSlugs: optimisticConstraintSlugs.length
+        ? optimisticConstraintSlugs
+        : selectedConstraintSlugs,
+      declinedConstraintSlugs: effectiveDeclinedConstraintSlugs.length
+        ? effectiveDeclinedConstraintSlugs
+        : declinedConstraintSlugs,
+      discoveryConstraintSlugs: discovery?.constraints?.map((c) => c.slug),
+      answeredQuestionKeys: answeredKeys,
+      hasEstimate: panelProps.quickEstimate != null,
+      estimateReady:
+        panelProps.quickEstimate?.estimated_cost_low != null &&
+        panelProps.quickEstimate?.estimated_cost_high != null &&
+        (panelProps.quickEstimate?.estimate_status === "ready" ||
+          panelProps.quickEstimate?.estimate_status === "partial"),
+      sourceNotes,
+    });
+
+    const panelState = resolveEstimatePanelState(panelProps.quickEstimate);
+    return resolveFlowPanelAction(flow, panelState);
+  }, [
+    mergedWorkAreas,
+    scopeQuestions,
+    optimisticAnswers,
+    pendingSuggestionCount,
+    qualityLevel,
+    optimisticConstraintSlugs,
+    selectedConstraintSlugs,
+    effectiveDeclinedConstraintSlugs,
+    declinedConstraintSlugs,
+    discovery,
+    panelProps.quickEstimate,
+    sourceNotes,
+  ]);
+
+  const handleFlowPanelAction = useCallback(() => {
+    if (!flowPanelAction) return;
+    if (flowPanelAction.kind === "scroll_chat") {
+      document
+        .getElementById("assistant-pricing-questions")
+        ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    } else if (flowPanelAction.kind === "view_estimate") {
+      document
+        .getElementById("assistant-live-estimate-panel")
+        ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    }
+  }, [flowPanelAction]);
 
   const handleMissingItemClick = useCallback(
     (
@@ -171,12 +259,23 @@ export function AssistantV2ConnectedEstimatePanel({
     [submitQualityLevel]
   );
 
+  const workAreaContexts = useMemo(
+    () =>
+      mergedWorkAreas.map((area) => ({
+        scopeName: area.scopeName,
+        workAreaTypeKey: area.workAreaTypeKey,
+        answers: area.answers,
+      })),
+    [mergedWorkAreas]
+  );
+
   return (
     <AssistantV2LiveEstimatePanel
       {...panelProps}
-      confidenceScore={confidenceScore}
+      confidenceScore={resolvedConfidenceScore}
       estimateQualityTier={estimateQualityTier}
       qualityTierDescription={qualityTierDescription}
+      qualityFactors={engineQualityFactors}
       missingInformation={missingInformation}
       criticalMissing={criticalMissing.map((item) => item.label)}
       optionalMissing={optionalMissing.map((item) => item.label)}
@@ -186,9 +285,13 @@ export function AssistantV2ConnectedEstimatePanel({
       estimateTrace={estimateTrace}
       actionableMissingItems={allMissingItems}
       workAreaTypeKeys={workAreaTypeKeys}
+      workAreaContexts={workAreaContexts}
       onMissingItemClick={handleMissingItemClick}
       onMissingItemAnswer={handleMissingItemAnswer}
       onQualityLevelSelect={handleQualityLevelSelect}
+      onPrefillComposer={prefillComposer}
+      flowPanelAction={flowPanelAction}
+      onFlowPanelAction={handleFlowPanelAction}
     />
   );
 }

@@ -2,6 +2,12 @@ export type ScopeFactType = "number" | "select" | "boolean" | "text";
 
 export type ScopeFactOption = { value: string; label: string };
 
+export type FactDependency = {
+  factKey: string;
+  operator: "equals" | "not_equals" | "in";
+  value: string | boolean | string[];
+};
+
 export type ScopeFactDefinition = {
   key: string;
   label: string;
@@ -14,6 +20,7 @@ export type ScopeFactDefinition = {
   options?: ScopeFactOption[];
   placeholder?: string;
   helpText?: string;
+  dependsOn?: FactDependency;
   extractionPatterns?: RegExp[];
   extractValue?: (match: RegExpMatchArray) => string | null;
 };
@@ -45,7 +52,13 @@ export type ScopeBenchmarkRates = {
 };
 
 export type ScopeEstimateRules = {
-  calculationType: "deck_area" | "wall_area" | "floor_area" | "generic";
+  calculationType:
+    | "deck_area"
+    | "wall_area"
+    | "floor_area"
+    | "kitchen_size"
+    | "fence_length"
+    | "generic";
   requiredFactKeys: string[];
   layoutChangeModifier?: number;
   elevatedModifier?: number;

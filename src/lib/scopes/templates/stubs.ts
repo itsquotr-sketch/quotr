@@ -9,16 +9,58 @@ const stubAllocations = {
   contingency: 5,
 };
 
+const FENCE_TYPE_OPTIONS = [
+  { value: "paling", label: "Paling fence" },
+  { value: "board_batten", label: "Board and batten" },
+  { value: "horizontal_slat", label: "Horizontal slat" },
+  { value: "pool", label: "Pool fence" },
+  { value: "privacy", label: "Privacy fence" },
+  { value: "unknown", label: "Not sure" },
+];
+
 export const fenceScopeTemplate: ScopeTemplate = {
   scopeTypeKey: "fence",
   label: "Fence",
   workAreaTypeKey: "Fence",
   category: "external",
-  aliases: ["fence", "fencing", "boundary fence", "paling fence", "gate"],
+  aliases: [
+    "fence",
+    "fencing",
+    "boundary fence",
+    "timber fence",
+    "paling fence",
+    "privacy fence",
+    "pool fence",
+    "gate",
+  ],
   quantity: { primaryUnit: "m", requiredFields: ["fence.length_m"] },
   facts: {
     required: [
-      { key: "fence.length_m", label: "Fence length", type: "number", unit: "m", questionText: "What is the total fence length?" },
+      {
+        key: "fence.length_m",
+        label: "Fence length",
+        type: "number",
+        unit: "m",
+        questionText: "What is the total fence length?",
+      },
+      {
+        key: "fence.height_m",
+        label: "Fence height",
+        type: "number",
+        unit: "m",
+        questionText: "What height should I allow for?",
+        affectsEstimate: true,
+        affectsConfidence: true,
+      },
+      {
+        key: "fence.fence_type",
+        label: "Fence type",
+        type: "select",
+        questionText: "What type of fence should I assume?",
+        options: FENCE_TYPE_OPTIONS,
+        affectsEstimate: true,
+        affectsConfidence: true,
+      },
       {
         key: "fence.material_type",
         label: "Fence material",
@@ -33,15 +75,100 @@ export const fenceScopeTemplate: ScopeTemplate = {
       },
     ],
     useful: [
-      { key: "fence.height_m", label: "Fence height", type: "number", unit: "m", questionText: "How high is the fence?" },
+      {
+        key: "fence.gate_included",
+        label: "Gate included",
+        type: "select",
+        questionText: "Is a gate included?",
+      },
+      {
+        key: "fence.number_of_gates",
+        label: "Number of gates",
+        type: "number",
+        questionText: "How many gates?",
+      },
+      {
+        key: "fence.demolition_existing",
+        label: "Demolition of existing fence",
+        type: "select",
+        questionText: "Is demolition of an existing fence required?",
+      },
+      {
+        key: "fence.ground_conditions",
+        label: "Ground conditions",
+        type: "select",
+        questionText: "Are ground conditions difficult?",
+      },
+      {
+        key: "fence.access",
+        label: "Site access",
+        type: "select",
+        questionText: "Is site access tight or restricted?",
+      },
+      {
+        key: "fence.material_supply",
+        label: "Material supply",
+        type: "select",
+        questionText: "Who is supplying materials?",
+      },
+      {
+        key: "fence.post_spacing",
+        label: "Post spacing",
+        type: "number",
+        unit: "m",
+        questionText: "What post spacing should I assume?",
+      },
     ],
-    optional: [{ key: "fence.has_gate", label: "Gate included", type: "select", questionText: "Is a gate included?" }],
+    optional: [],
   },
   pricing: {
-    supported: false,
-    pricingMode: "not_supported",
+    supported: true,
+    pricingMode: "hybrid",
     defaultRateUnit: "m",
+    benchmarkRates: { budget: 180, standard: 280, premium: 420 },
     defaultAllocations: stubAllocations,
+    calculationType: "fence_length",
+    componentAllocation: {
+      labour: [
+        { key: "post_labour", label: "Post setting labour", weight: 4, defaultIncluded: true },
+        { key: "fence_build_labour", label: "Fence build labour", weight: 5, defaultIncluded: true },
+        { key: "project_management", label: "Project management", weight: 2, defaultIncluded: true },
+      ],
+      materials: [
+        { key: "fence_materials", label: "Fence materials", weight: 5, defaultIncluded: true },
+        { key: "fixings_materials", label: "Fixings", weight: 3, defaultIncluded: true },
+        {
+          key: "gate_materials",
+          label: "Gate materials",
+          weight: 3,
+          includeWhenFacts: ["fence.gate_included"],
+          defaultIncluded: false,
+        },
+      ],
+      subcontractors: [
+        {
+          key: "trade_coordination",
+          label: "Trade coordination",
+          weight: 2,
+          defaultIncluded: true,
+        },
+        {
+          key: "concrete_subcontractor",
+          label: "Concrete subcontractor",
+          weight: 2,
+          defaultIncluded: false,
+        },
+      ],
+      allowances: [
+        { key: "cartage_allowance", label: "Cartage allowance", weight: 2, defaultIncluded: true },
+        {
+          key: "unknown_conditions",
+          label: "Unknown conditions allowance",
+          weight: 2,
+          defaultIncluded: true,
+        },
+      ],
+    },
   },
   constraints: { applicable: [] },
   assumptions: { default: [] },
@@ -62,34 +189,6 @@ export const paintingScopeTemplate: ScopeTemplate = {
     required: [{ key: "painting.floor_area_m2", label: "Floor area", type: "number", unit: "m²" }],
     useful: [{ key: "painting.rooms_count", label: "Number of rooms", type: "number" }],
     optional: [{ key: "painting.exterior", label: "Exterior included", type: "select" }],
-  },
-  pricing: {
-    supported: false,
-    pricingMode: "not_supported",
-    defaultRateUnit: "m²",
-    defaultAllocations: stubAllocations,
-  },
-  constraints: { applicable: [] },
-  assumptions: { default: [] },
-  exclusions: { default: [] },
-  followUps: { dependentQuestions: [] },
-  estimateBreakdown: { defaultLineGroups: [] },
-};
-
-export const kitchenRenovationScopeTemplate: ScopeTemplate = {
-  scopeTypeKey: "kitchen_renovation",
-  label: "Kitchen renovation",
-  workAreaTypeKey: "Kitchen renovation",
-  category: "renovation",
-  aliases: ["kitchen", "kitchen renovation", "kitchen remodel", "kitchen reno"],
-  quantity: { primaryUnit: "m²", requiredFields: ["kitchen.floor_area_m2"] },
-  facts: {
-    required: [{ key: "kitchen.floor_area_m2", label: "Floor area", type: "number", unit: "m²" }],
-    useful: [
-      { key: "kitchen.layout_changing", label: "Layout changing", type: "select" },
-      { key: "kitchen.appliances_client_supplied", label: "Appliances client supplied", type: "select" },
-    ],
-    optional: [{ key: "kitchen.joinery_client_supplied", label: "Joinery client supplied", type: "select" }],
   },
   pricing: {
     supported: false,

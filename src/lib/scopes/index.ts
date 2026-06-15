@@ -1,5 +1,7 @@
 import { bathroomRenovationScope } from "@/lib/scopes/bathroom-renovation";
 import { deckScope } from "@/lib/scopes/deck";
+import { fenceScope } from "@/lib/scopes/fence";
+import { kitchenRenovationScope } from "@/lib/scopes/kitchen-renovation";
 import { retainingWallScope } from "@/lib/scopes/retaining-wall";
 import { UNIVERSAL_SCOPE_CONSTRAINTS } from "@/lib/scopes/shared";
 import { scopeToTemplate } from "@/lib/scopes/to-template";
@@ -17,8 +19,10 @@ export type {
 
 export {
   deckScope,
+  fenceScope,
   retainingWallScope,
   bathroomRenovationScope,
+  kitchenRenovationScope,
   UNIVERSAL_SCOPE_CONSTRAINTS,
 };
 
@@ -53,7 +57,9 @@ export {
 
 const ALL_SCOPES: ScopeDefinition[] = [
   bathroomRenovationScope,
+  kitchenRenovationScope,
   deckScope,
+  fenceScope,
   retainingWallScope,
 ];
 

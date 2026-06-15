@@ -1,3 +1,4 @@
+import { runAssistantAutopilot } from "@/lib/assistant-v2/autopilot/run-assistant-autopilot";
 import { recalculateQuickEstimate } from "@/lib/cost-engine/recalculate-quick-estimate";
 import { insertAssistantMessage } from "@/lib/assistant-v2/assistant-messages-data";
 import { saveQualityLevel } from "@/lib/assistant-v2/save-quality-level";
@@ -158,8 +159,8 @@ export async function batchSaveScopeAnswers(
     role: "assistant",
     content:
       params.answers.length === 1
-        ? "Got it — estimate updated."
-        : `Updated ${params.answers.length} details. Estimate updated.`,
+        ? "Got it — estimate refreshed."
+        : `Updated ${params.answers.length} details. Estimate refreshed.`,
     metadata: { messageType: "assistant_text" },
   });
 
@@ -199,6 +200,12 @@ export async function batchSaveScopeAnswers(
     params.projectId,
     { triggerEvent: "answer_changed", changeReason }
   );
+
+  await runAssistantAutopilot(supabase, {
+    organisationId: params.organisationId,
+    projectId: params.projectId,
+    userId: params.userId,
+  });
 
   return { changed: true };
 }
@@ -350,6 +357,12 @@ export async function batchSaveConstraintAnswers(
     }
   );
 
+  await runAssistantAutopilot(supabase, {
+    organisationId: params.organisationId,
+    projectId: params.projectId,
+    userId: params.userId,
+  });
+
   return { changed: true };
 }
 
@@ -374,4 +387,4 @@ export async function saveQualityLevelWithAck(
 
   return { changed: result.changed, label: result.label };
 }
-
+

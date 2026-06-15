@@ -45,6 +45,10 @@ const WIDE_BY_LONG_PATTERN =
 const MULTIPLY_DIMENSION_PATTERN =
   /(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?|lm)?\s*[x×]\s*(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?|lm)?/gi;
 
+/** 7m by 3m */
+const BY_DIMENSION_PATTERN =
+  /(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?|lm)\s+by\s+(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?|lm)?/gi;
+
 export const HEIGHT_CONTEXT_PATTERN =
   /\b(?:off\s+the\s+ground|above\s+ground|elevated|balcony|height|high\b|storey|story)\b/i;
 
@@ -87,6 +91,21 @@ export function parseLengthWidthDimensions(text: string): ParsedLengthWidth[] {
   }
 
   for (const match of text.matchAll(MULTIPLY_DIMENSION_PATTERN)) {
+    const a = parseUnitNumber(match[1]!);
+    const b = parseUnitNumber(match[2]!);
+    if (a == null || b == null) continue;
+    const raw = match[0];
+    if (seen.has(raw)) continue;
+    seen.add(raw);
+    results.push({
+      length_m: a,
+      width_m: b,
+      area_m2: Math.round(a * b * 100) / 100,
+      raw,
+    });
+  }
+
+  for (const match of text.matchAll(BY_DIMENSION_PATTERN)) {
     const a = parseUnitNumber(match[1]!);
     const b = parseUnitNumber(match[2]!);
     if (a == null || b == null) continue;

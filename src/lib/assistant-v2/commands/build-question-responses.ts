@@ -1,5 +1,9 @@
 import { contractorRateSourceLabel } from "@/lib/cost-engine/contractor-rate-source-label";
 import type { RateSource } from "@/lib/cost-engine/rates/get-base-rate-for-scope";
+import {
+  buildConfidenceExplanationFromEvaluation,
+  type ConfidenceEvaluationResult,
+} from "@/lib/assistant-v2/confidence/evaluate-confidence";
 
 type Summary = {
   keyFactsUsed?: string[];
@@ -12,6 +16,8 @@ type Summary = {
   stagedRatePrompt?: string | null;
   rangeHighDrivers?: string[];
   risks?: string[];
+  confidenceEvaluation?: ConfidenceEvaluationResult;
+  confidenceScore?: number;
 };
 
 export function buildConfidenceExplanation(summary: Summary | null): string {
@@ -19,8 +25,13 @@ export function buildConfidenceExplanation(summary: Summary | null): string {
     return "I don't have enough estimate data yet. Confirm work areas and answer a few key questions first.";
   }
 
+  if (summary.confidenceEvaluation) {
+    return buildConfidenceExplanationFromEvaluation(summary.confidenceEvaluation);
+  }
+
   const tierLabel = summary.rangeQualityLabel ?? "draft";
-  const tierReason = summary.rangeQualityReason ?? "answer a few more questions to sharpen the range";
+  const tierReason =
+    summary.rangeQualityReason ?? "answer a few more questions to sharpen the range";
 
   const knowns = (summary.keyFactsUsed ?? []).slice(0, 4);
   const unknowns = (summary.missingInformation ?? []).slice(0, 4);
@@ -43,7 +54,7 @@ export function buildConfidenceExplanation(summary: Summary | null): string {
 
   if (unknowns.length > 0) {
     lines.push("");
-    lines.push("Still missing or uncertain:");
+    lines.push("Still useful:");
     for (const item of unknowns) {
       lines.push(`• ${item.replace(/^Missing:\s*/i, "")}`);
     }
@@ -148,15 +159,9 @@ export function buildRateSourceSummary(
   );
 
   if (benchmarkScopes.length > 0 && !options?.cheaper) {
-    const first = benchmarkScopes[0]!;
-    lines.push("");
-    lines.push(`Want to add your ${first.label.toLowerCase()} rate?`);
-  }
-
-  if (options?.cheaper) {
     lines.push("");
     lines.push(
-      "To make it cheaper: use client-supplied materials where possible, choose standard finish, or confirm site access is straightforward."
+      "Adding your own rates would improve confidence and tighten the range."
     );
   }
 
@@ -165,28 +170,12 @@ export function buildRateSourceSummary(
 
 export function buildCheaperSensitivitySummary(summary: Summary | null): string {
   const base = buildSensitivitySummary(summary);
-  const cheaperTips = [
-    "",
-    "Ways to reduce cost:",
-    "• Client-supplied materials",
-    "• Standard or budget finish level",
-    "• Good machine access",
-    "• Exclude optional items like pergola or balustrade",
-  ];
-  return base + cheaperTips.join("\n");
+  return `${base}\n\nTo reduce cost: confirm client-supplied materials, choose budget finish, or simplify scope inclusions.`;
 }
 
 export function buildExpensiveSensitivitySummary(
   summary: Summary | null
 ): string {
   const base = buildSensitivitySummary(summary);
-  const expensiveTips = [
-    "",
-    "Things that typically increase cost:",
-    "• Premium finish and materials",
-    "• Poor access or tight site constraints",
-    "• Engineering or structural requirements",
-    "• Supply and install for all materials",
-  ];
-  return base + expensiveTips.join("\n");
+  return `${base}\n\nTo understand higher cost: check premium finish, access constraints, and subcontractor allowances.`;
 }

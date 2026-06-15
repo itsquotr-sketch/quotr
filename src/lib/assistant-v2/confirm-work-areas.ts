@@ -1,6 +1,6 @@
+import { runAssistantAutopilot } from "@/lib/assistant-v2/autopilot/run-assistant-autopilot";
 import { insertAssistantMessage } from "@/lib/assistant-v2/assistant-messages-data";
 import { ensureQuestionsForProjectScopes } from "@/lib/scope-questions-seed";
-import { recalculateQuickEstimate } from "@/lib/cost-engine/recalculate-quick-estimate";
 import { logSupabaseError } from "@/lib/supabase/log-error";
 import { resolveWorkAreaTypeKey } from "@/lib/project-assistant-questions";
 import { syncScopeQuestionsForScope } from "@/lib/scope-questions-seed";
@@ -110,7 +110,12 @@ export async function confirmWorkAreaSelections(
     userId: string;
     selections: WorkAreaSelection[];
   }
-): Promise<{ error?: string; includedNames: string[]; excludedNames: string[] }> {
+): Promise<{
+  error?: string;
+  includedNames: string[];
+  excludedNames: string[];
+  needsEstimateRecalc?: boolean;
+}> {
   if (params.selections.length === 0) {
     return { error: "No work areas selected.", includedNames: [], excludedNames: [] };
   }
@@ -194,13 +199,6 @@ export async function confirmWorkAreaSelections(
       .update({ status: projectStatusSchema.parse("scoping") })
       .eq("id", params.projectId)
       .eq("organisation_id", params.organisationId);
-
-    await recalculateQuickEstimate(
-      supabase,
-      params.organisationId,
-      params.projectId,
-      { triggerEvent: "work_areas_confirmed", changeReason: "work areas confirmed" }
-    );
   }
 
   const userParts: string[] = [];
@@ -244,5 +242,19 @@ export async function confirmWorkAreaSelections(
     metadata: { messageType: "assistant_text" },
   });
 
-  return { includedNames, excludedNames };
+  if (includedNames.length > 0) {
+    await runAssistantAutopilot(supabase, {
+      organisationId: params.organisationId,
+      projectId: params.projectId,
+      userId: params.userId,
+      pendingSuggestionCount: 0,
+      allowEstimateGeneration: false,
+    });
+  }
+
+  return {
+    includedNames,
+    excludedNames,
+    needsEstimateRecalc: false,
+  };
 }

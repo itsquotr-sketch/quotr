@@ -1,10 +1,13 @@
 import { getAnswerValue, normalizeQuestionKey } from "@/lib/question-keys";
+import type { QualityLevel } from "@/lib/constants/quality-level";
 import {
   getAllFactsForScope,
   getScopeByWorkAreaType,
 } from "@/lib/scopes/index";
 import type { ScopeDefinition, ScopeFactDefinition } from "@/lib/scopes/types";
 import { isMaterialFactAnsweredForKey } from "@/lib/scopes/material-categories";
+import { getCanonicalScopeTemplateByWorkAreaType } from "@/lib/scopes/templates";
+import { getMissingRequiredFactsForWorkArea } from "@/lib/assistant-v2/stages/required-fact-gating";
 import {
   isAnswered,
   isAnsweredSelect,
@@ -110,9 +113,14 @@ export function getMissingFactsForWorkArea(
 
 export function getMissingRequiredFacts(
   workAreaTypeKey: string,
-  answers: Record<string, string>
+  answers: Record<string, string>,
+  options?: { projectQualityLevel?: QualityLevel | string | null }
 ): ScopeFactDefinition[] {
-  return getMissingFactsForWorkArea(workAreaTypeKey, answers);
+  return getMissingRequiredFactsForWorkArea(
+    workAreaTypeKey,
+    answers,
+    options
+  );
 }
 
 export function getMissingOptionalHighImpact(
@@ -120,15 +128,49 @@ export function getMissingOptionalHighImpact(
   answers: Record<string, string>
 ): ScopeFactDefinition[] {
   const scope = getScopeByWorkAreaType(workAreaTypeKey);
-  if (!scope) return [];
+  if (scope) {
+    const highImpact = new Set(scope.confidenceRules.highImpactOptionalKeys);
+    return scope.optionalFacts.filter(
+      (fact) =>
+        highImpact.has(fact.key) &&
+        (fact.affectsEstimate || fact.affectsConfidence) &&
+        !factIsAnsweredFromMap(fact, answers)
+    );
+  }
 
-  const highImpact = new Set(scope.confidenceRules.highImpactOptionalKeys);
-  return scope.optionalFacts.filter(
-    (fact) =>
-      highImpact.has(fact.key) &&
-      (fact.affectsEstimate || fact.affectsConfidence) &&
-      !factIsAnsweredFromMap(fact, answers)
-  );
+  const canonical = getCanonicalScopeTemplateByWorkAreaType(workAreaTypeKey);
+  if (!canonical) return [];
+
+  return canonical.facts.useful
+    .filter(
+      (f) =>
+        (f.affectsEstimate ?? true) &&
+        !factIsAnsweredFromMap(
+          {
+            key: f.key,
+            label: f.label,
+            type: f.type ?? "text",
+            unit: f.unit,
+            required: false,
+            affectsEstimate: f.affectsEstimate ?? true,
+            affectsConfidence: f.affectsConfidence ?? true,
+            questionText: f.questionText ?? f.label,
+            options: f.options,
+          },
+          answers
+        )
+    )
+    .map((f) => ({
+      key: f.key,
+      label: f.label,
+      type: f.type ?? "text",
+      unit: f.unit,
+      required: false,
+      affectsEstimate: f.affectsEstimate ?? true,
+      affectsConfidence: f.affectsConfidence ?? true,
+      questionText: f.questionText ?? f.label,
+      options: f.options,
+    }));
 }
 
 /** Single source: required facts minus known facts (labels only). */

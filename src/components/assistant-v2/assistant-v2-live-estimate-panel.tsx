@@ -1,9 +1,11 @@
 "use client";
 
-import { useState, useTransition, useEffect, useMemo } from "react";
+import { useCallback, useState, useTransition, useEffect, useMemo } from "react";
 import { Check, ChevronDown, TrendingDown, TrendingUp, X } from "lucide-react";
+import { EstimateRetryButton } from "@/components/projects/estimate-retry-button";
 import {
   exportScopeSummary,
+  syncAssistantEstimateOnly,
   type AssistantSyncPayload,
 } from "@/actions/assistant-v2";
 import { AssistantV2MarginEditor } from "@/components/assistant-v2/assistant-v2-margin-editor";
@@ -27,6 +29,8 @@ import { buildWhatEstimateCovers } from "@/lib/cost-engine/contractor-estimate-l
 import type { EstimateChangeEvent } from "@/lib/cost-engine/recalculate-quick-estimate";
 import { resolveRateSourceBanner } from "@/lib/cost-engine/resolve-rate-source-banner";
 import { formatCurrencyRange } from "@/lib/format-currency";
+import { resolveEstimatePanelState } from "@/lib/cost-engine/resolve-estimate-panel-state";
+import { parseQuickEstimateSummary } from "@/lib/project-assistant-summary";
 import type { QuickEstimate } from "@/types/database";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
@@ -41,6 +45,7 @@ import type { EstimateTrace as CalculationTrace } from "@/lib/cost-engine/trace/
 import { isBenchmarkRateSource } from "@/lib/cost-engine/rates/get-base-rate-for-scope";
 import { AddMoreDetailButton } from "@/components/assistant-v2/assistant-refinement-trigger";
 import { WhyThisEstimateSection } from "@/components/assistant-v2/why-this-estimate-section";
+import { EstimateInsightDrawer } from "@/components/assistant-v2/estimate-insight-drawer";
 import type { CurrentMissingItem } from "@/lib/assistant-v2/missing/get-current-missing-items";
 import {
   buildMissingItemPrompt,
@@ -48,9 +53,13 @@ import {
 } from "@/lib/assistant-v2/missing/build-missing-item-prompt";
 import type { QualityLevel } from "@/lib/constants/quality-level";
 import { QUALITY_LEVEL_OPTIONS } from "@/lib/constants/quality-level";
+import { resolveWideRangeAction } from "@/lib/assistant-v2/build-wide-range-action";
+import { TRUST_COPY } from "@/lib/assistant-v2/trust-messages";
+import { TRACE_STORAGE_WARNING } from "@/lib/cost-engine/estimate-result";
 
 interface AssistantV2LiveEstimatePanelProps {
   projectId: string;
+  projectTitle?: string;
   quickEstimate: QuickEstimate | null;
   estimateQualityTier: EstimateQualityTier;
   qualityTierDescription?: string;
@@ -67,13 +76,14 @@ interface AssistantV2LiveEstimatePanelProps {
   estimateExcludes?: string[];
   constraintsIncluded?: string[];
   allowancesIncluded?: string[];
+  workAreaContexts?: import("@/lib/cost-engine/build-estimate-insight").WorkAreaInsightContext[];
   rateSourceLines?: WorkAreaRateSourceLine[];
   rateSourceDetail?: string | null;
   stagedRatePrompt?: string | null;
   breakdownOpenRequest?: number;
   benchmarkScopesForOnboarding?: BenchmarkScopeForOnboarding[];
   compact?: boolean;
-  onEstimateSync?: (payload: AssistantSyncPayload) => void;
+  onEstimateSync?: (payload: AssistantSyncPayload, syncVersion?: number) => void;
   qualityLevelRaw?: QualityLevel;
   rangeWidthPercent?: number | null;
   estimateTrace?: EstimateTrace | null;
@@ -84,6 +94,9 @@ interface AssistantV2LiveEstimatePanelProps {
   onMissingItemClick?: (item: CurrentMissingItem, prompt: MissingItemPrompt) => void;
   onMissingItemAnswer?: (item: CurrentMissingItem, value: string, label: string) => void;
   onQualityLevelSelect?: (level: QualityLevel, label: string) => void;
+  onPrefillComposer?: (text: string) => void;
+  flowPanelAction?: import("@/lib/assistant-v2/flow/resolve-flow-panel-action").FlowPanelAction | null;
+  onFlowPanelAction?: () => void;
 }
 
 function tierStyles(tier: EstimateQualityTier): string {
@@ -162,6 +175,7 @@ function formatEstimateChange(event: EstimateChangeEvent): {
 
 export function AssistantV2LiveEstimatePanel({
   projectId,
+  projectTitle = "Project",
   quickEstimate,
   estimateQualityTier,
   qualityTierDescription,
@@ -178,6 +192,7 @@ export function AssistantV2LiveEstimatePanel({
   estimateExcludes = [],
   constraintsIncluded = [],
   allowancesIncluded = [],
+  workAreaContexts = [],
   rateSourceLines = [],
   breakdownOpenRequest = 0,
   benchmarkScopesForOnboarding = [],
@@ -193,18 +208,47 @@ export function AssistantV2LiveEstimatePanel({
   onMissingItemClick,
   onMissingItemAnswer,
   onQualityLevelSelect,
+  onPrefillComposer,
+  flowPanelAction,
+  onFlowPanelAction,
 }: AssistantV2LiveEstimatePanelProps) {
-  const { status, lastUpdatedAt } = useEstimateUpdate();
+  const { status, lastUpdatedAt, setPendingAction, isActionPending, beginSync, isSyncCurrent } =
+    useEstimateUpdate();
   const [breakdownOpen, setBreakdownOpen] = useState(false);
+  const [insightOpen, setInsightOpen] = useState(false);
   const [onboardingOpen, setOnboardingOpen] = useState(false);
+  const [insightReady, setInsightReady] = useState(false);
 
   useEffect(() => {
     if (breakdownOpenRequest > 0) {
       setBreakdownOpen(true);
     }
   }, [breakdownOpenRequest]);
+
+  useEffect(() => {
+    if (!insightOpen) {
+      setInsightReady(false);
+      return;
+    }
+    setPendingAction("opening_insight");
+    const timer = window.setTimeout(() => {
+      setInsightReady(true);
+      setPendingAction(null);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [insightOpen, setPendingAction]);
   const [onboardingScope, setOnboardingScope] =
     useState<BenchmarkScopeForOnboarding | null>(null);
+
+  const summary = useMemo(
+    () => parseQuickEstimateSummary(quickEstimate?.notes ?? null),
+    [quickEstimate?.notes]
+  );
+
+  const panelState = useMemo(
+    () => resolveEstimatePanelState(quickEstimate, summary),
+    [quickEstimate, summary]
+  );
 
   const hasResults =
     quickEstimate != null &&
@@ -285,18 +329,155 @@ export function AssistantV2LiveEstimatePanel({
     return rows.filter((row) => row.amount > 0);
   }, [totalAllocations]);
 
+  const usesBenchmarkRates =
+    rateSourceLines.some((line) => isBenchmarkRateSource(line.rateSource)) ||
+    benchmarkScopesForOnboarding.length > 0;
+
+  const isQualityUnknown = qualityLevelRaw === "unknown";
+  const isRangeTooWide =
+    rangeWidthPercent != null && rangeWidthPercent > 35;
+
+  const primaryOnboardingScope = benchmarkScopesForOnboarding[0] ?? null;
+
+  const criticalMissingItems = useMemo(
+    () =>
+      actionableMissingItems.filter(
+        (item) =>
+          item.status === "missing" &&
+          (item.importance === "critical" || item.importance === "useful")
+      ),
+    [actionableMissingItems]
+  );
+
+  const wideRangeAction = useMemo(() => {
+    if (!isRangeTooWide) return null;
+    return resolveWideRangeAction({
+      isQualityUnknown,
+      criticalMissing: criticalMissingItems,
+      actionableMissingItems,
+      usesBenchmarkRates,
+      primaryOnboardingScope,
+    });
+  }, [
+    isRangeTooWide,
+    isQualityUnknown,
+    criticalMissingItems,
+    actionableMissingItems,
+    usesBenchmarkRates,
+    primaryOnboardingScope,
+  ]);
+
+  const handleRetrySuccess = useCallback(async () => {
+    if (!onEstimateSync) return;
+    const syncVersion = beginSync();
+    const sync = await syncAssistantEstimateOnly(projectId);
+    if (sync.data && isSyncCurrent(syncVersion)) {
+      onEstimateSync(sync.data, syncVersion);
+    }
+  }, [projectId, onEstimateSync, beginSync, isSyncCurrent]);
+
   if (!quickEstimate || !hasResults) {
+    if (panelState?.kind === "failed") {
+      return (
+        <div className="rounded-xl border border-destructive/30 bg-destructive/5 p-5 shadow-sm">
+          <p className="text-sm font-semibold">Draft Quick Estimate</p>
+          <p className="mt-3 text-sm font-medium text-foreground">
+            {panelState.title}
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">{panelState.reason}</p>
+          {panelState.canRetry && (
+            <div className="mt-4 flex flex-wrap gap-2">
+              {flowPanelAction?.kind === "retry_estimate" ? (
+                <EstimateRetryButton
+                  projectId={projectId}
+                  onSuccess={handleRetrySuccess}
+                  compact={compact}
+                  label={flowPanelAction.label}
+                />
+              ) : (
+                <EstimateRetryButton
+                  projectId={projectId}
+                  onSuccess={handleRetrySuccess}
+                  compact={compact}
+                />
+              )}
+              {flowPanelAction?.kind === "scroll_chat" && (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  className="h-8 max-w-full text-xs"
+                  onClick={onFlowPanelAction}
+                >
+                  {flowPanelAction.label}
+                </Button>
+              )}
+            </div>
+          )}
+          {(status === "updating" || status === "saving") && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              Recalculating estimate…
+            </p>
+          )}
+        </div>
+      );
+    }
+
     return (
       <div className="rounded-xl border bg-card p-5 shadow-sm">
         <p className="text-sm font-semibold">Draft Quick Estimate</p>
         <p className="mt-3 text-sm font-medium text-foreground">
-          No estimate yet.
+          {panelState?.kind === "empty"
+            ? panelState.title
+            : "No estimate yet."}
         </p>
         <p className="mt-1 text-sm text-muted-foreground">
-          Tell Quotr about the job to generate a draft estimate.
+          {panelState?.kind === "empty"
+            ? panelState.detail
+            : "Tell Quotr about the job to generate a draft estimate."}
         </p>
-        {status === "updating" && (
-          <p className="mt-2 text-xs text-muted-foreground">Updating…</p>
+        {panelState?.canRetry && (
+          <div className="mt-4 flex flex-wrap gap-2">
+            <EstimateRetryButton
+              projectId={projectId}
+              onSuccess={handleRetrySuccess}
+              compact={compact}
+              label={
+                flowPanelAction?.kind === "retry_estimate"
+                  ? flowPanelAction.label
+                  : undefined
+              }
+            />
+            {flowPanelAction?.kind === "scroll_chat" && (
+              <Button
+                type="button"
+                size="sm"
+                variant="secondary"
+                className="h-8 max-w-full text-xs"
+                onClick={onFlowPanelAction}
+              >
+                {flowPanelAction.label}
+              </Button>
+            )}
+          </div>
+        )}
+        {!panelState?.canRetry && flowPanelAction?.kind === "scroll_chat" && (
+          <div className="mt-4">
+            <Button
+              type="button"
+              size="sm"
+              variant="secondary"
+              className="h-8 max-w-full text-xs"
+              onClick={onFlowPanelAction}
+            >
+              {flowPanelAction.label}
+            </Button>
+          </div>
+        )}
+        {(status === "updating" || status === "saving") && (
+          <p className="mt-2 text-xs text-muted-foreground">
+            Recalculating estimate…
+          </p>
         )}
       </div>
     );
@@ -319,16 +500,7 @@ export function AssistantV2LiveEstimatePanel({
       ? formatEstimateChange(lastEstimateChange)
       : null;
 
-  const usesBenchmarkRates =
-    rateSourceLines.some((line) => isBenchmarkRateSource(line.rateSource)) ||
-    benchmarkScopesForOnboarding.length > 0;
-
   const rateSourceBanner = resolveRateSourceBanner(rateSourceLines);
-  const isQualityUnknown = qualityLevelRaw === "unknown";
-  const isRangeTooWide =
-    rangeWidthPercent != null && rangeWidthPercent > 40;
-
-  const primaryOnboardingScope = benchmarkScopesForOnboarding[0] ?? null;
 
   function openOnboarding(scope?: BenchmarkScopeForOnboarding) {
     const target = scope ?? primaryOnboardingScope;
@@ -336,6 +508,44 @@ export function AssistantV2LiveEstimatePanel({
     setOnboardingScope(target);
     setOnboardingOpen(true);
   }
+
+  function handleWideRangeAction() {
+    if (!wideRangeAction) return;
+    switch (wideRangeAction.kind) {
+      case "finish_level":
+        document
+          .getElementById("assistant-live-estimate-panel")
+          ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        break;
+      case "missing_item": {
+        const typeKey = wideRangeAction.item.scopeId
+          ? workAreaTypeKeys[wideRangeAction.item.scopeId]
+          : undefined;
+        if (typeKey) {
+          const prompt = buildMissingItemPrompt(wideRangeAction.item, typeKey);
+          if (prompt) {
+            onMissingItemClick?.(wideRangeAction.item, prompt);
+          }
+        }
+        break;
+      }
+      case "add_rate":
+        openOnboarding(wideRangeAction.scope);
+        break;
+      case "composer":
+        onPrefillComposer?.(wideRangeAction.prefill);
+        break;
+    }
+  }
+
+  const traceWarning =
+    panelState &&
+    (panelState.kind === "ready" || panelState.kind === "partial")
+      ? panelState.warning
+      : undefined;
+  const traceUnavailable =
+    traceWarning === TRUST_COPY.tracePending ||
+    traceWarning === TRACE_STORAGE_WARNING;
 
   return (
     <div
@@ -382,6 +592,42 @@ export function AssistantV2LiveEstimatePanel({
         )}
       </div>
 
+      {panelState?.kind === "partial" && (
+        <div className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs">
+          <p className="font-medium text-amber-800 dark:text-amber-300">
+            {panelState.title}
+          </p>
+          {panelState.unpricedAreas.length > 0 ? (
+            <ul className="mt-1 space-y-0.5 text-muted-foreground">
+              {panelState.unpricedAreas.map((area) => (
+                <li key={area}>{area}</li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-1 text-muted-foreground">
+              Some work areas are not included in this estimate yet.
+            </p>
+          )}
+        </div>
+      )}
+
+      {(panelState?.kind === "ready" || panelState?.kind === "partial") &&
+        panelState.warning && (
+          <div className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
+            <p>{panelState.warning}</p>
+            {traceUnavailable && panelState.canRetry && (
+              <div className="mt-2">
+                <EstimateRetryButton
+                  projectId={projectId}
+                  onSuccess={handleRetrySuccess}
+                  compact
+                  label="Retry breakdown"
+                />
+              </div>
+            )}
+          </div>
+        )}
+
       {rateSourceBanner && !compact && (
         <div
           className={cn(
@@ -399,7 +645,7 @@ export function AssistantV2LiveEstimatePanel({
                 : "text-amber-800 dark:text-amber-300"
             )}
           >
-            {rateSourceBanner.message}
+            {rateSourceBanner.message.replace(/\.$/, "")}
           </p>
           {rateSourceBanner.perScopeLines.length > 0 && (
             <ul className="mt-1.5 space-y-0.5 text-muted-foreground">
@@ -427,20 +673,20 @@ export function AssistantV2LiveEstimatePanel({
         </div>
       )}
 
-      {isRangeTooWide && !compact && (
+      {isRangeTooWide && wideRangeAction && (
         <div className="mt-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs">
           <p className="font-medium text-amber-800 dark:text-amber-300">
-            This range is too wide to quote confidently.
+            Wide range — one detail would narrow it.
           </p>
-          <p className="mt-1 text-muted-foreground">Top actions:</p>
-          <ul className="mt-1 space-y-0.5 text-muted-foreground">
-            {isQualityUnknown && <li>• Choose finish level</li>}
-            {(criticalMissing.length > 0 || missingInformation.length > 0) && (
-              <li>• Answer missing dimensions</li>
-            )}
-            {usesBenchmarkRates && <li>• Add your rates</li>}
-            <li>• Confirm materials / client-supplied items</li>
-          </ul>
+          <Button
+            type="button"
+            size="sm"
+            variant="secondary"
+            className="mt-2 h-auto min-h-7 max-w-full whitespace-normal px-3 py-1.5 text-left text-xs leading-snug"
+            onClick={handleWideRangeAction}
+          >
+            {wideRangeAction.label}
+          </Button>
         </div>
       )}
 
@@ -496,6 +742,7 @@ export function AssistantV2LiveEstimatePanel({
                       size="sm"
                       variant="secondary"
                       className="h-7 text-xs"
+                      disabled={isActionPending("changing_finish_level")}
                       onClick={() =>
                         onQualityLevelSelect?.(option.value, option.label)
                       }
@@ -509,6 +756,7 @@ export function AssistantV2LiveEstimatePanel({
                   size="sm"
                   variant="outline"
                   className="h-7 text-xs"
+                  disabled={isActionPending("changing_finish_level")}
                   onClick={() =>
                     onQualityLevelSelect?.("unknown", "Not sure")
                   }
@@ -705,19 +953,35 @@ export function AssistantV2LiveEstimatePanel({
             </div>
           )}
 
+          {!compact && (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="w-full"
+              disabled={isActionPending("opening_insight")}
+              onClick={() => setInsightOpen(true)}
+            >
+              {isActionPending("opening_insight")
+                ? TRUST_COPY.openingInsight
+                : "View estimate detail"}
+            </Button>
+          )}
+
           <div className="border-t pt-3">
             <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-              Estimate Quality
+              Estimate quality
+            </p>
+            <p className="mt-1 text-xs font-semibold text-foreground">
+              {estimateQualityTier}
             </p>
             {estimateQualityTier === "READY" ? (
-              <p className="mt-1 text-xs text-foreground">
-                Ready because:
-              </p>
+              <p className="mt-1 text-xs text-foreground">Ready because:</p>
+            ) : estimateQualityTier === "GOOD" ? (
+              <p className="mt-1 text-xs text-muted-foreground">Good because:</p>
             ) : (
               <p className="mt-1 text-xs text-muted-foreground">
-                {estimateQualityTier === "GOOD"
-                  ? "Good because:"
-                  : "Building toward a quote-ready estimate:"}
+                Building toward a sharper estimate:
               </p>
             )}
             <ul className="mt-1.5 space-y-0.5">
@@ -731,12 +995,13 @@ export function AssistantV2LiveEstimatePanel({
                 </li>
               ))}
             </ul>
-            {criticalMissing.length > 0 ||
+            {(criticalMissing.length > 0 ||
             missingInformation.length > 0 ||
-            actionableMissingItems.length > 0 ? (
+            actionableMissingItems.length > 0) &&
+            !optionalOnlyMissing ? (
               <>
                 <p className="mt-2 text-xs text-muted-foreground">
-                  Missing information:
+                  Still useful:
                 </p>
                 <ul className="mt-1 space-y-1">
                   {(actionableMissingItems.length > 0
@@ -806,12 +1071,16 @@ export function AssistantV2LiveEstimatePanel({
                     })}
                 </ul>
               </>
+            ) : optionalOnlyMissing ? (
+              <p className="mt-2 text-xs text-muted-foreground">
+                Optional details available — none required for a draft estimate.
+              </p>
             ) : optionalMissing.length > 0 ? null : (
               <p className="mt-2 text-xs text-muted-foreground">
                 No key missing information.
               </p>
             )}
-            {optionalMissing.length > 0 && (
+            {optionalMissing.length > 0 && !optionalOnlyMissing && (
               <>
                 <p className="mt-2 text-xs text-muted-foreground">
                   Optional details:
@@ -854,6 +1123,32 @@ export function AssistantV2LiveEstimatePanel({
         open={onboardingOpen}
         onOpenChange={setOnboardingOpen}
       />
+
+      {!compact && insightOpen && (
+        <EstimateInsightDrawer
+          open={insightOpen}
+          onOpenChange={setInsightOpen}
+          ready={insightReady}
+          projectId={projectId}
+          projectTitle={projectTitle}
+          scopeBreakdownItems={scopeBreakdownItems}
+          costBreakdown={costBreakdown}
+          structuredBreakdown={estimateTrace?.structuredBreakdown}
+          calculationTrace={calculationTrace}
+          confidenceScore={confidenceScore}
+          costLow={Number(quickEstimate.estimated_cost_low)}
+          costHigh={Number(quickEstimate.estimated_cost_high)}
+          sellLow={quickEstimate.recommended_sell_low}
+          sellHigh={quickEstimate.recommended_sell_high}
+          totalAllocations={totalAllocations}
+          actionableMissingItems={actionableMissingItems}
+          workAreaTypeKeys={workAreaTypeKeys}
+          workAreaContexts={workAreaContexts}
+          globalAllowances={allowancesIncluded}
+          onMissingItemClick={onMissingItemClick}
+          buildMissingItemPrompt={buildMissingItemPrompt}
+        />
+      )}
     </div>
   );
 }

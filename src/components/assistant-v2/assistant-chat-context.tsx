@@ -22,8 +22,15 @@ import {
   syncAssistantState,
   type AssistantSyncPayload,
 } from "@/actions/assistant-v2";
+import {
+  mergeSyncRequests,
+  syncKindsToLoader,
+  type AssistantSyncKind,
+  type SyncRequest,
+} from "@/lib/assistant-v2/assistant-sync-queue";
 import type { WorkAreaSelection } from "@/lib/assistant-v2/confirm-work-areas";
 import { useEstimateUpdate } from "@/components/projects/estimate-update-context";
+import { TRUST_COPY } from "@/lib/assistant-v2/trust-messages";
 import type { AssistantMessageRow } from "@/lib/assistant-v2/assistant-messages-data";
 import type { WorkAreaCompletenessInput } from "@/lib/assistant-v2/compute-information-completeness";
 import { computeProjectCompleteness } from "@/lib/assistant-v2/compute-information-completeness";
@@ -36,9 +43,12 @@ export type OptimisticMessage = {
   content: string;
   pending?: boolean;
   error?: string;
+  createdAt?: string;
+  sequenceIndex?: number;
 };
 
-const LOADING_TIMEOUT_MS = 15000;
+const SCOPE_SAVE_TIMEOUT_MS = 30_000;
+const DEFAULT_ANSWER_TIMEOUT_MS = 15_000;
 
 function resolvePendingAssistantMessages(
   setOptimisticMessages: Dispatch<SetStateAction<OptimisticMessage[]>>,
@@ -54,7 +64,7 @@ function resolvePendingAssistantMessages(
     const finalContent =
       outcome === "unchanged"
         ? "No estimate change needed."
-        : errorMessage ?? "Could not update estimate. Try again.";
+        : errorMessage ?? "Answers saved. Estimate refresh needs retry.";
 
     return prev.map((m) =>
       m.pending
@@ -110,7 +120,12 @@ type AssistantChatContextValue = {
   addOptimisticAssistantMessage: (content: string) => void;
   resolveOptimisticMessage: (id: string, error?: string) => void;
   flushInFlight: boolean;
+  resolvedSuggestionIds: Set<string>;
   syncAssistant: () => Promise<void>;
+  syncByKinds: (
+    kinds: AssistantSyncKind[],
+    scopeId?: string
+  ) => Promise<AssistantSyncPayload | null>;
   mergePersistedMessages: (messages: AssistantMessageRow[]) => void;
   clearOptimisticMessages: () => void;
 };
@@ -135,11 +150,20 @@ export function AssistantChatProvider({
   selectedConstraintSlugs: string[];
   initialDeclinedConstraintSlugs: string[];
   initialQualityLevel: string;
-  onSync?: (payload: AssistantSyncPayload) => void;
+  onSync?: (payload: AssistantSyncPayload, syncVersion?: number) => void;
   children: ReactNode;
 }) {
-  const { markSaving, markUpdating, markSaved, markIdle, requestBreakdownOpen, requestWhyOpen } =
-    useEstimateUpdate();
+  const {
+    markSaving,
+    markUpdating,
+    markSaved,
+    markIdle,
+    setPendingAction,
+    beginSync,
+    isSyncCurrent,
+    requestBreakdownOpen,
+    requestWhyOpen,
+  } = useEstimateUpdate();
   const [persistedMessages, setPersistedMessages] =
     useState<AssistantMessageRow[]>(initialMessages);
   const [optimisticMessages, setOptimisticMessages] = useState<
@@ -164,9 +188,15 @@ export function AssistantChatProvider({
   const [workAreas, setWorkAreas] =
     useState<WorkAreaCompletenessInput[]>(initialWorkAreas);
   const [flushInFlight, setFlushInFlight] = useState(false);
+  const [resolvedSuggestionIds, setResolvedSuggestionIds] = useState<
+    Set<string>
+  >(new Set());
 
   const flushInFlightRef = useRef(false);
   const loadingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scopeSaveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const syncQueueRef = useRef<SyncRequest | null>(null);
+  const syncProcessingRef = useRef(false);
 
   const clearLoadingTimeout = useCallback(() => {
     if (loadingTimeoutRef.current) {
@@ -175,19 +205,32 @@ export function AssistantChatProvider({
     }
   }, []);
 
-  const startLoadingTimeout = useCallback(() => {
-    clearLoadingTimeout();
-    loadingTimeoutRef.current = setTimeout(() => {
-      resolvePendingAssistantMessages(
-        setOptimisticMessages,
-        "error",
-        "Could not update estimate. Try again."
-      );
-      markIdle();
-      flushInFlightRef.current = false;
-      setFlushInFlight(false);
-    }, LOADING_TIMEOUT_MS);
-  }, [clearLoadingTimeout, markIdle]);
+  const clearScopeSaveTimeout = useCallback(() => {
+    if (scopeSaveTimeoutRef.current) {
+      clearTimeout(scopeSaveTimeoutRef.current);
+      scopeSaveTimeoutRef.current = null;
+    }
+  }, []);
+
+  const startLoadingTimeout = useCallback(
+    (
+      errorMessage = "Answers saved. Estimate refresh needs retry.",
+      timeoutMs = DEFAULT_ANSWER_TIMEOUT_MS
+    ) => {
+      clearLoadingTimeout();
+      loadingTimeoutRef.current = setTimeout(() => {
+        resolvePendingAssistantMessages(
+          setOptimisticMessages,
+          "error",
+          errorMessage
+        );
+        markIdle();
+        flushInFlightRef.current = false;
+        setFlushInFlight(false);
+      }, timeoutMs);
+    },
+    [clearLoadingTimeout, markIdle]
+  );
 
   useEffect(() => {
     setPersistedMessages(initialMessages);
@@ -216,19 +259,80 @@ export function AssistantChatProvider({
   }, []);
 
   const applySyncPayload = useCallback(
-    (payload: AssistantSyncPayload) => {
-      setPersistedMessages(payload.chatMessages);
-      onSync?.(payload);
+    (payload: AssistantSyncPayload, syncVersion?: number) => {
+      if (syncVersion !== undefined && !isSyncCurrent(syncVersion)) {
+        return false;
+      }
+      if (payload.chatMessages) {
+        setPersistedMessages(payload.chatMessages);
+      }
+      onSync?.(payload, syncVersion);
+      return true;
     },
-    [onSync]
+    [onSync, isSyncCurrent]
+  );
+
+  const enqueueSync = useCallback(
+    async (
+      request: SyncRequest
+    ): Promise<AssistantSyncPayload | null> => {
+      syncQueueRef.current = mergeSyncRequests(syncQueueRef.current, request);
+
+      if (syncProcessingRef.current) {
+        await new Promise<void>((resolve) => {
+          const check = () => {
+            if (!syncProcessingRef.current) resolve();
+            else setTimeout(check, 50);
+          };
+          check();
+        });
+      }
+
+      syncProcessingRef.current = true;
+      const merged = syncQueueRef.current;
+      syncQueueRef.current = null;
+      const syncVersion = beginSync();
+
+      try {
+        const kinds = syncKindsToLoader(merged?.kinds ?? request.kinds);
+        const result = await syncAssistantState(projectId, {
+          kinds,
+          scopeId: merged?.scopeId ?? request.scopeId,
+        });
+        if (result.data && isSyncCurrent(syncVersion)) {
+          applySyncPayload(result.data, syncVersion);
+          setOptimisticAnswers({});
+          setOptimisticDeclinedSlugs([]);
+          return result.data;
+        }
+        return null;
+      } finally {
+        syncProcessingRef.current = false;
+        if (syncQueueRef.current) {
+          const pending = syncQueueRef.current;
+          syncQueueRef.current = null;
+          return enqueueSync(pending);
+        }
+      }
+    },
+    [projectId, applySyncPayload, beginSync, isSyncCurrent]
+  );
+
+  const syncByKinds = useCallback(
+    async (kinds: AssistantSyncKind[], scopeId?: string) => {
+      return enqueueSync({ kinds, scopeId });
+    },
+    [enqueueSync]
   );
 
   const syncAssistant = useCallback(async () => {
+    const syncVersion = beginSync();
     const result = await syncAssistantState(projectId);
-    if (result.data) {
-      applySyncPayload(result.data);
+    if (result.data && isSyncCurrent(syncVersion)) {
+      applySyncPayload(result.data, syncVersion);
+      setOptimisticAnswers({});
     }
-  }, [projectId, applySyncPayload]);
+  }, [projectId, applySyncPayload, beginSync, isSyncCurrent]);
 
   const applyOptimisticScopeAnswers = useCallback(
     (answers: ScopeAnswerItem[]) => {
@@ -249,9 +353,19 @@ export function AssistantChatProvider({
 
   const applyEstimateChangeFromPayload = useCallback(
     (payload: AssistantSyncPayload, changeLabel: string | null) => {
-      const summary = parseQuickEstimateSummary(payload.quickEstimate?.notes ?? null);
-      const event = summary?.lastEstimateChange as EstimateChangeEvent | null | undefined;
       const estimate = payload.quickEstimate;
+      if (!estimate) {
+        markSaved({
+          costDelta: null,
+          previousCompleteness: null,
+          newCompleteness: null,
+          changeLabel,
+        });
+        return;
+      }
+
+      const summary = parseQuickEstimateSummary(estimate.notes ?? null);
+      const event = summary?.lastEstimateChange as EstimateChangeEvent | null | undefined;
 
       const costMid =
         estimate?.estimated_cost_low != null &&
@@ -284,6 +398,8 @@ export function AssistantChatProvider({
       flushInFlightRef.current = true;
       setFlushInFlight(true);
       markSaving();
+      setPendingAction("toggling_constraints");
+      setPendingAction("saving_answer");
 
       const prevCompleteness = computeProjectCompleteness(workAreas);
       const userLabel =
@@ -293,17 +409,26 @@ export function AssistantChatProvider({
 
       setOptimisticMessages((prev) => [
         ...prev,
-        { id: `batch-user-${Date.now()}`, role: "user", content: userLabel },
+        {
+          id: `batch-user-${Date.now()}`,
+          role: "user",
+          content: userLabel,
+          createdAt: new Date().toISOString(),
+          sequenceIndex: Date.now(),
+        },
         {
           id: `batch-asst-${Date.now()}`,
           role: "assistant",
-          content: "Updating estimate…",
+          content: TRUST_COPY.updatingEstimate,
           pending: true,
+          createdAt: new Date(Date.now() + 1).toISOString(),
+          sequenceIndex: Date.now() + 1,
         },
       ]);
 
       applyOptimisticScopeAnswers(answers);
       markUpdating();
+      setPendingAction("updating_estimate");
       startLoadingTimeout();
 
       try {
@@ -325,14 +450,24 @@ export function AssistantChatProvider({
         clearLoadingTimeout();
         resolvePendingAssistantMessages(setOptimisticMessages, "success");
 
-        const syncResult = await syncAssistantState(projectId);
-        if (syncResult.data) {
-          applySyncPayload(syncResult.data);
+        const firstScopeId = answers[0]?.questionId
+          ? workAreas.find((a) =>
+              Object.keys(a.answers).some((k) =>
+                answers.some((ans) => ans.questionKey === k)
+              )
+            )?.scopeId
+          : undefined;
+
+        const syncPayload = await syncByKinds(
+          ["answers", "estimate", "scopes"],
+          firstScopeId
+        );
+        if (syncPayload) {
           applyEstimateChangeFromPayload(
-            syncResult.data,
+            syncPayload,
             answers.length === 1
-              ? `after ${answers[0]!.label.toLowerCase()}`
-              : `after updating ${answers.length} details`
+              ? `${answers[0]!.label} updated. Estimate refreshed.`
+              : `Updated ${answers.length} details. Estimate refreshed.`
           );
         } else {
           markSaved({
@@ -351,7 +486,7 @@ export function AssistantChatProvider({
         resolvePendingAssistantMessages(
           setOptimisticMessages,
           "error",
-          "Could not update estimate. Try again."
+          "Answers saved. Estimate refresh needs retry."
         );
       } finally {
         clearLoadingTimeout();
@@ -367,10 +502,11 @@ export function AssistantChatProvider({
       markIdle,
       workAreas,
       applyOptimisticScopeAnswers,
-      applySyncPayload,
       applyEstimateChangeFromPayload,
       startLoadingTimeout,
       clearLoadingTimeout,
+      syncByKinds,
+      setPendingAction,
     ]
   );
 
@@ -381,6 +517,7 @@ export function AssistantChatProvider({
       flushInFlightRef.current = true;
       setFlushInFlight(true);
       markSaving();
+      setPendingAction("toggling_constraints");
 
       const applied = selections.filter((s) => s.apply);
       const userText =
@@ -394,7 +531,7 @@ export function AssistantChatProvider({
         {
           id: `c-batch-asst-${Date.now()}`,
           role: "assistant",
-          content: "Saving site conditions…",
+          content: TRUST_COPY.savingConstraints,
           pending: true,
         },
       ]);
@@ -423,14 +560,17 @@ export function AssistantChatProvider({
         clearLoadingTimeout();
         resolvePendingAssistantMessages(setOptimisticMessages, "success");
 
-        const syncResult = await syncAssistantState(projectId);
-        if (syncResult.data) {
-          applySyncPayload(syncResult.data);
+        const syncPayload = await syncByKinds([
+          "constraints",
+          "estimate",
+          "messages",
+        ]);
+        if (syncPayload) {
           applyEstimateChangeFromPayload(
-            syncResult.data,
+            syncPayload,
             applied.length > 0
-              ? `after adding ${applied.length} constraint${applied.length > 1 ? "s" : ""}`
-              : "site conditions confirmed"
+              ? "Site conditions saved. Estimate refreshed."
+              : "Site conditions confirmed."
           );
         } else {
           markSaved({
@@ -471,10 +611,11 @@ export function AssistantChatProvider({
       markUpdating,
       markSaved,
       markIdle,
-      applySyncPayload,
       applyEstimateChangeFromPayload,
       startLoadingTimeout,
       clearLoadingTimeout,
+      syncByKinds,
+      setPendingAction,
     ]
   );
 
@@ -482,51 +623,94 @@ export function AssistantChatProvider({
     async (selections: WorkAreaSelection[]) => {
       if (selections.length === 0 || flushInFlightRef.current) return;
 
+      const selectionIds = selections.map((s) => s.suggestionId);
+      setResolvedSuggestionIds((prev) => new Set([...prev, ...selectionIds]));
+
       flushInFlightRef.current = true;
       setFlushInFlight(true);
       markSaving();
-      markUpdating();
-      startLoadingTimeout();
+      setPendingAction("adding_work_area");
 
       setOptimisticMessages((prev) => [
         ...prev,
-        { id: `wa-user-${Date.now()}`, role: "user", content: "Confirming work areas…" },
+        {
+          id: `wa-user-${Date.now()}`,
+          role: "user",
+          content: "Confirming work areas…",
+        },
         {
           id: `wa-asst-${Date.now()}`,
           role: "assistant",
-          content: "Updating estimate…",
+          content: "Saving work areas…",
           pending: true,
         },
       ]);
+
+      scopeSaveTimeoutRef.current = setTimeout(() => {
+        resolvePendingAssistantMessages(
+          setOptimisticMessages,
+          "error",
+          "Work area save timed out. Try again."
+        );
+        markIdle();
+        flushInFlightRef.current = false;
+        setFlushInFlight(false);
+      }, SCOPE_SAVE_TIMEOUT_MS);
+
+      let scopeSaved = false;
 
       try {
         const result = await confirmAssistantWorkAreas(projectId, selections);
         if (result.error) throw new Error(result.error);
 
-        clearLoadingTimeout();
-        resolvePendingAssistantMessages(setOptimisticMessages, "success");
+        scopeSaved = true;
+        clearScopeSaveTimeout();
 
-        const syncResult = await syncAssistantState(projectId);
-        if (syncResult.data) {
-          applySyncPayload(syncResult.data);
-          applyEstimateChangeFromPayload(syncResult.data, "work areas confirmed");
+        markSaved({
+          costDelta: null,
+          previousCompleteness: null,
+          newCompleteness: null,
+          changeLabel: "work areas confirmed",
+        });
+
+        resolvePendingAssistantMessages(setOptimisticMessages, "success");
+        const syncPayload = await syncByKinds([
+          "scopes",
+          "answers",
+          "messages",
+        ]);
+        if (syncPayload) {
+          applyEstimateChangeFromPayload(syncPayload, "Work areas confirmed.");
+        }
+      } catch {
+        clearScopeSaveTimeout();
+        if (!scopeSaved) {
+          setResolvedSuggestionIds((prev) => {
+            const next = new Set(prev);
+            for (const id of selectionIds) next.delete(id);
+            return next;
+          });
+          markIdle();
+          resolvePendingAssistantMessages(
+            setOptimisticMessages,
+            "error",
+            "Could not save work areas. Try again."
+          );
         } else {
+          resolvePendingAssistantMessages(
+            setOptimisticMessages,
+            "error",
+            "Work areas saved. Estimate refresh needs retry."
+          );
           markSaved({
             costDelta: null,
             previousCompleteness: null,
             newCompleteness: null,
-            changeLabel: "work areas confirmed",
+            changeLabel: "work areas saved — estimate needs retry",
           });
         }
-      } catch {
-        clearLoadingTimeout();
-        markIdle();
-        resolvePendingAssistantMessages(
-          setOptimisticMessages,
-          "error",
-          "Could not update estimate. Try again."
-        );
       } finally {
+        clearScopeSaveTimeout();
         clearLoadingTimeout();
         flushInFlightRef.current = false;
         setFlushInFlight(false);
@@ -535,13 +719,13 @@ export function AssistantChatProvider({
     [
       projectId,
       markSaving,
-      markUpdating,
       markSaved,
       markIdle,
-      applySyncPayload,
       applyEstimateChangeFromPayload,
-      startLoadingTimeout,
       clearLoadingTimeout,
+      clearScopeSaveTimeout,
+      syncByKinds,
+      setPendingAction,
     ]
   );
 
@@ -561,9 +745,13 @@ export function AssistantChatProvider({
       setOptimisticDeclinedSlugs([]);
       setDeclinedConstraintSlugs([]);
 
-      const syncResult = await syncAssistantState(projectId);
-      if (syncResult.data) {
-        applySyncPayload(syncResult.data);
+      const syncPayload = await syncByKinds([
+        "constraints",
+        "estimate",
+        "messages",
+      ]);
+      if (syncPayload) {
+        applySyncPayload(syncPayload);
       }
       markSaved({
         costDelta: null,
@@ -585,6 +773,7 @@ export function AssistantChatProvider({
     markSaved,
     markIdle,
     applySyncPayload,
+    syncByKinds,
   ]);
 
   const submitScopeAnswer = useCallback(
@@ -606,7 +795,10 @@ export function AssistantChatProvider({
     async (level: string, label: string) => {
       if (flushInFlightRef.current) return;
 
+      flushInFlightRef.current = true;
+      setFlushInFlight(true);
       markSaving();
+      setPendingAction("changing_finish_level");
       setOptimisticQualityLevel(level);
       setOptimisticMessages((prev) => [
         ...prev,
@@ -618,7 +810,7 @@ export function AssistantChatProvider({
         {
           id: `q-asst-${Date.now()}`,
           role: "assistant",
-          content: `Finish level updated to ${label.split(" / ")[0]}.`,
+          content: TRUST_COPY.updatingEstimate,
           pending: true,
         },
       ]);
@@ -632,14 +824,13 @@ export function AssistantChatProvider({
         );
         if (result.error) throw new Error(result.error);
 
-        setOptimisticMessages([]);
+        resolvePendingAssistantMessages(setOptimisticMessages, "success");
 
-        const syncResult = await syncAssistantState(projectId);
-        if (syncResult.data) {
-          applySyncPayload(syncResult.data);
+        const syncPayload = await syncByKinds(["estimate", "messages"]);
+        if (syncPayload) {
           applyEstimateChangeFromPayload(
-            syncResult.data,
-            `finish level → ${label.split(" / ")[0]}`
+            syncPayload,
+            "Finish level updated. Estimate refreshed."
           );
         } else {
           markSaved({
@@ -653,9 +844,10 @@ export function AssistantChatProvider({
         markIdle();
         const message =
           error instanceof Error ? error.message : "Could not save.";
-        setOptimisticMessages((prev) =>
-          prev.map((m) => (m.pending ? { ...m, error: message } : m))
-        );
+        resolvePendingAssistantMessages(setOptimisticMessages, "error", message);
+      } finally {
+        flushInFlightRef.current = false;
+        setFlushInFlight(false);
       }
     },
     [
@@ -664,8 +856,9 @@ export function AssistantChatProvider({
       markUpdating,
       markSaved,
       markIdle,
-      applySyncPayload,
       applyEstimateChangeFromPayload,
+      syncByKinds,
+      setPendingAction,
     ]
   );
 
@@ -730,10 +923,10 @@ export function AssistantChatProvider({
         resolveOptimisticMessage(optimisticId);
         clearLoadingTimeout();
         resolvePendingAssistantMessages(setOptimisticMessages, "success");
-        const syncResult = await syncAssistantState(projectId);
-        if (syncResult.data) {
-          applySyncPayload(syncResult.data);
-          applyEstimateChangeFromPayload(syncResult.data, "after update");
+        const syncPayload = await syncAssistantState(projectId);
+        if (syncPayload.data) {
+          applySyncPayload(syncPayload.data);
+          applyEstimateChangeFromPayload(syncPayload.data, "Update applied. Estimate refreshed.");
         }
         clearOptimisticMessages();
         if (result.openBreakdown) {
@@ -757,7 +950,7 @@ export function AssistantChatProvider({
         resolvePendingAssistantMessages(
           setOptimisticMessages,
           "error",
-          "Could not update estimate. Try again."
+          "Answers saved. Estimate refresh needs retry."
         );
       }
     },
@@ -781,12 +974,33 @@ export function AssistantChatProvider({
   );
 
   const allMessages = useMemo(() => {
-    const persisted = persistedMessages.map((m) => ({
-      id: m.id,
-      role: m.role as "user" | "assistant",
-      content: m.content,
+    const persisted = persistedMessages.map((m) => {
+      const meta = (m.metadata as Record<string, unknown> | null) ?? {};
+      return {
+        id: m.id,
+        role: m.role as "user" | "assistant",
+        content: m.content,
+        createdAt: m.created_at,
+        sequenceIndex:
+          typeof meta.sequenceIndex === "number" ? meta.sequenceIndex : undefined,
+      };
+    });
+
+    const optimistic = optimisticMessages.map((m, index) => ({
+      ...m,
+      createdAt: m.createdAt ?? new Date(Date.now() + index).toISOString(),
+      sequenceIndex: m.sequenceIndex ?? Date.now() + index,
     }));
-    return [...persisted, ...optimisticMessages];
+
+    return [...persisted, ...optimistic].sort((a, b) => {
+      const seqA = a.sequenceIndex ?? 0;
+      const seqB = b.sequenceIndex ?? 0;
+      if (seqA !== seqB) return seqA - seqB;
+      const timeA = a.createdAt ?? "";
+      const timeB = b.createdAt ?? "";
+      if (timeA !== timeB) return timeA.localeCompare(timeB);
+      return a.id.localeCompare(b.id);
+    });
   }, [persistedMessages, optimisticMessages]);
 
   const value = useMemo(
@@ -813,7 +1027,9 @@ export function AssistantChatProvider({
       addOptimisticAssistantMessage,
       resolveOptimisticMessage,
       flushInFlight,
+      resolvedSuggestionIds,
       syncAssistant,
+      syncByKinds,
       mergePersistedMessages,
       clearOptimisticMessages,
     }),
@@ -839,7 +1055,9 @@ export function AssistantChatProvider({
       addOptimisticAssistantMessage,
       resolveOptimisticMessage,
       flushInFlight,
+      resolvedSuggestionIds,
       syncAssistant,
+      syncByKinds,
       mergePersistedMessages,
       clearOptimisticMessages,
     ]

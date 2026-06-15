@@ -1,5 +1,6 @@
 import { createHash } from "crypto";
 import type { DiscoveryResult } from "@/lib/ai/discovery/types";
+import { buildDiscoveryOutputRows } from "@/lib/ai/discovery/build-discovery-outputs";
 import { devLog } from "@/lib/dev-log";
 import { logSupabaseError } from "@/lib/supabase/log-error";
 import type { Json } from "@/types/database";
@@ -10,95 +11,6 @@ type Supabase = SupabaseClient<Database>;
 
 function hashInputText(text: string): string {
   return createHash("sha256").update(text).digest("hex");
-}
-
-function toConfidence(value: number | undefined): number | null {
-  if (value == null || Number.isNaN(value)) {
-    return null;
-  }
-  return Math.round(value * 100) / 100;
-}
-
-function buildDiscoveryOutputs(
-  organisationId: string,
-  projectId: string,
-  discoveryRunId: string,
-  result: DiscoveryResult
-) {
-  const rows: Database["public"]["Tables"]["discovery_outputs"]["Insert"][] =
-    [];
-
-  for (const workArea of result.workAreas) {
-    rows.push({
-      organisation_id: organisationId,
-      project_id: projectId,
-      discovery_run_id: discoveryRunId,
-      output_type: "work_area",
-      output_key: workArea.typeKey,
-      title: workArea.name,
-      content: workArea as unknown as Json,
-      confidence: toConfidence(workArea.confidence),
-      status: "pending",
-    });
-  }
-
-  for (const fact of result.facts) {
-    rows.push({
-      organisation_id: organisationId,
-      project_id: projectId,
-      discovery_run_id: discoveryRunId,
-      output_type: "fact",
-      output_key: fact.key,
-      title: fact.label,
-      content: fact as unknown as Json,
-      confidence: toConfidence(fact.confidence),
-      status: "pending",
-    });
-  }
-
-  for (const question of result.questions) {
-    rows.push({
-      organisation_id: organisationId,
-      project_id: projectId,
-      discovery_run_id: discoveryRunId,
-      output_type: "question",
-      output_key: question.key,
-      title: question.text,
-      content: question as unknown as Json,
-      confidence: null,
-      status: "pending",
-    });
-  }
-
-  for (const constraint of result.constraints) {
-    rows.push({
-      organisation_id: organisationId,
-      project_id: projectId,
-      discovery_run_id: discoveryRunId,
-      output_type: "constraint",
-      output_key: constraint.slug,
-      title: constraint.label,
-      content: constraint as unknown as Json,
-      confidence: toConfidence(constraint.confidence),
-      status: "pending",
-    });
-  }
-
-  for (const trade of result.trades) {
-    rows.push({
-      organisation_id: organisationId,
-      project_id: projectId,
-      discovery_run_id: discoveryRunId,
-      output_type: "trade",
-      output_key: `${trade.workAreaTypeKey}:${trade.name}`,
-      title: trade.name,
-      content: trade as unknown as Json,
-      confidence: null,
-      status: "pending",
-    });
-  }
-
-  return rows;
 }
 
 /**
@@ -153,7 +65,7 @@ export async function persistDiscoveryEngineRun(
     return { runId: null, error: runError.message };
   }
 
-  const outputs = buildDiscoveryOutputs(
+  const outputs = buildDiscoveryOutputRows(
     organisationId,
     projectId,
     run.id,
@@ -163,7 +75,10 @@ export async function persistDiscoveryEngineRun(
   if (outputs.length > 0) {
     const { error: outputsError } = await supabase
       .from("discovery_outputs")
-      .insert(outputs);
+      .upsert(outputs, {
+        onConflict: "discovery_run_id,output_type,output_key",
+        ignoreDuplicates: false,
+      });
 
     if (outputsError) {
       logSupabaseError("persistDiscoveryEngineRun.insertOutputs", outputsError);

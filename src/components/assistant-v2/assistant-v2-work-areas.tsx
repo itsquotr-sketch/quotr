@@ -9,18 +9,23 @@ import { AnswerChips } from "@/components/assistant-v2/answer-chips";
 import { AddMoreDetailButton } from "@/components/assistant-v2/assistant-refinement-trigger";
 import { useAssistantChat } from "@/components/assistant-v2/assistant-chat-context";
 import { buildMergedAnswersForScope } from "@/lib/assistant-v2/build-merged-answers";
-import { computeScopeCompleteness } from "@/lib/assistant-v2/compute-information-completeness";
+import {
+  evaluateScopeConfidence,
+  confidenceStatusToTier,
+} from "@/lib/assistant-v2/confidence/evaluate-confidence";
+import { getFactConfirmationStatus } from "@/lib/assistant-v2/fact-confirmation-status";
 import {
   getCriticalOrUsefulMissing,
   getOptionalMissing,
   getScopeMissingItems,
 } from "@/lib/assistant-v2/missing/get-current-missing-items";
+import { getMissingRequiredFactsForWorkArea } from "@/lib/assistant-v2/stages/required-fact-gating";
+import { getCardKeyFactDefinitions } from "@/lib/assistant-v2/work-area-card-key-facts";
 import {
   getWorkAreaDisplayInfo,
   isInternalWorksScope,
 } from "@/lib/scopes/classification/display-work-area";
 import { packageHasPricingLogic } from "@/lib/scopes/classification/work-package-pricing";
-import { getKnownFactsForScope } from "@/lib/scopes/missing-facts";
 import { resolveWorkAreaTypeKey } from "@/lib/project-assistant-questions";
 import { normalizeQuestionKey } from "@/lib/question-keys";
 import type { DiscoveryResult } from "@/lib/ai/discovery/types";
@@ -29,6 +34,9 @@ import type { ScopeFactDefinition } from "@/lib/scopes/types";
 import type { ProjectScope, ProjectScopePackage } from "@/types/database";
 import { Button } from "@/components/ui/button";
 import { useEstimateUpdate } from "@/components/projects/estimate-update-context";
+import { labelForQualityLevel, normaliseQualityLevel } from "@/lib/constants/quality-level";
+import { resolveEffectiveFinishLevel } from "@/lib/scopes/resolve-effective-finish";
+import { TRUST_COPY } from "@/lib/assistant-v2/trust-messages";
 import { cn } from "@/lib/utils";
 
 interface AssistantV2WorkAreasProps {
@@ -46,7 +54,17 @@ export function AssistantV2WorkAreas({
   discovery,
   scopePackages = [],
 }: AssistantV2WorkAreasProps) {
-  if (confirmedScopes.length === 0) return null;
+  if (confirmedScopes.length === 0) {
+    return (
+      <section className="space-y-3 rounded-xl border border-dashed bg-muted/30 p-4">
+        <h2 className="text-sm font-semibold">Work Areas</h2>
+        <p className="text-sm text-muted-foreground">
+          Tell Quotr what you&apos;re building in the chat to detect work areas
+          and start your estimate.
+        </p>
+      </section>
+    );
+  }
 
   return (
     <section className="space-y-3">
@@ -82,6 +100,23 @@ function formatFactDisplay(fact: ScopeFactDefinition, value: string): string {
   return value;
 }
 
+function tierBadgeLabel(tier: string): string {
+  return tier === "READY" ? "READY FOR DRAFT" : tier;
+}
+
+function tierBadgeClass(tier: string): string {
+  switch (tier) {
+    case "READY":
+      return "bg-primary/10 text-primary";
+    case "GOOD":
+      return "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400";
+    case "FAIR":
+      return "bg-amber-500/10 text-amber-700 dark:text-amber-400";
+    default:
+      return "bg-muted text-muted-foreground";
+  }
+}
+
 function WorkAreaCard({
   projectId,
   scope,
@@ -95,8 +130,10 @@ function WorkAreaCard({
   discovery: DiscoveryResult | null;
   packages: ProjectScopePackage[];
 }) {
-  const { markUpdating, markSaved } = useEstimateUpdate();
-  const { flushScopeBatch, optimisticAnswers, syncAssistant } = useAssistantChat();
+  const { markUpdating, markSaved, setPendingAction, isActionPending } =
+    useEstimateUpdate();
+  const { flushScopeBatch, optimisticAnswers, syncByKinds, flushInFlight, optimisticQualityLevel } =
+    useAssistantChat();
   const [deletePending, startDelete] = useTransition();
   const [includePending, startInclude] = useTransition();
   const [editingKey, setEditingKey] = useState<string | null>(null);
@@ -118,26 +155,51 @@ function WorkAreaCard({
     [answers, optimisticAnswers]
   );
 
-  const completeness = computeScopeCompleteness({
-    workAreaTypeKey: typeKey,
-    answers: mergedAnswers,
-  });
-  const display = getWorkAreaDisplayInfo(scope, completeness.percent);
-  const isBroad = display.isBroadCategory || isInternalWorksScope(scope);
+  const projectQuality = normaliseQualityLevel(optimisticQualityLevel ?? "unknown");
 
-  const knownFacts = isBroad
+  const scopeConfidence = useMemo(
+    () =>
+      evaluateScopeConfidence(
+        {
+          scopeId: scope.id,
+          scopeName: scope.name,
+          workAreaTypeKey: typeKey,
+          answers: mergedAnswers,
+          included: scope.include_in_quick_estimate !== false,
+        },
+        {
+          qualityLevel: projectQuality,
+          siteConstraintsAssessed: false,
+        }
+      ),
+    [scope.id, scope.name, typeKey, mergedAnswers, scope.include_in_quick_estimate, projectQuality]
+  );
+
+  const display = getWorkAreaDisplayInfo(scope, scopeConfidence.score);
+  const isBroad = display.isBroadCategory || isInternalWorksScope(scope);
+  const statusTier = confidenceStatusToTier(scopeConfidence.status);
+
+  const keyFactDefs = getCardKeyFactDefinitions(typeKey);
+  const requiredMissing = isBroad
     ? []
-    : getKnownFactsForScope(typeKey, mergedAnswers);
+    : getMissingRequiredFactsForWorkArea(typeKey, mergedAnswers).map(
+        (f) => f.label
+      );
 
   const scopeMissingItems = isBroad
     ? []
     : getScopeMissingItems(typeKey, scope.id, scope.name, mergedAnswers);
-  const criticalMissing = getCriticalOrUsefulMissing(scopeMissingItems);
-  const optionalMissing = getOptionalMissing(scopeMissingItems);
+  const usefulMissing = getCriticalOrUsefulMissing(scopeMissingItems)
+    .filter((item) => item.importance === "useful")
+    .map((item) => item.label.replace(/^[^:]+:\s*/, ""));
+  const optionalMissing = getOptionalMissing(scopeMissingItems).map((item) =>
+    item.label.replace(/^[^:]+:\s*/, "")
+  );
 
   const confirmedPackages = packages.filter((p) => p.status === "confirmed");
   const suggestedPackages = packages.filter((p) => p.status === "suggested");
-  const visiblePackages = confirmedPackages.length > 0 ? confirmedPackages : suggestedPackages;
+  const visiblePackages =
+    confirmedPackages.length > 0 ? confirmedPackages : suggestedPackages;
 
   const anyIncludedInEstimate = visiblePackages.some(
     (p) => p.include_in_quick_estimate
@@ -157,16 +219,103 @@ function WorkAreaCard({
     return map;
   }, [scopeQuestions, scope.id]);
 
+  const summaryFacts = useMemo(() => {
+    const rows: {
+      fact: ScopeFactDefinition;
+      value: string;
+      status: "confirmed" | "assumed" | "unknown";
+    }[] = [];
+
+    for (const fact of keyFactDefs) {
+      const raw = mergedAnswers[fact.key];
+      const status = getFactConfirmationStatus(
+        fact,
+        mergedAnswers,
+        scopeQuestions,
+        scope.id,
+        discovery,
+        scope.name,
+        scope.scope_types?.name ?? null
+      );
+
+      if (status === "unknown" && !raw) continue;
+      if (fact.type === "select" && raw === "no") continue;
+
+      const value = raw ? formatFactDisplay(fact, raw) : "";
+      if (!value && status === "unknown") continue;
+
+      rows.push({ fact, value, status });
+      if (rows.length >= 5) break;
+    }
+    return rows;
+  }, [
+    keyFactDefs,
+    mergedAnswers,
+    scopeQuestions,
+    scope.id,
+    discovery,
+    scope.name,
+    scope.scope_types?.name,
+  ]);
+
+  const readinessLabel = requiredMissing.length
+    ? "NEEDS BEFORE PRICING"
+    : usefulMissing.length
+      ? "WOULD IMPROVE ACCURACY"
+      : "READY FOR DRAFT ESTIMATE";
+
+  const readinessItems = requiredMissing.length
+    ? requiredMissing.slice(0, 4).map((item) => ({
+        text: item,
+        kind: "required" as const,
+      }))
+    : usefulMissing.length
+      ? usefulMissing.slice(0, 4).map((item) => ({
+          text: item,
+          kind: "useful" as const,
+        }))
+      : optionalMissing.slice(0, 3).map((item) => ({
+          text: item,
+          kind: "optional" as const,
+        }));
+
+  const effectiveFinish = resolveEffectiveFinishLevel({
+    scopeTypeKey: typeKey,
+    answers: mergedAnswers,
+    projectQualityLevel: projectQuality,
+  });
+  const finishFact = keyFactDefs.find((f) => f.key.includes("finish_level"));
+  const finishSource =
+    finishFact &&
+    getFactConfirmationStatus(
+      finishFact,
+      mergedAnswers,
+      scopeQuestions,
+      scope.id,
+      discovery,
+      scope.name,
+      scope.scope_types?.name ?? null
+    ) === "confirmed"
+      ? "confirmed"
+      : effectiveFinish !== "unknown"
+        ? "global"
+        : null;
+
   function handleIncludeInEstimate() {
+    if (includePending || deletePending || flushInFlight) return;
+
     startInclude(async () => {
+      setPendingAction("adding_work_area");
       markUpdating();
       await toggleWorkAreaInQuickEstimate(projectId, scope.id, true);
-      await syncAssistant();
+      await syncByKinds(["scopes", "estimate"]);
       markSaved();
     });
   }
 
   function handleDelete() {
+    if (includePending || deletePending || flushInFlight) return;
+
     if (
       !window.confirm(
         `Remove "${display.displayName}" from this project? This will update your estimate.`
@@ -176,9 +325,10 @@ function WorkAreaCard({
     }
 
     startDelete(async () => {
+      setPendingAction("removing_work_area");
       markUpdating();
       await deleteProjectScope(projectId, scope.id);
-      await syncAssistant();
+      await syncByKinds(["scopes", "estimate"]);
       markSaved();
     });
   }
@@ -204,6 +354,12 @@ function WorkAreaCard({
       ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
   }
 
+  const actionsDisabled =
+    flushInFlight ||
+    includePending ||
+    deletePending ||
+    isActionPending("saving_answer");
+
   return (
     <article
       className={cn(
@@ -212,63 +368,38 @@ function WorkAreaCard({
       )}
     >
       <div className="flex items-start justify-between gap-2">
-        <div>
-          <h3 className="font-medium">{display.displayName}</h3>
-          {display.statusLabel && (
-            <p className="text-xs text-amber-700 dark:text-amber-400">
-              {display.statusLabel}
-            </p>
-          )}
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <h3 className="font-medium">{display.displayName}</h3>
+            <span
+              className={cn(
+                "rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+                tierBadgeClass(statusTier)
+              )}
+            >
+              {tierBadgeLabel(statusTier)}
+            </span>
+          </div>
           {display.showConfidence && display.confidencePercent != null && (
-            <p className="text-xs text-muted-foreground">
-              Confidence {display.confidencePercent}%
+            <p className="mt-0.5 text-[10px] text-muted-foreground">
+              {display.confidencePercent}% confidence
             </p>
           )}
-          {display.showConfidence &&
-            display.confidencePercent != null &&
-            display.confidencePercent < 80 &&
-            !isBroad &&
-            (criticalMissing.length > 0 || optionalMissing.length > 0) && (
-              <div className="mt-1 space-y-1">
-                <AddMoreDetailButton
-                  projectId={projectId}
-                  scopeId={scope.id}
-                  label="Improve confidence"
-                  variant="ghost"
-                  className="h-7 px-0 text-primary hover:bg-transparent"
-                />
-                <div className="text-xs text-muted-foreground">
-                  <p className="font-medium">Still missing:</p>
-                  <ul className="mt-0.5 space-y-0.5">
-                    {[...criticalMissing, ...optionalMissing]
-                      .slice(0, 3)
-                      .map((item) => (
-                        <li key={item.factKey}>
-                          •{" "}
-                          {item.label
-                            .replace(/^[^:]+:\s*/, "")
-                            .replace(/ not confirmed$/, "")}
-                        </li>
-                      ))}
-                  </ul>
-                  <p className="mt-1">
-                    {criticalMissing.length + optionalMissing.length} item
-                    {criticalMissing.length + optionalMissing.length === 1
-                      ? ""
-                      : "s"}{" "}
-                    remaining
-                    {criticalMissing.length === 0 && optionalMissing.length > 0
-                      ? " — critical items complete"
-                      : ""}
-                  </p>
-                </div>
-              </div>
-            )}
+          {finishSource && effectiveFinish !== "unknown" && (
+            <p className="mt-0.5 text-[10px] text-muted-foreground">
+              Finish: {labelForQualityLevel(effectiveFinish)} · {finishSource}
+            </p>
+          )}
+          {scope.include_in_quick_estimate === false && !isBroad && (
+            <p className="mt-0.5 text-[10px] font-medium text-muted-foreground">
+              Excluded from estimate
+            </p>
+          )}
         </div>
         {isBroad && visiblePackages.length > 0 && (
           <span
             className={cn(
-              "rounded-full px-2 py-0.5 text-[10px] font-medium",
+              "shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium",
               anyIncludedInEstimate
                 ? "bg-primary/10 text-primary"
                 : "bg-muted text-muted-foreground"
@@ -276,7 +407,7 @@ function WorkAreaCard({
           >
             {anyIncludedInEstimate
               ? "Included in estimate"
-              : "Not included in estimate yet"}
+              : TRUST_COPY.notIncludedYet}
           </span>
         )}
       </div>
@@ -286,11 +417,9 @@ function WorkAreaCard({
           <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
             Selected packages
           </p>
-          <ul className="space-y-0.5 text-sm">
+          <ul className="space-y-0.5 text-sm text-muted-foreground">
             {visiblePackages.map((pkg) => (
-              <li key={pkg.id} className="text-muted-foreground">
-                • {pkg.label}
-              </li>
+              <li key={pkg.id}>• {pkg.label}</li>
             ))}
           </ul>
           {anyNeedsPricing && (
@@ -301,28 +430,45 @@ function WorkAreaCard({
         </div>
       )}
 
-      {knownFacts.length > 0 && (
-        <div className="mt-3 space-y-2">
+      {!isBroad && summaryFacts.length > 0 && (
+        <div className="mt-3 space-y-1.5">
           <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-            Facts
+            Summary
           </p>
-          {knownFacts.map((fact) => {
-            const value = mergedAnswers[fact.key] ?? "";
-            const displayValue = formatFactDisplay(fact, value);
+          {summaryFacts.map(({ fact, value, status }) => {
             const isEditing = editingKey === fact.key;
             const question = scopeQuestionMap.get(fact.key);
 
             return (
               <div key={fact.key} className="text-sm">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-muted-foreground">{fact.label}:</span>
-                  <span className="font-medium">{displayValue}</span>
+                <div className="flex items-baseline justify-between gap-2">
+                  <span className="text-muted-foreground">{fact.label}</span>
+                  <span
+                    className={cn(
+                      "text-right text-sm",
+                      status === "assumed" && "text-muted-foreground",
+                      status === "confirmed" && "font-medium text-foreground"
+                    )}
+                  >
+                    {value || "—"}
+                    {status === "confirmed" && (
+                      <span className="ml-1 text-[10px] font-normal text-muted-foreground">
+                        · confirmed
+                      </span>
+                    )}
+                    {status === "assumed" && (
+                      <span className="ml-1 text-[10px] font-normal text-muted-foreground">
+                        · assumed
+                      </span>
+                    )}
+                  </span>
                 </div>
                 {isEditing && fact.type === "select" && fact.options && question && (
                   <div className="mt-2">
                     <AnswerChips
                       options={fact.options}
-                      value={value}
+                      value={mergedAnswers[fact.key] ?? ""}
+                      disabled={actionsDisabled}
                       onSelect={(v) => {
                         const label =
                           fact.options!.find((o) => o.value === v)?.label ?? v;
@@ -331,42 +477,48 @@ function WorkAreaCard({
                     />
                   </div>
                 )}
-                {!isEditing && question && fact.type === "select" && fact.options && (
-                  <button
-                    type="button"
-                    className="mt-0.5 text-xs text-primary hover:underline"
-                    onClick={() => setEditingKey(fact.key)}
-                  >
-                    Edit
-                  </button>
-                )}
+                {!isEditing &&
+                  question &&
+                  fact.type === "select" &&
+                  fact.options && (
+                    <button
+                      type="button"
+                      className="mt-0.5 text-xs text-primary hover:underline disabled:opacity-50"
+                      disabled={actionsDisabled}
+                      onClick={() => setEditingKey(fact.key)}
+                    >
+                      Edit
+                    </button>
+                  )}
               </div>
             );
           })}
         </div>
       )}
 
-      {criticalMissing.length > 0 && (
-        <div className="mt-2">
-          <p className="text-xs font-medium text-muted-foreground">Missing:</p>
-          <ul className="mt-0.5 space-y-0.5 text-xs text-muted-foreground">
-            {criticalMissing.slice(0, 3).map((item) => (
-              <li key={item.factKey}>• {item.label.replace(/^[^:]+:\s*/, "")}</li>
-            ))}
-          </ul>
-        </div>
-      )}
-
-      {optionalMissing.length > 0 && (
-        <div className="mt-2">
-          <p className="text-xs font-medium text-muted-foreground">
-            Optional details:
+      {!isBroad && (
+        <div className="mt-3">
+          <p className="text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+            {readinessLabel}
           </p>
-          <ul className="mt-0.5 space-y-0.5 text-xs text-muted-foreground">
-            {optionalMissing.slice(0, 3).map((item) => (
-              <li key={item.factKey}>• {item.label.replace(/^[^:]+:\s*/, "")}</li>
-            ))}
-          </ul>
+          {readinessItems.length > 0 ? (
+            <ul className="mt-1 space-y-0.5 text-xs text-muted-foreground">
+              {readinessItems.map((item) => (
+                <li key={`${item.kind}-${item.text}`}>
+                  •{" "}
+                  {item.kind === "optional"
+                    ? `Optional detail — ${item.text}`
+                    : item.kind === "useful"
+                      ? `Would improve accuracy — ${item.text}`
+                      : `Needed before pricing — ${item.text}`}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="mt-1 text-xs text-muted-foreground">
+              Enough detail for a draft estimate.
+            </p>
+          )}
         </div>
       )}
 
@@ -388,35 +540,46 @@ function WorkAreaCard({
             variant="default"
             size="sm"
             className="h-8 text-xs"
-            disabled={includePending}
+            disabled={actionsDisabled}
             onClick={handleIncludeInEstimate}
           >
-            Include in estimate
+            {includePending ? TRUST_COPY.addingWorkArea : "Include in estimate"}
           </Button>
         )}
         {!isBroad && (
-          <Button asChild variant="outline" size="sm" className="h-8 text-xs">
-            <Link href={`/projects/${projectId}/scopes/${scope.id}/edit`}>
-              <Pencil className="mr-1 h-3 w-3" />
-              Edit Scope
-            </Link>
-          </Button>
+          <>
+            <Button asChild variant="outline" size="sm" className="h-8 text-xs">
+              <Link href={`/projects/${projectId}/scopes/${scope.id}/edit`}>
+                <Pencil className="mr-1 h-3 w-3" />
+                Edit scope
+              </Link>
+            </Button>
+            {readinessLabel !== "READY FOR DRAFT ESTIMATE" && (
+              <AddMoreDetailButton
+                projectId={projectId}
+                scopeId={scope.id}
+                label="Improve estimate"
+                variant="outline"
+                className="h-8 text-xs"
+              />
+            )}
+          </>
         )}
         <Button
           type="button"
           variant="outline"
           size="sm"
           className="h-8 text-xs text-destructive hover:text-destructive"
-          disabled={deletePending}
+          disabled={actionsDisabled}
           onClick={handleDelete}
         >
           <Trash2 className="mr-1 h-3 w-3" />
-          Remove
+          {deletePending ? TRUST_COPY.removingWorkArea : "Remove"}
         </Button>
         {!isBroad && (
           <Button asChild variant="ghost" size="sm" className="h-8 text-xs">
             <Link href={`/projects/${projectId}/scopes/${scope.id}`}>
-              View Details
+              View details
             </Link>
           </Button>
         )}

@@ -46,6 +46,24 @@ export type ScopeComponentDefinition = {
   defaultIncluded?: boolean;
 };
 
+/** Indicative component lines for estimate insight allocation (Sprint 13B.1). */
+export type AllocationComponentDefinition = {
+  key: string;
+  label: string;
+  defaultIncluded?: boolean;
+  includeWhenFacts?: string[];
+  excludeWhenFacts?: string[];
+  /** Relative weight within category for indicative split */
+  weight?: number;
+};
+
+export type ScopeComponentAllocationTemplate = {
+  labour: AllocationComponentDefinition[];
+  materials: AllocationComponentDefinition[];
+  subcontractors: AllocationComponentDefinition[];
+  allowances: AllocationComponentDefinition[];
+};
+
 export type ConstraintDefinition = {
   key: string;
   label: string;
@@ -99,6 +117,32 @@ export type ScopeMaterialCategories = {
   categories: MaterialCategoryDefinition[];
 };
 
+/** Category keys for confidence weight rules (Sprint 13C). */
+export type ConfidenceWeightCategory =
+  | "quantity"
+  | "material"
+  | "finish"
+  | "inclusions"
+  | "site_access"
+  | "rate_source"
+  | "supply"
+  | "assumptions";
+
+/** Single weighted confidence rule — factKeys and weight should sum to 100 per template. */
+export type ScopeConfidenceWeight = {
+  key: string;
+  label: string;
+  weight: number;
+  category: ConfidenceWeightCategory;
+  factKeys: string[];
+  /** "any" = one answered fact earns full weight; default "all". */
+  matchMode?: "all" | "any";
+  /** When set, this weight only applies if the referenced fact matches one of the values. */
+  conditionalOn?: { factKey: string; values: string[] };
+};
+
+export type ScopeConfidenceWeights = ScopeConfidenceWeight[];
+
 /**
  * Canonical scope template — every current and future scope follows this shape.
  * Add a new scope by creating one template object and registering it.
@@ -130,8 +174,10 @@ export type ScopeTemplate = {
     benchmarkRates?: ScopeBenchmarkRates;
     defaultAllocations: ScopeAllocations;
     components?: ScopeComponentDefinition[];
+    /** Insight drawer component registry — labour / materials / trades / allowances */
+    componentAllocation?: ScopeComponentAllocationTemplate;
     /** Maps to cost-engine calculationType */
-    calculationType?: "deck_area" | "wall_area" | "floor_area" | "generic";
+    calculationType?: "deck_area" | "wall_area" | "floor_area" | "kitchen_size" | "fence_length" | "generic";
     elevatedModifier?: number;
     layoutChangeModifier?: number;
   };
@@ -158,6 +204,9 @@ export type ScopeTemplate = {
 
   /** Material category system — scope-specific material questions and benchmark defaults. */
   materialCategories?: ScopeMaterialCategories;
+
+  /** Template-driven confidence scoring — weights should sum to 100. */
+  confidenceWeights?: ScopeConfidenceWeights;
 };
 
 export type MatchedScopeTemplate = {

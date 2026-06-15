@@ -14,9 +14,16 @@ import {
 import { templateAllocationPercents } from "@/lib/cost-engine/build-cost-breakdown";
 import type { WorkAreaAllocationBreakdown } from "@/lib/cost-engine/estimate-trace";
 import { PLACEHOLDER_BASE_RANGES } from "@/lib/constants/quick-estimate";
+import { KITCHEN_SIZE_BENCHMARKS } from "@/lib/scopes/kitchen-renovation";
 import type { QualityLevel } from "@/lib/constants/quality-level";
 import type { ScopeRateAllocation } from "@/lib/cost-engine/rates/scope-rate-utils";
 import type { EstimateTraceDriver } from "@/lib/cost-engine/trace/types";
+import {
+  buildScopeComponentCalcInput,
+  calculateScopeFromComponents,
+  reconcileComponentsToTotal,
+  type EstimateComponent,
+} from "@/lib/cost-engine/estimate-components";
 
 export type TemplateCalculationResult = {
   centralEstimate: number;
@@ -41,6 +48,8 @@ export type TemplateCalculationResult = {
   assumptions: string[];
   confidenceReason: string | null;
   traceDrivers: EstimateTraceDriver[];
+  /** Internal component breakdown — foundation for detailed estimates and RFQs. */
+  estimateComponents?: EstimateComponent[];
 };
 
 function parseNumber(value: string | undefined): number | null {
@@ -88,6 +97,15 @@ function checkRequiredFacts(
   template: ScopeTemplate,
   answers: Record<string, string>
 ): boolean {
+  if (template.estimateRules.calculationType === "fence_length") {
+    const length = parseNumber(getAnswerValue(answers, "fence.length_m"));
+    const height = parseNumber(getAnswerValue(answers, "fence.height_m"));
+    const hasType =
+      Boolean(getAnswerValue(answers, "fence.fence_type")) ||
+      Boolean(getAnswerValue(answers, "fence.material_type"));
+    return Boolean(length && height && hasType);
+  }
+
   return template.estimateRules.requiredFactKeys.every((key) =>
     Boolean(parseNumber(getAnswerValue(answers, key)))
   );
@@ -192,7 +210,7 @@ export function calculateFromTemplate(
   const traceDrivers: EstimateTraceDriver[] = [];
   let centralEstimate = 0;
   let quantity = 0;
-  const unit = template.benchmarkRates.unit;
+  let unit = template.benchmarkRates.unit;
   let usedPackage = false;
   const scopeDef = getScopeRateDefinitionByKey(template.key);
   const scopeTypeKey = scopeDef?.scopeTypeKey ?? template.key;
@@ -574,6 +592,91 @@ export function calculateFromTemplate(
       }
       break;
     }
+    case "fence_length": {
+      const length = parseNumber(getAnswerValue(answers, "fence.length_m"));
+      const height = parseNumber(getAnswerValue(answers, "fence.height_m"));
+
+      if (length && height) {
+        quantity = length;
+        let rate = baseRate;
+        const resolved = resolveMaterialCategory({
+          scopeTypeKey: "fence",
+          answers,
+        });
+        if (resolved) {
+          rate = Math.round(baseRate * resolved.rateMultiplier);
+          if (resolved.source === "assumed") {
+            assumptions.push(
+              `Material category assumed: ${resolved.categoryLabel} (default benchmark)`
+            );
+          }
+        }
+
+        const heightFactor =
+          height <= 1.2 ? 0.95 : height <= 1.8 ? 1 : height <= 2.1 ? 1.08 : 1.15;
+        rate = Math.round(rate * heightFactor);
+        centralEstimate = Math.round(length * rate);
+        inputs.push(
+          `${template.name}: ${length}m × $${Math.round(rate)}/m at ${height}m height (template: ${template.key})`
+        );
+
+        if (isYes(getAnswerValue(answers, "fence.gate_included"))) {
+          const gateAdj = applyFlatDriver(
+            centralEstimate,
+            {
+              key: "gate",
+              label: "Gate",
+              type: "flat_allowance",
+              value: 850,
+              explanation: "Allowance for a standard gate.",
+              source: "template",
+            },
+            850
+          );
+          centralEstimate = gateAdj.central;
+          traceDrivers.push(gateAdj.driver);
+          allowances.push("Gate allowance");
+        }
+        if (isYes(getAnswerValue(answers, "fence.demolition_existing"))) {
+          const demoAdj = applyFlatDriver(
+            centralEstimate,
+            {
+              key: "fence_demolition",
+              label: "Existing fence removal",
+              type: "flat_allowance",
+              value: 600,
+              explanation: "Allowance for removing existing fencing.",
+              source: "template",
+            },
+            600
+          );
+          centralEstimate = demoAdj.central;
+          traceDrivers.push(demoAdj.driver);
+          allowances.push("Existing fence removal allowance");
+        }
+        if (isYes(getAnswerValue(answers, "fence.ground_conditions"))) {
+          const groundAdj = applyPercentDriver(
+            centralEstimate,
+            {
+              key: "difficult_ground",
+              label: "Difficult ground",
+              type: "percentage_adjustment",
+              value: 10,
+              explanation: "Difficult ground increases post setting time.",
+              source: "template",
+            },
+            10
+          );
+          centralEstimate = groundAdj.central;
+          traceDrivers.push(groundAdj.driver);
+          inputs.push("Difficult ground (+10%)");
+        }
+      } else {
+        const base = PLACEHOLDER_BASE_RANGES.other;
+        centralEstimate = Math.round((base.low + base.high) / 2);
+      }
+      break;
+    }
     case "floor_area": {
       const area = parseNumber(
         getAnswerValue(answers, "bathroom.floor_area_m2")
@@ -748,6 +851,90 @@ export function calculateFromTemplate(
       }
       break;
     }
+    case "kitchen_size": {
+      const sizeType =
+        getAnswerValue(answers, "kitchen.kitchen_size_type") ?? "unknown";
+      const sizeKey =
+        sizeType === "small" ||
+        sizeType === "medium" ||
+        sizeType === "large"
+          ? sizeType
+          : "medium";
+
+      const sizeRates = KITCHEN_SIZE_BENCHMARKS[sizeKey];
+      const central =
+        finishLevel === "budget"
+          ? sizeRates.low
+          : finishLevel === "premium"
+            ? sizeRates.high
+            : sizeRates.typical;
+
+      quantity = 1;
+      unit = "kitchen";
+      centralEstimate = central;
+      inputs.push(
+        `${template.name}: ${sizeKey} kitchen rough allowance $${Math.round(central).toLocaleString("en-NZ")}`
+      );
+      assumptions.push(
+        "Kitchen pricing is rough — confirm rates before relying on this."
+      );
+
+      if (isYes(getAnswerValue(answers, "kitchen.demolition_required"))) {
+        const demoAdj = applyFlatDriver(
+          centralEstimate,
+          {
+            key: "demolition",
+            label: "Demolition",
+            type: "flat_allowance",
+            value: 3500,
+            explanation: "Existing kitchen demolition allowance included.",
+            source: "template",
+          },
+          3500
+        );
+        centralEstimate = demoAdj.central;
+        traceDrivers.push(demoAdj.driver);
+        allowances.push("Kitchen demolition allowance");
+      }
+
+      if (isYes(getAnswerValue(answers, "kitchen.layout_changing"))) {
+        const mod = template.estimateRules.layoutChangeModifier ?? 1.15;
+        const pct = Math.round((mod - 1) * 100);
+        const layoutAdj = applyPercentDriver(
+          centralEstimate,
+          {
+            key: "layout_change",
+            label: "Layout changing",
+            type: "percentage_adjustment",
+            value: pct,
+            explanation: "Layout changes add services and coordination.",
+            source: "template",
+          },
+          pct
+        );
+        centralEstimate = layoutAdj.central;
+        traceDrivers.push(layoutAdj.driver);
+        inputs.push(`Layout changing (+${pct}%)`);
+      }
+
+      if (sizeType === "unknown") {
+        assumptions.push("Kitchen size assumed medium until confirmed.");
+        inputs.push("Kitchen size not confirmed — medium allowance used");
+      }
+
+      const benchtop = getAnswerValue(answers, "kitchen.benchtop_type");
+      if (!benchtop || benchtop === "not_sure") {
+        inputs.push("Kitchen benchtop not confirmed");
+      }
+
+      if (
+        !getAnswerValue(answers, "kitchen.cabinetry_length_m") &&
+        !getAnswerValue(answers, "kitchen.floor_area_m2")
+      ) {
+        inputs.push("Kitchen size/linear cabinetry not confirmed");
+      }
+      break;
+    }
     default: {
       const base = PLACEHOLDER_BASE_RANGES.other;
       centralEstimate = Math.round((base.low + base.high) / 2);
@@ -761,6 +948,20 @@ export function calculateFromTemplate(
         ? `${template.name}: measurements provided using ${rateSource === "org_rate" ? "your trade/material rates" : "your package rate"}.`
         : `${template.name}: measurements provided using Quotr benchmark rates.`
     : `${template.name}: missing key facts — placeholder range used.`;
+
+  const componentInput = buildScopeComponentCalcInput(
+    template.workAreaTypeKey,
+    answers,
+    orgRates,
+    effectiveQualityLevel
+  );
+  const componentResult = calculateScopeFromComponents(componentInput);
+  const estimateComponents = componentResult
+    ? reconcileComponentsToTotal(
+        componentResult.components,
+        Math.round(centralEstimate)
+      )
+    : undefined;
 
   return {
     centralEstimate: Math.round(centralEstimate),
@@ -784,5 +985,6 @@ export function calculateFromTemplate(
     assumptions,
     confidenceReason,
     traceDrivers,
+    estimateComponents,
   };
 }

@@ -49,7 +49,7 @@ export type ScopeTemplateBenchmarkRates = {
 };
 
 export type ScopeTemplateEstimateRules = {
-  calculationType: "deck_area" | "wall_area" | "floor_area" | "generic";
+  calculationType: "deck_area" | "wall_area" | "floor_area" | "kitchen_size" | "fence_length" | "generic";
   requiredFactKeys: string[];
   lowMultiplier: number;
   highMultiplier: number;

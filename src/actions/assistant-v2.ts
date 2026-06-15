@@ -6,6 +6,14 @@ import { formatKnownFactLabels } from "@/lib/assistant-v2/compute-information-co
 import { insertAssistantMessage } from "@/lib/assistant-v2/assistant-messages-data";
 import { loadProjectAssistantData } from "@/lib/assistant-v2/load-assistant-data";
 import {
+  loadAssistantConstraints,
+  loadAssistantEstimate,
+  loadAssistantMessages,
+  loadAssistantScopeQuestions,
+  loadAssistantScopes,
+} from "@/lib/assistant-v2/load-assistant-partial";
+import type { AssistantSyncKind } from "@/lib/assistant-v2/assistant-sync-queue";
+import {
   revalidateAssistantTags,
   revalidateConstraintsAndEstimate,
   revalidateEstimateOnly,
@@ -34,6 +42,7 @@ import {
 } from "@/lib/assistant-v2/confirm-internal-works";
 import { acceptScopeSuggestion } from "@/actions/scope-suggestions";
 import { ensureQuestionsForProjectScopes } from "@/lib/scope-questions-seed";
+import { runAssistantAutopilot } from "@/lib/assistant-v2/autopilot/run-assistant-autopilot";
 import { recalculateQuickEstimate } from "@/lib/cost-engine/recalculate-quick-estimate";
 import { resolveWorkAreaTypeKey } from "@/lib/project-assistant-questions";
 import { getProjectById } from "@/lib/projects-data";
@@ -48,11 +57,23 @@ import type {
   QuickEstimate,
 } from "@/types/database";
 import type { AssistantMessageRow } from "@/lib/assistant-v2/assistant-messages-data";
+import { getCurrentMissingItems } from "@/lib/assistant-v2/missing/get-current-missing-items";
+import { buildScopeBreakdown } from "@/lib/cost-engine/build-scope-breakdown";
+import {
+  buildEstimateInsight,
+  formatEstimateInsightForExport,
+} from "@/lib/cost-engine/build-estimate-insight";
+import {
+  parseQuickEstimateSummary,
+  resolveCalculationTrace,
+} from "@/lib/project-assistant-summary";
 
 export type AssistantV2ActionState = {
   error?: string;
   success?: boolean;
   message?: string;
+  warning?: string;
+  needsEstimateRecalc?: boolean;
   fieldErrors?: Record<string, string[]>;
   analysingMode?: "ai" | "rules";
   usedFallback?: boolean;
@@ -293,6 +314,7 @@ export async function confirmAssistantWorkAreas(
       result.includedNames.length > 0
         ? `Included ${result.includedNames.join(", ")} in estimate.`
         : "Work areas updated.",
+    needsEstimateRecalc: result.needsEstimateRecalc,
   };
 }
 
@@ -426,7 +448,7 @@ export async function autoSaveQualityLevel(
 export async function generateAssistantEstimate(
   projectId: string
 ): Promise<AssistantV2ActionState> {
-  const { organisationId } = await requireOrganisation();
+  const { organisationId, user } = await requireOrganisation();
   const supabase = await createClient();
 
   const result = await recalculateQuickEstimate(
@@ -436,52 +458,195 @@ export async function generateAssistantEstimate(
     { triggerEvent: "manual_recalculate" }
   );
 
+  if (result.success) {
+    await runAssistantAutopilot(supabase, {
+      organisationId,
+      projectId,
+      userId: user.id,
+      allowEstimateGeneration: false,
+    });
+  }
+
   revalidateEstimateOnly(projectId);
+  revalidateAssistantTags(projectId, ["messages"]);
   return {
     success: result.success,
-    error: result.error,
-    message: result.message ?? "Estimate updated.",
+    error: result.userMessage ?? result.error,
+    message: result.warning
+      ? `${result.message ?? "Estimate updated."} ${result.warning}`
+      : result.message ?? "Estimate updated.",
   };
 }
 
 export type AssistantSyncPayload = {
-  chatMessages: AssistantMessageRow[];
-  quickEstimate: QuickEstimate | null;
-  scopeQuestions: ScopeQuestionWithAnswers[];
-  confirmedScopes: (ProjectScope & { scope_types: { name: string } | null })[];
-  selectedConstraintSlugs: string[];
-  declinedConstraintSlugs: string[];
-  scopePackages: import("@/types/database").ProjectScopePackage[];
+  chatMessages?: AssistantMessageRow[];
+  quickEstimate?: QuickEstimate | null;
+  scopeQuestions?: ScopeQuestionWithAnswers[];
+  confirmedScopes?: (ProjectScope & { scope_types: { name: string } | null })[];
+  selectedConstraintSlugs?: string[];
+  declinedConstraintSlugs?: string[];
+  scopePackages?: import("@/types/database").ProjectScopePackage[];
 };
 
-export async function syncAssistantState(
-  projectId: string
+export type AssistantSyncOptions = {
+  kinds?: AssistantSyncKind[];
+  scopeId?: string;
+};
+
+async function loadAssistantSyncPayload(
+  projectId: string,
+  options?: AssistantSyncOptions
 ): Promise<{ data?: AssistantSyncPayload; error?: string }> {
   const { user, organisationId } = await requireOrganisation();
   const supabase = await createClient();
+  const kinds = options?.kinds ?? [
+    "messages",
+    "estimate",
+    "answers",
+    "scopes",
+    "constraints",
+  ];
+  const kindSet = new Set(kinds);
 
-  const { data, error } = await loadProjectAssistantData(
-    supabase,
-    organisationId,
-    projectId,
-    user.id
-  );
+  const payload: AssistantSyncPayload = {};
+  const loaders: Promise<void>[] = [];
 
-  if (error || !data) {
-    return { error: error ?? "Could not refresh assistant." };
+  if (kindSet.has("messages")) {
+    loaders.push(
+      loadAssistantMessages(supabase, organisationId, projectId).then(
+        (messages) => {
+          payload.chatMessages = messages;
+        }
+      )
+    );
   }
 
-  return {
-    data: {
-      chatMessages: data.chatMessages,
-      quickEstimate: data.quickEstimate,
-      scopeQuestions: data.scopeQuestions,
-      confirmedScopes: data.confirmedScopes,
-      selectedConstraintSlugs: data.selectedConstraintSlugs,
-      declinedConstraintSlugs: data.declinedConstraintSlugs,
-      scopePackages: data.scopePackages ?? [],
-    },
-  };
+  if (kindSet.has("estimate")) {
+    loaders.push(
+      loadAssistantEstimate(
+        supabase,
+        organisationId,
+        projectId,
+        user.id
+      ).then((estimate) => {
+        payload.quickEstimate = estimate;
+      })
+    );
+  }
+
+  if (kindSet.has("answers") || kindSet.has("scopes")) {
+    loaders.push(
+      loadAssistantScopeQuestions(
+        supabase,
+        organisationId,
+        projectId
+      ).then((questions) => {
+        payload.scopeQuestions = questions;
+      })
+    );
+  }
+
+  if (kindSet.has("scopes")) {
+    loaders.push(
+      loadAssistantScopes(supabase, organisationId, projectId).then(
+        ({ confirmedScopes, scopePackages }) => {
+          payload.confirmedScopes = confirmedScopes;
+          payload.scopePackages = scopePackages;
+        }
+      )
+    );
+  }
+
+  if (kindSet.has("constraints")) {
+    loaders.push(
+      (async () => {
+        const estimate =
+          payload.quickEstimate ??
+          (await loadAssistantEstimate(
+            supabase,
+            organisationId,
+            projectId,
+            user.id
+          ));
+        const constraints = await loadAssistantConstraints(
+          supabase,
+          organisationId,
+          projectId,
+          estimate?.id
+        );
+        payload.selectedConstraintSlugs = constraints.selectedConstraintSlugs;
+        payload.declinedConstraintSlugs = constraints.declinedConstraintSlugs;
+      })()
+    );
+  }
+
+  await Promise.all(loaders);
+  return { data: payload };
+}
+
+export async function syncAssistantState(
+  projectId: string,
+  options?: AssistantSyncOptions
+): Promise<{ data?: AssistantSyncPayload; error?: string }> {
+  if (!options?.kinds || options.kinds.length === 0) {
+    const { user, organisationId } = await requireOrganisation();
+    const supabase = await createClient();
+
+    const { data, error } = await loadProjectAssistantData(
+      supabase,
+      organisationId,
+      projectId,
+      user.id
+    );
+
+    if (error || !data) {
+      return { error: error ?? "Could not refresh assistant." };
+    }
+
+    return {
+      data: {
+        chatMessages: data.chatMessages,
+        quickEstimate: data.quickEstimate,
+        scopeQuestions: data.scopeQuestions,
+        confirmedScopes: data.confirmedScopes,
+        selectedConstraintSlugs: data.selectedConstraintSlugs,
+        declinedConstraintSlugs: data.declinedConstraintSlugs,
+        scopePackages: data.scopePackages ?? [],
+      },
+    };
+  }
+
+  return loadAssistantSyncPayload(projectId, options);
+}
+
+export async function syncAssistantEstimateOnly(projectId: string) {
+  return loadAssistantSyncPayload(projectId, { kinds: ["estimate"] });
+}
+
+export async function syncAssistantMessagesOnly(projectId: string) {
+  return loadAssistantSyncPayload(projectId, { kinds: ["messages"] });
+}
+
+export async function syncAssistantScopesOnly(projectId: string) {
+  return loadAssistantSyncPayload(projectId, {
+    kinds: ["scopes", "answers"],
+  });
+}
+
+export async function syncAssistantConstraintsAndEstimate(projectId: string) {
+  return loadAssistantSyncPayload(projectId, {
+    kinds: ["constraints", "estimate", "messages"],
+  });
+}
+
+export async function syncAssistantScopeAnswers(
+  projectId: string,
+  scopeId?: string
+) {
+  return loadAssistantSyncPayload(projectId, {
+    kinds: ["answers", "estimate", "scopes"],
+    scopeId,
+  });
 }
 
 export async function confirmInternalWorksSelection(
@@ -589,13 +754,21 @@ export async function updateAssistantMargin(
   );
 
   if (!result.success) {
-    return { error: result.error ?? "Could not recalculate sell range." };
+    console.error(
+      "[updateAssistantMargin]",
+      result.technicalMessage ?? result.error
+    );
+    return {
+      error: result.userMessage ?? result.error ?? "Could not recalculate sell range.",
+    };
   }
 
   revalidateEstimateOnly(projectId);
   return {
     success: true,
-    message: "Margin updated",
+    message: result.warning
+      ? `Margin updated. ${result.warning}`
+      : "Margin updated",
   };
 }
 
@@ -811,4 +984,130 @@ export async function exportScopeSummary(
   }
 
   return { summary: lines.join("\n") };
+}
+
+export async function exportEstimateSummary(
+  projectId: string
+): Promise<{ summary?: string; error?: string }> {
+  const { organisationId, user } = await requireOrganisation();
+  const supabase = await createClient();
+
+  const { data, error } = await loadProjectAssistantData(
+    supabase,
+    organisationId,
+    projectId,
+    user.id
+  );
+
+  if (error || !data) {
+    return { error: "Project not found." };
+  }
+
+  const quickEstimate = data.quickEstimate;
+  if (
+    !quickEstimate ||
+    quickEstimate.estimated_cost_low == null ||
+    quickEstimate.estimated_cost_high == null
+  ) {
+    return { error: "No estimate available to export." };
+  }
+
+  const summary = parseQuickEstimateSummary(quickEstimate.notes ?? null);
+  const estimateTrace = summary?.estimateTrace;
+  const calculationTrace = resolveCalculationTrace(quickEstimate);
+  const rateSourceLines = summary?.rateSourceLines ?? [];
+  const confidenceScore =
+    summary?.confidenceScore ?? estimateTrace?.confidenceScore ?? 0;
+
+  const workAreas = data.confirmedScopes.map((scope) => {
+    const typeKey = resolveWorkAreaTypeKey(
+      scope.scope_types?.name,
+      scope.name
+    );
+    const answers = buildMergedAnswersForScope(
+      scope.id,
+      scope.name,
+      scope.scope_types?.name ?? null,
+      data.scopeQuestions,
+      data.discovery
+    );
+    return {
+      scopeId: scope.id,
+      scopeName: scope.name,
+      workAreaTypeKey: typeKey,
+      answers,
+      included: true,
+    };
+  });
+
+  const actionableMissingItems = getCurrentMissingItems({
+    workAreas,
+    estimateTrace,
+  });
+
+  const scopeBreakdownItems = buildScopeBreakdown({
+    structuredBreakdown: estimateTrace?.structuredBreakdown,
+    workAreaTraces: estimateTrace?.workAreaTraces ?? [],
+    rateSourceLines,
+    confidenceScore,
+    targetMarginPercent: Number(quickEstimate.target_margin_percent ?? 5),
+    contingencyPercent: estimateTrace?.contingencyPercent ?? 5,
+    costBreakdown: summary?.costBreakdown ?? estimateTrace?.costBreakdown ?? null,
+    missingItems: actionableMissingItems,
+    globalAllowances: summary?.allowances ?? [],
+    globalConstraints: summary?.constraintsIncluded ?? [],
+  });
+
+  const costBreakdown = summary?.costBreakdown ?? estimateTrace?.costBreakdown ?? null;
+  const workAreaContexts = workAreas.map((area) => ({
+    scopeName: area.scopeName,
+    workAreaTypeKey: area.workAreaTypeKey,
+    answers: area.answers,
+  }));
+  const totalAllocations = costBreakdown
+    ? {
+        labour: costBreakdown.labour,
+        materials: costBreakdown.materials,
+        subcontractors: costBreakdown.subcontractors,
+        allowances: costBreakdown.allowances,
+        contingency: costBreakdown.contingency,
+      }
+    : estimateTrace?.structuredBreakdown?.scopes.length
+      ? estimateTrace.structuredBreakdown.scopes.reduce(
+          (acc, scope) => ({
+            labour: acc.labour + scope.allocations.labour,
+            materials: acc.materials + scope.allocations.materials,
+            subcontractors: acc.subcontractors + scope.allocations.subcontractors,
+            allowances: acc.allowances + scope.allocations.allowances,
+            contingency: acc.contingency + scope.allocations.contingency,
+          }),
+          {
+            labour: 0,
+            materials: 0,
+            subcontractors: 0,
+            allowances: 0,
+            contingency: 0,
+          }
+        )
+      : null;
+
+  const insight = buildEstimateInsight({
+    scopeBreakdownItems,
+    costBreakdown,
+    structuredBreakdown: estimateTrace?.structuredBreakdown,
+    calculationTrace: calculationTrace ?? null,
+    confidenceScore,
+    costLow: Number(quickEstimate.estimated_cost_low),
+    costHigh: Number(quickEstimate.estimated_cost_high),
+    sellLow: quickEstimate.recommended_sell_low,
+    sellHigh: quickEstimate.recommended_sell_high,
+    actionableMissingItems,
+    totalAllocations,
+    workAreaContexts,
+    globalAllowances: summary?.allowances ?? [],
+  });
+
+  return {
+    summary: formatEstimateInsightForExport(data.project.title, insight),
+  };
 }

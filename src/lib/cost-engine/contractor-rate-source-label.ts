@@ -3,8 +3,15 @@ import type { RateSource } from "@/lib/cost-engine/rates/get-base-rate-for-scope
 /** Contractor-facing rate source labels (no internal product names). */
 export function contractorRateSourceLabel(
   source: RateSource,
-  options?: { scopeLabel?: string; usesDefaultRateOnly?: boolean }
+  options?: {
+    scopeLabel?: string;
+    usesDefaultRateOnly?: boolean;
+    roughAllowance?: boolean;
+  }
 ): string {
+  if (options?.roughAllowance) {
+    return "Rough allowance";
+  }
   switch (source) {
     case "scope_rate":
       if (options?.usesDefaultRateOnly) {

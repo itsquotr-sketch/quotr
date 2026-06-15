@@ -107,6 +107,66 @@ export const retainingWallScopeTemplate: ScopeTemplate = {
         defaultIncluded: false,
       },
     ],
+    componentAllocation: {
+      labour: [
+        { key: "excavation_labour", label: "Excavation labour", weight: 4, defaultIncluded: true },
+        {
+          key: "machine_labour",
+          label: "Machine / labour",
+          weight: 3,
+          includeWhenFacts: ["retaining_wall.machine_access"],
+          defaultIncluded: true,
+        },
+        { key: "wall_build_labour", label: "Wall build labour", weight: 5, defaultIncluded: true },
+      ],
+      materials: [
+        { key: "wall_materials", label: "Wall materials", weight: 6, defaultIncluded: true },
+        { key: "drainage_materials", label: "Drainage materials", weight: 2, defaultIncluded: true },
+        { key: "consumables", label: "Consumables", weight: 2, defaultIncluded: true },
+      ],
+      subcontractors: [
+        {
+          key: "civil_subcontractor",
+          label: "Civil subcontractor",
+          weight: 3,
+          defaultIncluded: true,
+        },
+        {
+          key: "drainage_subcontractor",
+          label: "Drainage subcontractor",
+          weight: 4,
+          includeWhenFacts: ["retaining_wall.has_drainage"],
+          defaultIncluded: true,
+        },
+      ],
+      allowances: [
+        {
+          key: "backfill_allowance",
+          label: "Backfill allowance",
+          weight: 3,
+          includeWhenFacts: ["retaining_wall.has_backfill"],
+          defaultIncluded: true,
+        },
+        {
+          key: "cartage_allowance",
+          label: "Cartage allowance",
+          weight: 3,
+          defaultIncluded: true,
+        },
+        {
+          key: "engineering_allowance",
+          label: "Engineering allowance",
+          weight: 2,
+          defaultIncluded: false,
+        },
+        {
+          key: "unknown_conditions",
+          label: "Unknown conditions allowance",
+          weight: 2,
+          defaultIncluded: true,
+        },
+      ],
+    },
   },
 
   constraints: {

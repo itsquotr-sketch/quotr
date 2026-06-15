@@ -4,9 +4,6 @@ import {
   isFactKnown,
   shouldSkipQuestion,
 } from "@/lib/assistant-v2/facts/get-known-facts-for-scope";
-import {
-  getMaterialQuestionTextForWorkArea,
-} from "@/lib/scopes/material-categories";
 import { getTrackableFactsForWorkAreaType } from "@/lib/assistant-v2/discovery/generic-scope-discovery";
 import { getAllFactsForScope, getScopeByWorkAreaType } from "@/lib/scopes";
 import type { ScopeFactDefinition } from "@/lib/scopes/types";
@@ -163,6 +160,7 @@ function fenceFollowUps(
 
   if (
     isFactKnown(knownFacts, "fence.length_m") &&
+    !isFactKnown(knownFacts, "fence.fence_type") &&
     !isFactKnown(knownFacts, "fence.material_type")
   ) {
     addIfMissing(
@@ -170,9 +168,8 @@ function fenceFollowUps(
       knownFacts,
       scopeId,
       scopeTypeKey,
-      "material_type",
-      getMaterialQuestionTextForWorkArea(scopeTypeKey) ??
-        "What type of fencing should I assume?",
+      "fence_type",
+      "What type of fence should I assume?",
       90
     );
   }

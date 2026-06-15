@@ -117,6 +117,74 @@ export const deckScopeTemplate: ScopeTemplate = {
         defaultIncluded: false,
       },
     ],
+    componentAllocation: {
+      labour: [
+        { key: "framing_labour", label: "Framing labour", weight: 5, defaultIncluded: true },
+        { key: "decking_labour", label: "Decking labour", weight: 4, defaultIncluded: true },
+        { key: "project_management", label: "Project management", weight: 2, defaultIncluded: true },
+        {
+          key: "stairs_labour",
+          label: "Stairs labour",
+          weight: 3,
+          includeWhenFacts: ["deck.has_stairs"],
+          defaultIncluded: false,
+        },
+      ],
+      materials: [
+        { key: "decking_materials", label: "Decking materials", weight: 5, defaultIncluded: true },
+        { key: "fixings_materials", label: "Fixings", weight: 3, defaultIncluded: true },
+        { key: "substructure_materials", label: "Substructure materials", weight: 4, defaultIncluded: true },
+        {
+          key: "balustrade_materials",
+          label: "Balustrade materials",
+          weight: 3,
+          includeWhenFacts: ["deck.has_balustrade"],
+          defaultIncluded: false,
+        },
+      ],
+      subcontractors: [
+        {
+          key: "trade_coordination",
+          label: "Trade coordination",
+          weight: 2,
+          defaultIncluded: true,
+        },
+        {
+          key: "engineering_subcontractor",
+          label: "Engineering subcontractor",
+          weight: 2,
+          defaultIncluded: false,
+        },
+      ],
+      allowances: [
+        {
+          key: "demolition_allowance",
+          label: "Existing deck removal",
+          weight: 3,
+          includeWhenFacts: ["deck.has_existing_deck"],
+          defaultIncluded: false,
+        },
+        {
+          key: "cartage_allowance",
+          label: "Cartage allowance",
+          weight: 2,
+          defaultIncluded: true,
+        },
+        {
+          key: "access_allowance",
+          label: "Access allowance",
+          weight: 2,
+          includeWhenFacts: ["deck.tight_access"],
+          defaultIncluded: false,
+        },
+        {
+          key: "unknown_conditions",
+          label: "Unknown conditions allowance",
+          weight: 2,
+          defaultIncluded: true,
+        },
+      ],
+    },
   },
 
   constraints: {
@@ -162,10 +230,70 @@ export const deckScopeTemplate: ScopeTemplate = {
         askFactKey: "deck.height_m",
         questionText: "If elevated, how high off the ground?",
       },
+      {
+        whenFactKey: "deck.has_balustrade",
+        whenValue: "yes",
+        askFactKey: "deck.balustrade_supply",
+        questionText:
+          "Is balustrade supply and install, install only, or client supplied?",
+      },
     ],
   },
 
   materialCategories: DECK_MATERIAL_CATEGORIES,
+
+  confidenceWeights: [
+    {
+      key: "quantity",
+      label: "Area known",
+      weight: 25,
+      category: "quantity",
+      factKeys: ["deck.area_m2", "deck.length_m", "deck.width_m"],
+      matchMode: "any",
+    },
+    {
+      key: "material",
+      label: "Material known",
+      weight: 15,
+      category: "material",
+      factKeys: ["deck.material_type"],
+    },
+    {
+      key: "elevation",
+      label: "Elevation known",
+      weight: 15,
+      category: "quantity",
+      factKeys: ["deck.level_type"],
+    },
+    {
+      key: "finish",
+      label: "Finish level known",
+      weight: 10,
+      category: "finish",
+      factKeys: ["deck.finish_level"],
+    },
+    {
+      key: "inclusions",
+      label: "Scope inclusions confirmed",
+      weight: 15,
+      category: "inclusions",
+      factKeys: ["deck.has_stairs", "deck.has_balustrade", "deck.has_pergola"],
+    },
+    {
+      key: "site_access",
+      label: "Site access assessed",
+      weight: 10,
+      category: "site_access",
+      factKeys: ["deck.tight_access"],
+    },
+    {
+      key: "rate_source",
+      label: "Rate source known",
+      weight: 10,
+      category: "rate_source",
+      factKeys: [],
+    },
+  ],
 
   estimateBreakdown: {
     defaultLineGroups: [

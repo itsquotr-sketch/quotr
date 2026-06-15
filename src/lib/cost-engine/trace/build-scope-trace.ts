@@ -4,6 +4,8 @@ import { contractorRateSourceLabel } from "@/lib/cost-engine/contractor-rate-sou
 import type { QuickEstimateWorkAreaInput } from "@/lib/cost-engine/quick-estimate-input";
 import { buildRange } from "@/lib/cost-engine/range-builder";
 import type { RateSource } from "@/lib/cost-engine/rates/get-base-rate-for-scope";
+import type { EstimateComponent } from "@/lib/cost-engine/estimate-components";
+import { estimateComponentsToTrace } from "@/lib/cost-engine/estimate-components/map-components-to-trace";
 import {
   buildScopeExclusionsFromComponents,
   resolveScopeComponents,
@@ -45,6 +47,7 @@ export type ScopeCalcTraceInput = {
   assumptions: string[];
   traceDrivers?: EstimateTraceDriver[];
   costBreakdown?: CostBreakdown;
+  estimateComponents?: EstimateComponent[];
 };
 
 function mapRateSource(
@@ -402,28 +405,32 @@ export function buildScopeTrace(input: ScopeCalcTraceInput): EstimateTraceScope 
     resolvedComponents,
     template?.exclusions.default ?? []
   );
-  const componentSource: EstimateTraceComponent["source"] =
-    input.rateSource === "scope_rate" ||
-    input.rateSource === "org_rate" ||
-    input.rateSource === "package_rate"
-      ? "user_rate"
-      : input.rateSource === "template_benchmark" ||
-          input.rateSource === "regional_fallback"
-        ? "benchmark"
-        : "assumed";
-  const components: EstimateTraceComponent[] = resolvedComponents.map((c) => ({
-    key: c.key,
-    label: c.label,
-    category: mapComponentCategory(c.category),
-    amount: c.amount ?? 0,
-    source: c.amount != null ? componentSource : "assumed",
-    included: c.included,
-    explanation:
-      c.assumption ??
-      (c.included
-        ? `${c.label} included in estimate.`
-        : `${c.label} not included.`),
-  }));
+
+  const components: EstimateTraceComponent[] = input.estimateComponents?.length
+    ? estimateComponentsToTrace(input.estimateComponents, input.rateSource)
+    : resolvedComponents.map((c) => ({
+        key: c.key,
+        label: c.label,
+        category: mapComponentCategory(c.category),
+        amount: c.amount ?? 0,
+        source:
+          c.amount != null
+            ? input.rateSource === "scope_rate" ||
+              input.rateSource === "org_rate" ||
+              input.rateSource === "package_rate"
+              ? "user_rate"
+              : input.rateSource === "template_benchmark" ||
+                  input.rateSource === "regional_fallback"
+                ? "benchmark"
+                : "assumed"
+            : "assumed",
+        included: c.included,
+        explanation:
+          c.assumption ??
+          (c.included
+            ? `${c.label} included in estimate.`
+            : `${c.label} not included.`),
+      }));
 
   const missingFromAnswers = getMissingFactsForWorkArea(
     input.workArea.workAreaTypeKey,

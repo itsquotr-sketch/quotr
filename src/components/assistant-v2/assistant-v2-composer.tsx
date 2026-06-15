@@ -27,6 +27,7 @@ export function AssistantV2Composer({
     resolveOptimisticMessage,
     syncAssistant,
     clearOptimisticMessages,
+    flushInFlight,
   } = useAssistantChat();
   const { markSaving, markUpdating, markSaved, markIdle, requestBreakdownOpen, requestWhyOpen } =
     useEstimateUpdate();
@@ -37,7 +38,7 @@ export function AssistantV2Composer({
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     const content = text.trim();
-    if (!content || pending) return;
+    if (!content || pending || flushInFlight) return;
 
     setError(null);
     const optimisticId = addOptimisticUserMessage(content);
@@ -108,7 +109,7 @@ export function AssistantV2Composer({
           onChange={(e) => setText(e.target.value)}
           placeholder="e.g. 50m² timber deck, standard finish, tight access…"
           rows={2}
-          disabled={disabled || pending}
+          disabled={disabled || pending || flushInFlight}
           className="min-h-0 flex-1 resize-none border-0 bg-transparent shadow-none focus-visible:ring-0"
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {

@@ -1,5 +1,7 @@
 import { deckScope } from "@/lib/scopes/deck";
+import { fenceScope } from "@/lib/scopes/fence";
 import { bathroomRenovationScope } from "@/lib/scopes/bathroom-renovation";
+import { kitchenRenovationScope } from "@/lib/scopes/kitchen-renovation";
 import { retainingWallScope } from "@/lib/scopes/retaining-wall";
 
 export type ScopeRateDefinition = {
@@ -43,6 +45,26 @@ export const SCOPE_RATE_DEFINITIONS: ScopeRateDefinition[] = [
     benchmarkLow: retainingWallScope.benchmarkRates.low,
     benchmarkStandard: retainingWallScope.benchmarkRates.typical,
     benchmarkPremium: retainingWallScope.benchmarkRates.high,
+  },
+  {
+    scopeTypeKey: fenceScope.id,
+    label: "Fence",
+    workAreaTypeKey: fenceScope.workAreaTypeKey,
+    unit: fenceScope.benchmarkRates.unit,
+    unitLabel: "m",
+    benchmarkLow: fenceScope.benchmarkRates.low,
+    benchmarkStandard: fenceScope.benchmarkRates.typical,
+    benchmarkPremium: fenceScope.benchmarkRates.high,
+  },
+  {
+    scopeTypeKey: kitchenRenovationScope.id,
+    label: "Kitchen renovation",
+    workAreaTypeKey: kitchenRenovationScope.workAreaTypeKey,
+    unit: kitchenRenovationScope.benchmarkRates.unit,
+    unitLabel: "kitchen",
+    benchmarkLow: kitchenRenovationScope.benchmarkRates.low,
+    benchmarkStandard: kitchenRenovationScope.benchmarkRates.typical,
+    benchmarkPremium: kitchenRenovationScope.benchmarkRates.high,
   },
 ];
 

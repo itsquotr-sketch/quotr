@@ -13,11 +13,15 @@ import { recalculateQuickEstimate } from "@/lib/cost-engine/recalculate-quick-es
 import type { EstimateChangeEvent } from "@/lib/cost-engine/recalculate-quick-estimate";
 import { formatCurrencyRange } from "@/lib/format-currency";
 import { listScopeQuestionsForProject } from "@/lib/project-assistant-data";
+import { resolveWorkAreaTypeKey } from "@/lib/project-assistant-questions";
 import { getScopeByAlias } from "@/lib/scopes";
 import {
   getCanonicalTemplateByAlias,
-  UNSUPPORTED_SCOPE_PRICING_MESSAGE,
 } from "@/lib/scopes/templates";
+import {
+  buildMultiScopePricingGuidance,
+  resolveScopePricingState,
+} from "@/lib/scopes/pricing-state";
 import { ensureQuestionsForProjectScopes } from "@/lib/scope-questions-seed";
 import { syncScopeQuestionsForScope } from "@/lib/scope-questions-seed";
 import { logSupabaseError } from "@/lib/supabase/log-error";
@@ -403,11 +407,18 @@ export async function executeAddWorkArea(
     { triggerEvent: "work_area_added", changeReason: `${displayName} added` }
   );
 
+  const pricingState = resolveScopePricingState({
+    workAreaTypeKey: canonicalTemplate?.workAreaTypeKey ?? displayName,
+    scopeName: displayName,
+  });
+
   const message = isCustom
-    ? `Added ${displayName} as a custom work area. Needs pricing before the estimate can include this — it is excluded from the quick estimate for now.`
-    : canonicalTemplate && !canonicalTemplate.pricing.supported
-      ? `Added ${displayName} to the project. ${UNSUPPORTED_SCOPE_PRICING_MESSAGE} It is excluded from the quick estimate for now.`
-      : `Added ${displayName} to the project and included it in the quick estimate.`;
+    ? `Added ${displayName} as a custom work area. ${pricingState.message} It is excluded from the quick estimate for now.`
+    : !pricingState.canIncludeInEstimate
+      ? `Added ${displayName} to the project. ${pricingState.message}`
+      : pricingState.usesRoughAllowance
+        ? `Added ${displayName} to the project. ${pricingState.message}`
+        : `Added ${displayName} to the project and included it in the quick estimate.`;
 
   await insertAssistantMessage(supabase, {
     organisationId: params.organisationId,
@@ -419,14 +430,44 @@ export async function executeAddWorkArea(
   });
 
   if (includeInEstimate && !isCustom) {
-    await appendScopeFollowUpIfNeeded(supabase, {
+  await appendScopeFollowUpIfNeeded(supabase, {
+    organisationId: params.organisationId,
+    projectId: params.projectId,
+    userId: params.userId,
+    scopeId: scope.id,
+    scopeName: displayName,
+    action: "added",
+  });
+
+  const { data: allScopes } = await supabase
+    .from("project_scopes")
+    .select("name, scope_types(name)")
+    .eq("project_id", params.projectId)
+    .eq("organisation_id", params.organisationId);
+
+  const guidance = buildMultiScopePricingGuidance({
+    workAreas: (allScopes ?? []).map((s) => ({
+      scopeName: s.name,
+      workAreaTypeKey: resolveWorkAreaTypeKey(
+        (s.scope_types as { name: string } | null)?.name ?? null,
+        s.name
+      ),
+    })),
+  });
+
+  if (guidance) {
+    await insertAssistantMessage(supabase, {
       organisationId: params.organisationId,
       projectId: params.projectId,
       userId: params.userId,
-      scopeId: scope.id,
-      scopeName: displayName,
-      action: "added",
+      role: "assistant",
+      content: guidance.message,
+      metadata: {
+        messageType: "fallback_options",
+        fallbackOptions: guidance.options,
+      },
     });
+  }
   }
 
   return { success: true, message, estimateRecalculated: includeInEstimate };

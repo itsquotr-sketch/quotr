@@ -855,6 +855,9 @@ export interface Database {
           notes: string | null;
           trace: Json | null;
           trace_version: string | null;
+          estimate_status: string;
+          failure_reason: string | null;
+          last_calculated_at: string | null;
           created_by: string | null;
           created_at: string;
           updated_at: string;
@@ -878,6 +881,9 @@ export interface Database {
           notes?: string | null;
           trace?: Json | null;
           trace_version?: string | null;
+          estimate_status?: string;
+          failure_reason?: string | null;
+          last_calculated_at?: string | null;
           created_by?: string | null;
           created_at?: string;
           updated_at?: string;
@@ -901,6 +907,9 @@ export interface Database {
           notes?: string | null;
           trace?: Json | null;
           trace_version?: string | null;
+          estimate_status?: string;
+          failure_reason?: string | null;
+          last_calculated_at?: string | null;
           created_by?: string | null;
           created_at?: string;
           updated_at?: string;
@@ -941,6 +950,7 @@ export interface Database {
           rate_source: string | null;
           trigger_event: string | null;
           calculation_trace: Json | null;
+          trace_version: string | null;
           created_at: string;
         };
         Insert: {
@@ -961,6 +971,7 @@ export interface Database {
           rate_source?: string | null;
           trigger_event?: string | null;
           calculation_trace?: Json | null;
+          trace_version?: string | null;
           created_at?: string;
         };
         Update: {
@@ -981,6 +992,7 @@ export interface Database {
           rate_source?: string | null;
           trigger_event?: string | null;
           calculation_trace?: Json | null;
+          trace_version?: string | null;
           created_at?: string;
         };
         Relationships: [

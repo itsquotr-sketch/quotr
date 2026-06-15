@@ -30,8 +30,12 @@ export const bathroomRenovationScope: ScopeDefinition = {
       questionText: "Approximate bathroom floor area?",
       placeholder: "e.g. 6",
       extractionPatterns: [
-        /bathroom\s*(?:floor\s*)?(?:area|size)?\s*(?:of|about|approx(?:imately)?\.?|is)?\s*(\d+(?:\.\d+)?)\s*(?:m2|m²|sqm)/i,
+        /bathroom\s*(?:floor\s*)?(?:area|size)?\s*(?:of|about|approx(?:imately)?\.?|around|is)?\s*(\d+(?:\.\d+)?)\s*(?:m2|m²|sqm|square\s*met(?:re|er)s?)/i,
+        /(?:around|approx(?:\.|imately)?|about)\s*(\d+(?:\.\d+)?)\s*(?:m2|m²|sqm|square\s*met(?:re|er)s?)(?:\s+floor\s*area)?(?=[\s,;.]*(?:bathroom|tiling|shower|vanity|toilet|reno)|$)/i,
+        /(\d+(?:\.\d+)?)\s*(?:m2|m²|sqm|square\s*met(?:re|er)s?)\s*(?:floor\s*)?area/i,
+        /floor\s*area\s*(?:(?:of|is|about|around|approx(?:\.|imately)?)\s*)?(\d+(?:\.\d+)?)\s*(?:m2|m²|sqm|square\s*met(?:re|er)s?)/i,
         /(\d+(?:\.\d+)?)\s*(?:m2|m²|sqm)\s*bathroom/i,
+        /bathroom\s+is\s+(\d+(?:\.\d+)?)\s*(?:m2|m²|sqm)/i,
       ],
       extractValue: (m) => m[1] ?? null,
     },
@@ -134,7 +138,12 @@ export const bathroomRenovationScope: ScopeDefinition = {
       required: false,
       affectsEstimate: true,
       affectsConfidence: true,
-      questionText: "Is plumbing being relocated?",
+      questionText: "Are plumbing locations moving?",
+      dependsOn: {
+        factKey: "bathroom.layout_changing",
+        operator: "equals",
+        value: "yes",
+      },
       options: [...YES_NO_UNSURE],
       extractionPatterns: [
         /\bplumb(?:ing)?\s+relocat/i,

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState, useTransition } from "react"
 import { useRouter } from "next/navigation";
 import { resetAssistant, type AssistantSyncPayload } from "@/actions/assistant-v2";
 import { AssistantChatProvider } from "@/components/assistant-v2/assistant-chat-context";
+import { AssistantErrorBoundary } from "@/components/assistant-v2/assistant-error-boundary";
 import { AssistantV2Chat } from "@/components/assistant-v2/assistant-v2-chat";
 import { AssistantV2Composer } from "@/components/assistant-v2/assistant-v2-composer";
 import { AssistantV2Header } from "@/components/assistant-v2/assistant-v2-header";
@@ -18,27 +19,18 @@ import { buildMergedAnswersForScope } from "@/lib/assistant-v2/build-merged-answ
 import type { AssistantMessageRow } from "@/lib/assistant-v2/assistant-messages-data";
 import { evaluateAssistantProjectCompleteness } from "@/lib/assistant-v2/completeness/build-evaluate-input";
 import type { ProjectCompletenessResult } from "@/lib/assistant-v2/completeness/evaluate-project-completeness";
-import {
-  getCriticalOrUsefulMissing,
-  getCurrentMissingItems,
-  getOptionalMissing,
-} from "@/lib/assistant-v2/missing/get-current-missing-items";
-import {
-  computeProjectCompleteness,
-  type WorkAreaCompletenessInput,
-} from "@/lib/assistant-v2/compute-information-completeness";
+import type { WorkAreaCompletenessInput } from "@/lib/assistant-v2/compute-information-completeness";
 import type { ScopeGroupInput } from "@/lib/assistant-v2/get-next-pricing-question";
+import {
+  evaluateConfidence,
+  confidenceStatusToTier,
+} from "@/lib/assistant-v2/confidence/evaluate-confidence";
 import { parseQuickEstimateSummary, resolveCalculationTrace } from "@/lib/project-assistant-summary";
 import { labelForQualityLevel, normaliseQualityLevel } from "@/lib/constants/quality-level";
-import {
-  buildEstimateQualityFactors,
-  resolveEstimateQualityTier,
-} from "@/lib/cost-engine/estimate-quality";
 import type { QuickEstimateConfidenceLevel } from "@/lib/constants/quick-estimate";
 import type { DiscoveryResult } from "@/lib/ai/discovery/types";
 import type { ScopeQuestionWithAnswers } from "@/lib/project-assistant-data";
 import { resolveWorkAreaTypeKey } from "@/lib/project-assistant-questions";
-import { isMaterialCategoryUserProvided } from "@/lib/scopes/material-categories";
 import type {
   Project,
   ProjectScope,
@@ -69,7 +61,9 @@ export interface AssistantV2ShellProps {
 export function AssistantV2Shell(props: AssistantV2ShellProps) {
   return (
     <EstimateUpdateProvider>
-      <AssistantV2ShellInner {...props} />
+      <AssistantErrorBoundary projectId={props.projectId}>
+        <AssistantV2ShellInner {...props} />
+      </AssistantErrorBoundary>
     </EstimateUpdateProvider>
   );
 }
@@ -92,7 +86,12 @@ function AssistantV2ShellInner({
 }: AssistantV2ShellProps) {
   const router = useRouter();
   const [resetPending, startReset] = useTransition();
-  const { recordEstimateSnapshot, breakdownOpenRequest, whyOpenRequest } = useEstimateUpdate();
+  const {
+    recordEstimateSnapshot,
+    breakdownOpenRequest,
+    whyOpenRequest,
+    isSyncCurrent,
+  } = useEstimateUpdate();
 
   const [liveEstimate, setLiveEstimate] = useState(quickEstimate);
   const [liveScopeQuestions, setLiveScopeQuestions] = useState(scopeQuestions);
@@ -124,15 +123,24 @@ function AssistantV2ShellInner({
     initialScopePackages,
   ]);
 
-  const handleAssistantSync = useCallback((payload: AssistantSyncPayload) => {
-    setLiveChatMessages(payload.chatMessages);
-    setLiveEstimate(payload.quickEstimate);
-    setLiveScopeQuestions(payload.scopeQuestions);
-    setLiveConfirmedScopes(payload.confirmedScopes);
-    setLiveDeclinedConstraints(payload.declinedConstraintSlugs);
-    setLiveSelectedConstraints(payload.selectedConstraintSlugs);
-    setLiveScopePackages(payload.scopePackages ?? []);
-  }, []);
+  const handleAssistantSync = useCallback(
+    (payload: AssistantSyncPayload, syncVersion?: number) => {
+      if (syncVersion !== undefined && !isSyncCurrent(syncVersion)) {
+        return;
+      }
+      if (payload.chatMessages) setLiveChatMessages(payload.chatMessages);
+      if (payload.quickEstimate !== undefined)
+        setLiveEstimate(payload.quickEstimate);
+      if (payload.scopeQuestions) setLiveScopeQuestions(payload.scopeQuestions);
+      if (payload.confirmedScopes) setLiveConfirmedScopes(payload.confirmedScopes);
+      if (payload.declinedConstraintSlugs)
+        setLiveDeclinedConstraints(payload.declinedConstraintSlugs);
+      if (payload.selectedConstraintSlugs)
+        setLiveSelectedConstraints(payload.selectedConstraintSlugs);
+      if (payload.scopePackages) setLiveScopePackages(payload.scopePackages);
+    },
+    [isSyncCurrent]
+  );
 
   const scopeGroups: ScopeGroupInput[] = useMemo(() => {
     return liveConfirmedScopes
@@ -187,100 +195,42 @@ function AssistantV2ShellInner({
     suggestions,
   ]);
 
-  const completenessPercent = useMemo(
-    () => computeProjectCompleteness(workAreas),
-    [workAreas]
-  );
-
   const estimateSummary = parseQuickEstimateSummary(liveEstimate?.notes ?? null);
 
   const qualityLevel = (liveEstimate?.confidence_level ??
     "low") as QuickEstimateConfidenceLevel;
 
-  const estimateQualityTier = useMemo(() => {
-    const includedCount = workAreas.filter((a) => a.included !== false).length;
-    const missingItems = getCurrentMissingItems({
-      workAreas: workAreas.map((area) => ({
-        scopeId: area.scopeId ?? "",
-        scopeName: area.scopeName ?? "Work area",
-        workAreaTypeKey: area.workAreaTypeKey,
-        answers: area.answers,
-        included: area.included !== false,
-      })),
-      estimateTrace: estimateSummary?.estimateTrace,
-    });
-    const criticalOrUseful = getCriticalOrUsefulMissing(missingItems);
-    const optionalOnly =
-      criticalOrUseful.length === 0 &&
-      getOptionalMissing(missingItems).length > 0;
+  const siteConstraintsAssessed =
+    (estimateSummary?.constraintsApplied?.length ?? 0) > 0 ||
+    liveDeclinedConstraints.length > 0 ||
+    projectCompleteness.projectStatus === "enough_for_draft" ||
+    projectCompleteness.projectStatus === "quote_ready";
 
-    return resolveEstimateQualityTier({
-      confidenceLevel: qualityLevel,
-      confidenceScore:
-        estimateSummary?.confidenceScore ?? projectCompleteness.overallCompleteness,
-      hasKeyMeasurements:
-        includedCount > 0 &&
-        (projectCompleteness.overallCompleteness >= 50 ||
-          projectCompleteness.projectStatus === "enough_for_draft" ||
-          projectCompleteness.projectStatus === "quote_ready"),
-      workAreasConfirmed: includedCount > 0,
-      qualityLevel: finishLevel,
-      siteConstraintsAssessed:
-        (estimateSummary?.constraintsApplied?.length ?? 0) > 0 ||
-        liveDeclinedConstraints.length > 0 ||
-        projectCompleteness.projectStatus === "enough_for_draft" ||
-        projectCompleteness.projectStatus === "quote_ready",
-      missingInformationCount:
-        criticalOrUseful.length > 0
-          ? criticalOrUseful.length
-          : (estimateSummary?.missingInformation?.length ?? 0),
-      criticalOrUsefulMissingCount: criticalOrUseful.length,
-      optionalOnlyMissing: optionalOnly,
-    });
-  }, [
-    workAreas,
-    qualityLevel,
-    estimateSummary,
-    projectCompleteness,
-    liveDeclinedConstraints.length,
-    finishLevel,
-  ]);
+  const confidenceEvaluation = useMemo(
+    () =>
+      evaluateConfidence({
+        workAreas: workAreas.map((area) => ({
+          scopeId: area.scopeId ?? "",
+          scopeName: area.scopeName ?? "Work area",
+          workAreaTypeKey: area.workAreaTypeKey,
+          answers: area.answers,
+          included: area.included !== false,
+        })),
+        qualityLevel: finishLevel,
+        siteConstraintsAssessed,
+        rateSourceLines: estimateSummary?.rateSourceLines,
+      }),
+    [
+      workAreas,
+      finishLevel,
+      siteConstraintsAssessed,
+      estimateSummary?.rateSourceLines,
+    ]
+  );
 
-  const qualityFactors = useMemo(() => {
-    const included = workAreas.filter((a) => a.included !== false);
-    const materialsKnown = included.some((area) =>
-      isMaterialCategoryUserProvided(
-        area.answers,
-        undefined,
-        area.workAreaTypeKey
-      )
-    );
-    const accessKnown = included.some((area) =>
-      Object.entries(area.answers).some(
-        ([key, val]) =>
-          (key.includes("access") || key.includes("level_type")) &&
-          val &&
-          val !== "unknown"
-      )
-    );
-
-    return buildEstimateQualityFactors({
-      hasKeyMeasurements: projectCompleteness.overallCompleteness >= 50,
-      workAreasConfirmed: included.length > 0,
-      qualityLevel: finishLevel,
-      siteConstraintsAssessed:
-        (estimateSummary?.constraintsApplied?.length ?? 0) > 0 ||
-        liveDeclinedConstraints.length > 0,
-      materialsKnown,
-      accessKnown,
-    });
-  }, [
-    workAreas,
-    projectCompleteness.overallCompleteness,
-    finishLevel,
-    estimateSummary,
-    liveDeclinedConstraints.length,
-  ]);
+  const estimateQualityTier = confidenceStatusToTier(
+    confidenceEvaluation.overallStatus
+  );
 
   const costMid =
     liveEstimate?.estimated_cost_low != null &&
@@ -291,12 +241,15 @@ function AssistantV2ShellInner({
       : null;
 
   useEffect(() => {
-    recordEstimateSnapshot(costMid, completenessPercent);
-    sessionStorage.setItem(
-      `quotr-v2-confidence-${projectId}`,
-      String(completenessPercent)
-    );
-  }, [costMid, completenessPercent, projectId, recordEstimateSnapshot]);
+    recordEstimateSnapshot(costMid, confidenceEvaluation.overallScore);
+    const timer = setTimeout(() => {
+      sessionStorage.setItem(
+        `quotr-v2-confidence-${projectId}`,
+        String(confidenceEvaluation.overallScore)
+      );
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [costMid, confidenceEvaluation.overallScore, projectId, recordEstimateSnapshot]);
 
   function handleReset() {
     startReset(async () => {
@@ -318,20 +271,23 @@ function AssistantV2ShellInner({
 
   const estimatePanelBaseProps = {
     projectId,
+    projectTitle: project.title,
     quickEstimate: liveEstimate,
-    qualityFactors,
     lastEstimateChange: estimateSummary?.lastEstimateChange ?? null,
     costBreakdown: estimateSummary?.costBreakdown ?? null,
-    confidenceScore: estimateSummary?.confidenceScore ?? completenessPercent,
+    confidenceScore: confidenceEvaluation.overallScore,
     confidenceLevel: qualityLevel,
     qualityLevel: finishLevel,
     hasKeyMeasurements: projectCompleteness.overallCompleteness >= 50,
     workAreasConfirmed: workAreas.filter((a) => a.included !== false).length > 0,
-    siteConstraintsAssessed:
-      (estimateSummary?.constraintsApplied?.length ?? 0) > 0 ||
-      liveDeclinedConstraints.length > 0 ||
-      projectCompleteness.projectStatus === "enough_for_draft" ||
-      projectCompleteness.projectStatus === "quote_ready",
+    siteConstraintsAssessed,
+    pendingSuggestionCount: suggestions.filter((s) => s.status === "pending")
+      .length,
+    sourceNotes: project.initial_notes ?? project.client_brief ?? "",
+    scopeQuestions: liveScopeQuestions,
+    discovery,
+    selectedConstraintSlugs: liveSelectedConstraints,
+    declinedConstraintSlugs: liveDeclinedConstraints,
     estimateTrace: estimateSummary?.estimateTrace ?? null,
     calculationTrace: resolveCalculationTrace(liveEstimate) ?? null,
     finishLevel: labelForQualityLevel(finishLevel),
@@ -371,7 +327,7 @@ function AssistantV2ShellInner({
           onSync={handleAssistantSync}
         >
           <div className="flex min-w-0 flex-1 flex-col lg:w-[70%]">
-            <div className="border-b px-4 py-3 lg:hidden">
+            <div className="min-w-0 border-b px-4 py-3 lg:hidden">
               <AssistantV2ConnectedEstimatePanel
                 {...estimatePanelBaseProps}
                 compact
@@ -387,14 +343,17 @@ function AssistantV2ShellInner({
                 scopeGroups={scopeGroups}
                 scopeQuestions={liveScopeQuestions}
                 qualityLevel={finishLevel}
+                quickEstimate={liveEstimate}
+                sourceNotes={project.initial_notes ?? project.client_brief ?? ""}
                 projectCompleteness={projectCompleteness}
+                overallUnderstandingScore={confidenceEvaluation.overallScore}
                 showGreeting={false}
                 benchmarkScopesForOnboarding={
                   estimateSummary?.benchmarkScopesForOnboarding ?? []
                 }
               />
 
-              <div className="shrink-0 border-t bg-background px-4 py-3 lg:px-0">
+              <div className="min-w-0 shrink-0 border-t bg-background px-4 py-3 lg:px-0">
                 <AssistantV2Composer
                   projectId={projectId}
                   showWelcome={showWelcome}

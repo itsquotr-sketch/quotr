@@ -1,6 +1,10 @@
 import type { QualityLevel } from "@/lib/constants/quality-level";
 import type { QuickEstimateConfidenceLevel } from "@/lib/constants/quick-estimate";
-
+import {
+  confidenceStatusToTier,
+  describeConfidenceStatus,
+  type ConfidenceEvaluationResult,
+} from "@/lib/assistant-v2/confidence/evaluate-confidence";
 export type EstimateQualityTier = "LOW" | "FAIR" | "GOOD" | "READY";
 
 export type EstimateQualityFactor = {
@@ -55,68 +59,30 @@ export function buildEstimateQualityFactors(
   ];
 }
 
-/** User-facing estimate quality tier — confidence score stays internal. */
+/** User-facing estimate quality tier — derived from confidence engine (Sprint 13C). */
 export function resolveEstimateQualityTier(input: {
-  confidenceLevel: QuickEstimateConfidenceLevel;
-  confidenceScore: number;
-  hasKeyMeasurements: boolean;
-  workAreasConfirmed: boolean;
-  qualityLevel: QualityLevel;
-  siteConstraintsAssessed: boolean;
-  missingInformationCount: number;
+  confidenceLevel?: QuickEstimateConfidenceLevel;
+  confidenceScore?: number;
+  hasKeyMeasurements?: boolean;
+  workAreasConfirmed?: boolean;
+  qualityLevel?: QualityLevel;
+  siteConstraintsAssessed?: boolean;
+  missingInformationCount?: number;
   criticalOrUsefulMissingCount?: number;
   optionalOnlyMissing?: boolean;
+  /** Preferred: pass full evaluation from evaluateConfidence(). */
+  confidenceEvaluation?: ConfidenceEvaluationResult;
 }): EstimateQualityTier {
-  const {
-    confidenceLevel,
-    confidenceScore,
-    hasKeyMeasurements,
-    workAreasConfirmed,
-    qualityLevel,
-    siteConstraintsAssessed,
-    missingInformationCount,
-    criticalOrUsefulMissingCount,
-    optionalOnlyMissing,
-  } = input;
+  if (input.confidenceEvaluation) {
+    return confidenceStatusToTier(input.confidenceEvaluation.overallStatus);
+  }
 
-  const blockingMissing =
-    criticalOrUsefulMissingCount ?? missingInformationCount;
-
-  if (
-    confidenceLevel === "high" &&
-    confidenceScore >= 75 &&
-    hasKeyMeasurements &&
-    workAreasConfirmed &&
-    qualityLevel !== "unknown" &&
-    siteConstraintsAssessed &&
-    (optionalOnlyMissing || blockingMissing <= 1)
-  ) {
+  const score = input.confidenceScore ?? 0;
+  if (score >= 90 && (input.criticalOrUsefulMissingCount ?? 0) === 0) {
     return "READY";
   }
-
-  if (
-    confidenceScore >= 55 &&
-    hasKeyMeasurements &&
-    workAreasConfirmed &&
-    qualityLevel !== "unknown" &&
-    blockingMissing === 0
-  ) {
-    return "READY";
-  }
-
-  if (
-    confidenceScore >= 55 &&
-    hasKeyMeasurements &&
-    workAreasConfirmed &&
-    qualityLevel !== "unknown"
-  ) {
-    return "GOOD";
-  }
-
-  if (confidenceScore >= 35 && workAreasConfirmed) {
-    return "FAIR";
-  }
-
+  if (score >= 70) return "GOOD";
+  if (score >= 40) return "FAIR";
   return "LOW";
 }
 
@@ -142,14 +108,12 @@ export function describeEstimateQualityTier(
 ): string {
   switch (tier) {
     case "READY":
-      return options?.optionalOnlyMissing
-        ? "Quote-ready draft"
-        : "Ready to quote against";
+      return describeConfidenceStatus("ready", options);
     case "GOOD":
-      return "Good draft — a few details would sharpen it";
+      return describeConfidenceStatus("good");
     case "FAIR":
-      return "Rough range — answer a few more questions";
+      return describeConfidenceStatus("fair");
     case "LOW":
-      return "Early draft — more detail needed";
+      return describeConfidenceStatus("low");
   }
 }

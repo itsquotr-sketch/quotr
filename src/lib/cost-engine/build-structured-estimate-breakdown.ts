@@ -5,6 +5,8 @@ import { contractorRateSourceLabel } from "@/lib/cost-engine/contractor-rate-sou
 import { buildRange } from "@/lib/cost-engine/range-builder";
 import type { CostBreakdown } from "@/lib/cost-engine/build-cost-breakdown";
 import type { WorkAreaEstimateTrace } from "@/lib/cost-engine/estimate-trace";
+import type { EstimateComponent } from "@/lib/cost-engine/estimate-components";
+import { estimateComponentsToStructured } from "@/lib/cost-engine/estimate-components/map-components-to-trace";
 import {
   resolveScopeComponents,
   buildScopeExclusionsFromComponents,
@@ -22,7 +24,7 @@ export type StructuredEstimateComponent = {
   label: string;
   category: string;
   amount: number | null;
-  source: ResolvedScopeComponent["source"];
+  source: "allowance" | "allocation" | "benchmark" | "none";
   included: boolean;
   assumption: string | null;
 };
@@ -125,6 +127,41 @@ function resolveAllocationsForScope(
   });
 }
 
+function mergePricedComponentsWithInclusion(
+  priced: EstimateComponent[],
+  resolved: ResolvedScopeComponent[]
+): ResolvedScopeComponent[] {
+  const amountByKey = new Map(
+    priced.map((component) => [component.component_type, component.estimated_cost])
+  );
+  const sourceByKey = new Map(
+    priced.map((component) => [component.component_type, component.source])
+  );
+
+  const merged = resolved.map((component) => {
+    const amount = amountByKey.get(component.key);
+    if (amount == null) return component;
+    return {
+      ...component,
+      amount: amount > 0 ? amount : null,
+      source:
+        sourceByKey.get(component.key) === "contractor_component_rate" ||
+        sourceByKey.get(component.key) === "contractor_scope_rate"
+          ? ("allocation" as const)
+          : ("benchmark" as const),
+    };
+  });
+
+  for (const component of priced) {
+    if (!merged.some((row) => row.key === component.component_type)) {
+      const structured = estimateComponentsToStructured([component])[0];
+      if (structured) merged.push(structured);
+    }
+  }
+
+  return merged;
+}
+
 export function buildStructuredEstimateBreakdown(input: {
   workAreas: QuickEstimateWorkAreaInput[];
   workAreaTraces: WorkAreaEstimateTrace[];
@@ -141,6 +178,7 @@ export function buildStructuredEstimateBreakdown(input: {
   costBreakdown?: CostBreakdown;
   scopeAllowances?: Record<string, string[]>;
   scopeAssumptions?: Record<string, string[]>;
+  scopeEstimateComponents?: Record<string, EstimateComponent[]>;
 }): StructuredEstimateBreakdown {
   const sellMultiplier =
     (1 + input.contingencyPercent / 100) * (1 + input.marginPercent / 100);
@@ -162,13 +200,18 @@ export function buildStructuredEstimateBreakdown(input: {
       ...(template?.assumptions.default ?? []),
     ];
 
-    const components = resolveScopeComponents({
+    const pricedComponents = input.scopeEstimateComponents?.[area.name];
+    const resolvedInclusion = resolveScopeComponents({
       scopeTypeKey,
       answers: area.answers,
       centralEstimate: central,
       allowances,
       rateSource: trace?.rateSource ?? "placeholder",
     });
+
+    const components = pricedComponents?.length
+      ? mergePricedComponentsWithInclusion(pricedComponents, resolvedInclusion)
+      : resolvedInclusion;
 
     const exclusions = buildScopeExclusionsFromComponents(
       components,

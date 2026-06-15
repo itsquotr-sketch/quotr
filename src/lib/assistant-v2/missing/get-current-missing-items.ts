@@ -8,6 +8,10 @@ import {
   getMissingOptionalHighImpact,
   getMissingRequiredFacts,
 } from "@/lib/scopes/missing-facts";
+import {
+  getMissingRequiredFactsForWorkArea,
+  getMissingUsefulFactsForWorkArea,
+} from "@/lib/assistant-v2/stages/required-fact-gating";
 import type { ScopeFactDefinition } from "@/lib/scopes/types";
 import { z } from "zod";
 
@@ -112,7 +116,35 @@ export function getCurrentMissingItems(
       area.workAreaTypeKey
     );
 
+    const missingRequiredKeys = new Set(
+      getMissingRequiredFactsForWorkArea(
+        area.workAreaTypeKey,
+        area.answers
+      ).map((f) => f.key)
+    );
+    const missingUsefulKeys = new Set(
+      getMissingUsefulFactsForWorkArea(
+        area.workAreaTypeKey,
+        area.answers
+      ).map((f) => f.key)
+    );
+
     for (const fact of allTrackableFacts) {
+      if (fact.required && !missingRequiredKeys.has(fact.key)) {
+        continue;
+      }
+      if (!fact.required) {
+        const scope = getScopeByWorkAreaType(area.workAreaTypeKey);
+        if (scope) {
+          const highImpact = new Set(
+            scope.confidenceRules.highImpactOptionalKeys
+          );
+          if (!highImpact.has(fact.key)) continue;
+        } else if (!missingUsefulKeys.has(fact.key)) {
+          continue;
+        }
+      }
+
       const answered = isTrackableFactAnswered(fact, area.answers);
       const isSkipped = skipped.has(fact.key);
 

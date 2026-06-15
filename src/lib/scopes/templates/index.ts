@@ -1,10 +1,10 @@
 import { bathroomRenovationScopeTemplate } from "@/lib/scopes/templates/bathroom-renovation";
 import { deckScopeTemplate } from "@/lib/scopes/templates/deck";
+import { kitchenRenovationScopeTemplate } from "@/lib/scopes/templates/kitchen-renovation";
 import { retainingWallScopeTemplate } from "@/lib/scopes/templates/retaining-wall";
 import {
   fenceScopeTemplate,
   flooringScopeTemplate,
-  kitchenRenovationScopeTemplate,
   paintingScopeTemplate,
 } from "@/lib/scopes/templates/stubs";
 import type { MatchedScopeTemplate, ScopeTemplate } from "@/lib/scopes/templates/types";
@@ -17,6 +17,8 @@ export type {
   CanonicalScopeFactDefinition,
   ScopeComponentDefinition,
   ScopeAllocations,
+  AllocationComponentDefinition,
+  ScopeComponentAllocationTemplate,
   MatchedScopeTemplate,
 } from "@/lib/scopes/templates/types";
 
@@ -144,4 +146,4 @@ export function getCanonicalTemplateByAlias(
 }
 
 export const UNSUPPORTED_SCOPE_PRICING_MESSAGE =
-  "I can track this scope, but pricing support is not ready yet.";
+  "I can track this scope, but quick pricing support is limited until rates are added.";

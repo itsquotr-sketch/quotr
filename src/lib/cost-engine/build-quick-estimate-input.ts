@@ -17,13 +17,11 @@ import {
   type QuickEstimateInput,
 } from "@/lib/cost-engine/quick-estimate-input";
 import {
-  getOrganisationPricingSettings,
-  listLabourRates,
-  listMaterialRates,
-  listPackageRates,
-  listScopeRates,
-  listSubcontractorRates,
-} from "@/lib/rates-data";
+  loadPricingContext,
+  type PricingContext,
+} from "@/lib/cost-engine/cache/load-pricing-context";
+import { parseScopeEstimateCache } from "@/lib/cost-engine/cache/scope-estimate-cache";
+import { parseQuickEstimateSummary } from "@/lib/project-assistant-summary";
 import { listScopeBuilderInputs } from "@/lib/scope-builder-data";
 import { listProjectAllowances } from "@/lib/assistant-v2/project-allowances-data";
 import { getQuickEstimateForProject } from "@/lib/quick-estimate-data";
@@ -48,7 +46,8 @@ function parseSelectOptions(
 export async function buildQuickEstimateInput(
   supabase: Supabase,
   organisationId: string,
-  projectId: string
+  projectId: string,
+  options?: { pricingContext?: PricingContext; forceRefreshRates?: boolean }
 ): Promise<{ input: QuickEstimateInput | null; error: string | null }> {
   const { data: project, error: projectError } = await getProjectById(
     supabase,
@@ -94,27 +93,25 @@ export async function buildQuickEstimateInput(
     return { input: null, error: "Could not load scope questions." };
   }
 
-  const [
-    { data: scopeRates },
-    { data: packageRates },
-    { data: labourRates },
-    { data: materialRates },
-    { data: subcontractorRates },
-    { data: pricingSettings },
-    { data: discoveryRun },
-    { data: scopeBuilderInputs },
-    { data: userAllowances },
-  ] = await Promise.all([
-    listScopeRates(supabase, organisationId),
-    listPackageRates(supabase, organisationId),
-    listLabourRates(supabase, organisationId),
-    listMaterialRates(supabase, organisationId),
-    listSubcontractorRates(supabase, organisationId),
-    getOrganisationPricingSettings(supabase, organisationId),
-    getLatestDiscoveryRun(supabase, organisationId, projectId),
-    listScopeBuilderInputs(supabase, organisationId, projectId),
-    listProjectAllowances(supabase, organisationId, projectId),
-  ]);
+  const [pricingContext, { data: discoveryRun }, { data: scopeBuilderInputs }, { data: userAllowances }] =
+    await Promise.all([
+      options?.pricingContext ??
+        loadPricingContext(supabase, organisationId, {
+          forceRefresh: options?.forceRefreshRates,
+        }),
+      getLatestDiscoveryRun(supabase, organisationId, projectId),
+      listScopeBuilderInputs(supabase, organisationId, projectId),
+      listProjectAllowances(supabase, organisationId, projectId),
+    ]);
+
+  const {
+    scopeRates,
+    packageRates,
+    labourRates,
+    materialRates,
+    subcontractorRates,
+    pricingSettings,
+  } = pricingContext;
 
   const sourceNotesLength = (scopeBuilderInputs ?? [])
     .map((i) => i.content.trim())
@@ -292,6 +289,11 @@ export async function buildQuickEstimateInput(
     pricingSettings?.contingency_percent ?? 5
   );
 
+  const previousSummary = parseQuickEstimateSummary(quickEstimate.notes ?? null);
+  const scopeEstimateCache = parseScopeEstimateCache(
+    previousSummary as Record<string, unknown> | null
+  );
+
   return {
     input: {
       organisationId,
@@ -324,6 +326,8 @@ export async function buildQuickEstimateInput(
       allWorkAreasExcluded,
       siteConstraintsAssessed,
       userAllowances: userAllowances ?? [],
+      pricingContextVersion: pricingContext.version,
+      scopeEstimateCache,
     },
     error: null,
   };

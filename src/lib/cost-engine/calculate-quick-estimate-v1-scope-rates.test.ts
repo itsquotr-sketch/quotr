@@ -35,7 +35,7 @@ function deckInput(
         workAreaTypeKey: "Deck",
         answers: {
           "deck.area_m2": String(overrides.area ?? 50),
-          "deck.material_type": "timber",
+          "deck.material_type": "treated_pine",
           "deck.level_type": "ground",
         },
         answeredFromNotes: [],
@@ -158,7 +158,8 @@ describe("Sprint 10A quick estimate rate behaviour", () => {
             workAreaTypeKey: "Deck",
             answers: {
               "deck.area_m2": "50",
-              "deck.material_type": "timber",
+              "deck.material_type": "treated_pine",
+              "deck.level_type": "ground",
             },
             answeredFromNotes: [],
           },
@@ -169,6 +170,8 @@ describe("Sprint 10A quick estimate rate behaviour", () => {
             answers: {
               "bathroom.floor_area_m2": "6",
               "bathroom.layout_changing": "no",
+              "bathroom.finish_level": "standard",
+              "bathroom.tile_extent": "full",
             },
             answeredFromNotes: [],
           },

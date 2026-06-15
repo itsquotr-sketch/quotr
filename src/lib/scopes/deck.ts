@@ -93,6 +93,11 @@ export const deckScope: ScopeDefinition = {
       affectsConfidence: true,
       questionText: "If elevated, how high off the ground?",
       placeholder: "e.g. 1.2",
+      dependsOn: {
+        factKey: "deck.level_type",
+        operator: "equals",
+        value: "elevated",
+      },
       extractionPatterns: [
         /(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?)\s*(?:high|height|off\s+the\s+ground)/i,
         /elevated\s*(?:at|about|approx(?:imately)?\.?)?\s*(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?)/i,
@@ -160,7 +165,7 @@ export const deckScope: ScopeDefinition = {
       affectsConfidence: true,
       questionText: "Are stairs included?",
       options: [...YES_NO_UNSURE],
-      extractionPatterns: [/\bstairs\b/i, /\bsteps\b/i],
+      extractionPatterns: [/\bsingle\s+step\b/i, /\bstairs\b/i, /\bsteps\b/i],
       extractValue: () => "yes",
     },
     {
@@ -273,6 +278,11 @@ export const deckScope: ScopeDefinition = {
       affectsEstimate: true,
       affectsConfidence: true,
       questionText: "Is balustrade supplied and installed, or install only?",
+      dependsOn: {
+        factKey: "deck.has_balustrade",
+        operator: "equals",
+        value: "yes",
+      },
       options: [
         { value: "supply_and_install", label: "Supply and install" },
         { value: "client_supplied", label: "Client supplies — install only" },

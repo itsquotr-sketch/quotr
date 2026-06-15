@@ -687,7 +687,13 @@ export async function updateQuickEstimateMargin(
   );
 
   if (!result.success) {
-    return { error: result.error ?? "Could not recalculate sell range." };
+    console.error(
+      "[updateQuickEstimateMargin]",
+      result.technicalMessage ?? result.error
+    );
+    return {
+      error: result.userMessage ?? result.error ?? "Could not recalculate sell range.",
+    };
   }
 
   revalidateProjectAssistant(projectId);
@@ -712,7 +718,13 @@ async function recalculateQuickEstimateAction(
   );
 
   if (!result.success) {
-    return { error: result.error ?? "Could not update quick estimate." };
+    console.error(
+      "[recalculateQuickEstimateAction]",
+      result.technicalMessage ?? result.error
+    );
+    return {
+      error: result.userMessage ?? result.error ?? "Could not update quick estimate.",
+    };
   }
 
   if (!options?.silent) {
@@ -721,7 +733,9 @@ async function recalculateQuickEstimateAction(
 
   return {
     success: true,
-    message: result.message,
+    message: result.warning
+      ? `${result.message ?? "Estimate updated."} ${result.warning}`
+      : result.message,
     ...(options?.silent ? {} : { nextStep: options?.nextStep ?? 5 }),
   };
 }

@@ -28,6 +28,7 @@ interface AssistantV2UnderstoodCardProps {
   discovery: DiscoveryResult | null;
   qualityLevel: string;
   projectCompleteness: ProjectCompletenessResult;
+  overallUnderstandingScore?: number;
   compact?: boolean;
 }
 
@@ -72,7 +73,7 @@ function WorkAreaSummary({
       ))}
       {missing.length > 0 && (
         <div className="pt-0.5">
-          <p className="text-xs text-muted-foreground">Missing:</p>
+          <p className="text-xs text-muted-foreground">Would improve accuracy:</p>
           <ul className="mt-0.5 space-y-0.5">
             {missing.slice(0, 4).map((item) => (
               <li key={`${area.scopeId}-missing-${item}`} className="text-xs">
@@ -91,6 +92,7 @@ export function AssistantV2UnderstoodCard({
   discovery,
   qualityLevel,
   projectCompleteness,
+  overallUnderstandingScore,
   compact = false,
 }: AssistantV2UnderstoodCardProps) {
   const {
@@ -177,6 +179,9 @@ export function AssistantV2UnderstoodCard({
     (o) => o.value !== "unknown"
   ).map((o) => ({ value: o.value, label: o.label.split(" / ")[0] }));
 
+  const understandingPercent =
+    overallUnderstandingScore ?? projectCompleteness.overallCompleteness;
+
   const isCollapsed = compact && !expanded;
 
   return (
@@ -210,7 +215,7 @@ export function AssistantV2UnderstoodCard({
       {isCollapsed ? (
         <p className="mt-1 text-xs text-muted-foreground">
           {includedAreas.map((a) => a.label).join(" · ")} —{" "}
-          {projectCompleteness.overallCompleteness}% complete
+          {understandingPercent}% complete
         </p>
       ) : (
         <div className="mt-3 space-y-4">

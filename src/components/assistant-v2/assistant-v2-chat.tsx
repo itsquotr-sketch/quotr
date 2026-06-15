@@ -29,12 +29,13 @@ import {
 } from "@/lib/assistant-v2/get-next-assistant-turn";
 import type { ScopeGroupInput } from "@/lib/assistant-v2/get-next-pricing-question";
 import type { PricingQuestion } from "@/lib/assistant-v2/get-next-pricing-question";
+import { countMissingPricingQuestions } from "@/lib/assistant-v2/get-next-pricing-question";
 import { normaliseQualityLevel } from "@/lib/constants/quality-level";
 import { resolveWorkAreaTypeKey } from "@/lib/project-assistant-questions";
 import type { ConstraintQuestion } from "@/lib/assistant-v2/get-next-constraint-question";
 import type { ScopeQuestionWithAnswers } from "@/lib/project-assistant-data";
 import type { DiscoveryResult } from "@/lib/ai/discovery/types";
-import type { ProjectScope, ProjectScopeSuggestion } from "@/types/database";
+import type { ProjectScope, ProjectScopeSuggestion, QuickEstimate } from "@/types/database";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import type { PendingAssistantCommand } from "@/lib/assistant-v2/intent/types";
@@ -42,7 +43,10 @@ import {
   describeCompletenessStatus,
   type ProjectCompletenessResult,
 } from "@/lib/assistant-v2/completeness/evaluate-project-completeness";
+import { buildMergedAnswersForScope } from "@/lib/assistant-v2/build-merged-answers";
+import { resolveAssistantFlowState } from "@/lib/assistant-v2/flow/resolve-assistant-flow-state";
 import { useEstimateUpdate } from "@/components/projects/estimate-update-context";
+import { isEstimateFailureMessage } from "@/lib/cost-engine/estimate-result";
 import { cn } from "@/lib/utils";
 
 function CommandConfirmationActions({
@@ -190,7 +194,10 @@ interface AssistantV2ChatProps {
   scopeGroups: ScopeGroupInput[];
   scopeQuestions: ScopeQuestionWithAnswers[];
   qualityLevel: string;
+  quickEstimate: QuickEstimate | null;
+  sourceNotes?: string;
   projectCompleteness: ProjectCompletenessResult;
+  overallUnderstandingScore?: number;
   showGreeting: boolean;
   benchmarkScopesForOnboarding?: BenchmarkScopeForOnboarding[];
 }
@@ -203,7 +210,10 @@ export function AssistantV2Chat({
   scopeGroups,
   scopeQuestions,
   qualityLevel,
+  quickEstimate,
+  sourceNotes = "",
   projectCompleteness,
+  overallUnderstandingScore,
   showGreeting,
   benchmarkScopesForOnboarding = [],
 }: AssistantV2ChatProps) {
@@ -220,8 +230,10 @@ export function AssistantV2Chat({
     effectiveDeclinedConstraintSlugs,
     optimisticQualityLevel,
     flushInFlight,
+    resolvedSuggestionIds,
     syncAssistant,
   } = useAssistantChat();
+  const { isActionPending } = useEstimateUpdate();
 
   const workAreaTypeKeys = useMemo(
     () =>
@@ -245,6 +257,14 @@ export function AssistantV2Chat({
     optimisticQualityLevel ?? qualityLevel
   );
 
+  const hasEstimate = quickEstimate != null;
+  const estimateReady =
+    hasEstimate &&
+    quickEstimate.estimated_cost_low != null &&
+    quickEstimate.estimated_cost_high != null &&
+    (quickEstimate.estimate_status === "ready" ||
+      quickEstimate.estimate_status === "partial");
+
   const nextTurn = useMemo(
     () =>
       getNextAssistantTurn({
@@ -256,6 +276,13 @@ export function AssistantV2Chat({
         declinedConstraintSlugs: new Set(effectiveDeclinedConstraintSlugs),
         qualityLevel: activeQuality,
         answeredQuestionKeys: mergedAnswers,
+        pendingSuggestionCount: suggestions.filter(
+          (s) =>
+            s.status === "pending" && !resolvedSuggestionIds.has(s.id)
+        ).length,
+        hasEstimate,
+        estimateReady,
+        sourceNotes,
       }),
     [
       scopeGroups,
@@ -266,12 +293,28 @@ export function AssistantV2Chat({
       effectiveDeclinedConstraintSlugs,
       activeQuality,
       mergedAnswers,
+      suggestions,
+      resolvedSuggestionIds,
+      hasEstimate,
+      estimateReady,
+      sourceNotes,
     ]
   );
 
-  const pendingSuggestions = suggestions.filter((s) => s.status === "pending");
-  const showWorkAreaConfirmation =
-    pendingSuggestions.length > 0 && !flushInFlight;
+  const pendingSuggestions = suggestions.filter(
+    (s) => s.status === "pending" && !resolvedSuggestionIds.has(s.id)
+  );
+
+  const remainingQuestionCount = useMemo(
+    () =>
+      countMissingPricingQuestions({
+        scopeGroups,
+        discovery,
+        scopeQuestions,
+      }),
+    [scopeGroups, discovery, scopeQuestions]
+  );
+  const showWorkAreaConfirmation = pendingSuggestions.length > 0;
 
   const activeTurnFingerprint =
     nextTurn?.kind === "scope_batch"
@@ -284,23 +327,35 @@ export function AssistantV2Chat({
             "constraint",
             nextTurn.constraints.map((c) => c.slug)
           )
-        : null;
+        : nextTurn?.kind === "quality"
+          ? "quality:spec_level"
+          : null;
 
   const showActiveTurn = Boolean(
     nextTurn &&
       confirmedScopes.length > 0 &&
-      !flushInFlight &&
-      !showWorkAreaConfirmation
+      !showWorkAreaConfirmation &&
+      (!flushInFlight || nextTurn.kind === "quality")
   );
 
   const visibleMessages = useMemo(() => {
-    if (!activeTurnFingerprint) return allMessages;
-    return allMessages.filter((message) => {
-      const persisted = persistedMessages.find((m) => m.id === message.id);
-      if (!persisted) return true;
-      const meta = persisted.metadata as Record<string, unknown> | null;
-      return meta?.batchFingerprint !== activeTurnFingerprint;
-    });
+    let messages = allMessages;
+    if (activeTurnFingerprint) {
+      messages = messages.filter((message) => {
+        const persisted = persistedMessages.find((m) => m.id === message.id);
+        if (!persisted) return true;
+        const meta = persisted.metadata as Record<string, unknown> | null;
+        return meta?.batchFingerprint !== activeTurnFingerprint;
+      });
+    }
+
+    return messages.filter(
+      (message) =>
+        !(
+          message.role === "assistant" &&
+          isEstimateFailureMessage(message.content, message.error)
+        )
+    );
   }, [allMessages, persistedMessages, activeTurnFingerprint]);
 
   const userMessageCount = useMemo(
@@ -308,17 +363,101 @@ export function AssistantV2Chat({
     [allMessages]
   );
 
-  const statusMessage = useMemo(
-    () => describeCompletenessStatus(projectCompleteness),
-    [projectCompleteness]
+  const flowResult = useMemo(
+    () =>
+      resolveAssistantFlowState({
+        workAreas: scopeGroups.map((group) => ({
+          scopeId: group.scopeId,
+          scopeName: group.scopeName,
+          workAreaTypeKey: resolveWorkAreaTypeKey(
+            group.scopeTypeName,
+            group.scopeName
+          ),
+          answers: buildMergedAnswersForScope(
+            group.scopeId,
+            group.scopeName,
+            group.scopeTypeName,
+            scopeQuestions,
+            discovery
+          ),
+          included: true,
+        })),
+        pendingSuggestionCount: pendingSuggestions.length,
+        qualityLevel: activeQuality,
+        selectedConstraintSlugs: optimisticConstraintSlugs,
+        declinedConstraintSlugs: effectiveDeclinedConstraintSlugs,
+        discoveryConstraintSlugs: discovery?.constraints?.map((c) => c.slug),
+        answeredQuestionKeys: mergedAnswers,
+        hasEstimate,
+        estimateReady,
+        sourceNotes,
+      }),
+    [
+      scopeGroups,
+      scopeQuestions,
+      discovery,
+      activeQuality,
+      optimisticConstraintSlugs,
+      effectiveDeclinedConstraintSlugs,
+      mergedAnswers,
+      pendingSuggestions.length,
+      hasEstimate,
+      estimateReady,
+      sourceNotes,
+    ]
   );
+
+  const blockingFlowStates = new Set([
+    "needs_quality_confirmation",
+    "needs_required_scope_details",
+    "needs_pricing_source_confirmation",
+    "needs_site_conditions",
+    "needs_confidence_refinement",
+  ]);
+
+  const statusMessage = useMemo(
+    () =>
+      describeCompletenessStatus(projectCompleteness, {
+        flowState: flowResult.state,
+        hasUsefulGaps: projectCompleteness.workAreas.some(
+          (w) => w.missingUsefulFacts.length > 0
+        ),
+      }),
+    [projectCompleteness, flowResult.state]
+  );
+
+  const showRefinementActions =
+    flowResult.state === "estimate_ready" &&
+    !blockingFlowStates.has(flowResult.state);
 
   const showDerivedStatus =
     !nextTurn &&
     confirmedScopes.length > 0 &&
     discovery &&
     !showWorkAreaConfirmation &&
-    !flushInFlight;
+    !flushInFlight &&
+    !blockingFlowStates.has(flowResult.state) &&
+    (flowResult.state === "estimate_ready" ||
+      flowResult.state === "optional_refinement");
+
+  const activeTurnRef = useRef<HTMLDivElement>(null);
+  const prevActiveTurnFingerprint = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (
+      showActiveTurn &&
+      activeTurnFingerprint &&
+      activeTurnFingerprint !== prevActiveTurnFingerprint.current
+    ) {
+      prevActiveTurnFingerprint.current = activeTurnFingerprint;
+      requestAnimationFrame(() => {
+        activeTurnRef.current?.scrollIntoView({
+          behavior: "smooth",
+          block: "nearest",
+        });
+      });
+    }
+  }, [showActiveTurn, activeTurnFingerprint]);
 
   return (
     <AssistantConversationPanel>
@@ -440,16 +579,6 @@ export function AssistantV2Chat({
         );
       })}
 
-      {confirmedScopes.length > 0 && discovery && (
-        <AssistantV2UnderstoodCard
-          confirmedScopes={confirmedScopes}
-          discovery={discovery}
-          qualityLevel={qualityLevel}
-          projectCompleteness={projectCompleteness}
-          compact={userMessageCount > 1}
-        />
-      )}
-
       {showWorkAreaConfirmation && (
         <WorkAreaConfirmationBubble
           suggestions={pendingSuggestions}
@@ -458,27 +587,38 @@ export function AssistantV2Chat({
       )}
 
       {showActiveTurn && nextTurn && (
-        <div id="assistant-pricing-questions">
+        <div id="assistant-pricing-questions" ref={activeTurnRef}>
           <ActiveTurnBubble
             projectId={projectId}
             turn={nextTurn}
+            remainingQuestionCount={remainingQuestionCount}
             optimisticAnswers={optimisticAnswers}
             onScopeAnswer={submitScopeAnswer}
             onScopeBatchComplete={flushScopeBatch}
             onConstraintBatch={submitConstraintBatch}
             onQualityAnswer={(level, label) => submitQualityLevel(level, label)}
             onPersisted={syncAssistant}
+            actionsDisabled={flushInFlight || isActionPending("changing_finish_level")}
           />
         </div>
+      )}
+
+      {confirmedScopes.length > 0 && discovery && (
+        <AssistantV2UnderstoodCard
+          confirmedScopes={confirmedScopes}
+          discovery={discovery}
+          qualityLevel={qualityLevel}
+          projectCompleteness={projectCompleteness}
+          overallUnderstandingScore={overallUnderstandingScore}
+          compact={userMessageCount > 1}
+        />
       )}
 
       {showDerivedStatus && (
         <AssistantBubble>
           <p className="font-medium">{statusMessage.title}</p>
           <p className="mt-1 text-muted-foreground">{statusMessage.subtitle}</p>
-          {(projectCompleteness.projectStatus === "needs_questions" ||
-            projectCompleteness.projectStatus === "enough_for_draft" ||
-            statusMessage.title.toLowerCase().includes("details")) && (
+          {showRefinementActions && (
             <RefinementStatusActions projectId={projectId} />
           )}
         </AssistantBubble>
@@ -490,15 +630,18 @@ export function AssistantV2Chat({
 function ActiveTurnBubble({
   projectId,
   turn,
+  remainingQuestionCount,
   optimisticAnswers,
   onScopeAnswer,
   onScopeBatchComplete,
   onConstraintBatch,
   onQualityAnswer,
   onPersisted,
+  actionsDisabled = false,
 }: {
   projectId: string;
   turn: AssistantTurn;
+  remainingQuestionCount: number;
   optimisticAnswers: Record<string, string>;
   onScopeAnswer: (
     questionId: string,
@@ -519,9 +662,18 @@ function ActiveTurnBubble({
   ) => void;
   onQualityAnswer: (level: string, label: string) => void;
   onPersisted: () => Promise<void>;
+  actionsDisabled?: boolean;
 }) {
   useEffect(() => {
     async function persistTurn() {
+      if (turn.kind === "quality") {
+        await persistAssistantQuestionBatch(projectId, turn.turn.prompt, "quality:spec_level", {
+          kind: "quality",
+        });
+        await onPersisted();
+        return;
+      }
+
       if (turn.kind === "scope_batch") {
         const content = formatScopeBatchContent(turn.intro, turn.questions);
         const fingerprint = questionBatchFingerprint(
@@ -558,9 +710,11 @@ function ActiveTurnBubble({
       <ScopeBatchBubble
         intro={turn.intro}
         questions={turn.questions}
+        remainingQuestionCount={remainingQuestionCount}
         optimisticAnswers={optimisticAnswers}
         onScopeAnswer={onScopeAnswer}
         onBatchComplete={onScopeBatchComplete}
+        actionsDisabled={actionsDisabled}
       />
     );
   }
@@ -570,6 +724,7 @@ function ActiveTurnBubble({
       <ConstraintBatchBubble
         constraints={turn.constraints}
         onSubmit={onConstraintBatch}
+        actionsDisabled={actionsDisabled}
       />
     );
   }
@@ -584,11 +739,43 @@ function ActiveTurnBubble({
               value: o.value,
               label: o.label,
             }))}
+            disabled={actionsDisabled}
             onSelect={(value) => {
               const option = turn.turn.options.find((o) => o.value === value);
               onQualityAnswer(value, option?.label ?? value);
             }}
           />
+        </div>
+      </AssistantBubble>
+    );
+  }
+
+  if (turn.kind === "pricing_source") {
+    return (
+      <AssistantBubble>
+        <p>{turn.turn.message}</p>
+        <div className="mt-3 flex flex-wrap gap-2">
+          {turn.turn.options.map((option) => (
+            <Button
+              key={option.id}
+              type="button"
+              variant="outline"
+              size="sm"
+              disabled={actionsDisabled}
+              className="h-8 text-xs"
+              onClick={() => {
+                const textarea = document.querySelector<HTMLTextAreaElement>(
+                  'textarea[name="content"]'
+                );
+                if (textarea) {
+                  textarea.value = option.label;
+                  textarea.focus();
+                }
+              }}
+            >
+              {option.label}
+            </Button>
+          ))}
         </div>
       </AssistantBubble>
     );
@@ -600,12 +787,15 @@ function ActiveTurnBubble({
 function ScopeBatchBubble({
   intro,
   questions,
+  remainingQuestionCount,
   optimisticAnswers,
   onScopeAnswer,
   onBatchComplete,
+  actionsDisabled = false,
 }: {
   intro: string;
   questions: PricingQuestion[];
+  remainingQuestionCount: number;
   optimisticAnswers: Record<string, string>;
   onScopeAnswer: (
     questionId: string,
@@ -621,15 +811,18 @@ function ScopeBatchBubble({
       label: string;
     }[]
   ) => void;
+  actionsDisabled?: boolean;
 }) {
   const [localAnswers, setLocalAnswers] = useState<
     Record<string, { answer: string; label: string }>
   >({});
+  const [submitted, setSubmitted] = useState(false);
   const flushedRef = useRef(false);
   const questionIds = questions.map((q) => q.questionId).join(",");
 
   useEffect(() => {
     flushedRef.current = false;
+    setSubmitted(false);
     setLocalAnswers({});
   }, [questionIds]);
 
@@ -665,14 +858,9 @@ function ScopeBatchBubble({
     });
 
     flushedRef.current = true;
+    setSubmitted(true);
     onBatchComplete(batch);
   }, [allAnswered, questions, merged, onBatchComplete]);
-
-  useEffect(() => {
-    if (allAnswered) {
-      tryFlush();
-    }
-  }, [allAnswered, tryFlush]);
 
   function handleAnswer(
     q: PricingQuestion,
@@ -707,9 +895,36 @@ function ScopeBatchBubble({
     setNaturalAnswer("");
   }
 
+  const scopeName = questions[0]?.scopeName;
+  const hasRequired = questions.some((q) => q.required);
+  const progressLabel = hasRequired
+    ? "Required before pricing."
+    : questions.length === 1
+      ? "1 question to improve this estimate"
+      : `${questions.length} questions to improve this estimate`;
+  const progressSubtext = hasRequired
+    ? null
+    : "These are the highest-impact details. Site conditions come next.";
+  const scopeProgressLabel =
+    scopeName && questions.length < remainingQuestionCount
+      ? `${scopeName}: ${questions.length} of ${remainingQuestionCount} useful details in this batch.`
+      : null;
+
   return (
     <AssistantBubble>
-      <p className="font-medium whitespace-pre-wrap">
+      <p className="text-xs text-muted-foreground">{progressLabel}</p>
+      {progressSubtext && (
+        <p className="mt-0.5 text-xs text-muted-foreground">{progressSubtext}</p>
+      )}
+      {scopeProgressLabel && (
+        <p className="mt-0.5 text-xs text-muted-foreground">{scopeProgressLabel}</p>
+      )}
+      {questions.some((q) => !q.required) && (
+        <p className="mt-0.5 text-xs text-muted-foreground italic">
+          Optional — skip if unsure.
+        </p>
+      )}
+      <p className="mt-2 font-medium whitespace-pre-wrap">
         {intro}
         {questions.length > 1 && (
           <>
@@ -727,6 +942,7 @@ function ScopeBatchBubble({
             question={q}
             selected={merged[q.questionKey]?.answer ?? ""}
             onAnswer={(answer, label) => handleAnswer(q, answer, label)}
+            disabled={actionsDisabled}
           />
         ))}
       </div>
@@ -758,15 +974,17 @@ function ScopeBatchBubble({
         </div>
       )}
 
-      {questions.some((q) => q.inputType === "number") && allAnswered && (
-        <Button
-          type="button"
-          size="sm"
-          className="mt-4"
-          onClick={tryFlush}
-        >
-          Update estimate
-        </Button>
+      <Button
+        type="button"
+        size="sm"
+        className="mt-4"
+        disabled={!allAnswered || actionsDisabled || flushedRef.current}
+        onClick={tryFlush}
+      >
+        Submit answers
+      </Button>
+      {submitted && (
+        <p className="mt-2 text-xs text-muted-foreground">Updated.</p>
       )}
     </AssistantBubble>
   );
@@ -776,22 +994,42 @@ function ScopeQuestionRow({
   question: q,
   selected,
   onAnswer,
+  disabled = false,
 }: {
   question: PricingQuestion;
   selected: string;
   onAnswer: (answer: string, label: string) => void;
+  disabled?: boolean;
 }) {
-  const [numberValue, setNumberValue] = useState("");
+  const [numberValue, setNumberValue] = useState(selected);
   const prompt = contextualQuestionText(q);
+  const isPendingNumeric =
+    q.inputType === "number" && numberValue.trim() !== "" && !selected;
+
+  useEffect(() => {
+    setNumberValue(selected);
+  }, [selected, q.questionId]);
+
+  function submitNumeric() {
+    if (!numberValue.trim()) return;
+    const label = q.unit ? `${numberValue.trim()} ${q.unit}` : numberValue.trim();
+    onAnswer(numberValue.trim(), label);
+  }
 
   return (
     <div>
       <p className="text-sm font-medium">{prompt}</p>
+      {q.required && !selected && (
+        <p className="mt-0.5 text-xs text-amber-700 dark:text-amber-400">
+          Needed before pricing properly
+        </p>
+      )}
       <div className="mt-2">
         {q.inputType === "select" && q.options.length > 0 ? (
           <AnswerChips
             options={q.options}
             value={selected}
+            disabled={disabled}
             onSelect={(value) => {
               const label =
                 q.options.find((o) => o.value === value)?.label ?? value;
@@ -807,18 +1045,26 @@ function ScopeQuestionRow({
               value={numberValue}
               placeholder={q.placeholder}
               className="h-9 max-w-[140px]"
+              disabled={disabled}
               onChange={(e) => setNumberValue(e.target.value)}
+              onBlur={() => {
+                if (numberValue.trim()) submitNumeric();
+              }}
               onKeyDown={(e) => {
-                if (e.key === "Enter" && numberValue.trim()) {
-                  const label = q.unit
-                    ? `${numberValue.trim()} ${q.unit}`
-                    : numberValue.trim();
-                  onAnswer(numberValue.trim(), label);
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  submitNumeric();
                 }
               }}
             />
             {q.unit && (
               <span className="text-xs text-muted-foreground">{q.unit}</span>
+            )}
+            {isPendingNumeric && (
+              <span className="text-xs text-muted-foreground">Pending</span>
+            )}
+            {selected && (
+              <span className="text-xs text-primary">Updated.</span>
             )}
           </div>
         ) : (
@@ -826,11 +1072,16 @@ function ScopeQuestionRow({
             type="text"
             placeholder={q.placeholder}
             className="h-9"
+            disabled={disabled}
             onKeyDown={(e) => {
               const val = (e.target as HTMLInputElement).value;
               if (e.key === "Enter" && val.trim()) {
                 onAnswer(val.trim(), val.trim());
               }
+            }}
+            onBlur={(e) => {
+              const val = e.target.value;
+              if (val.trim()) onAnswer(val.trim(), val.trim());
             }}
           />
         )}
@@ -848,7 +1099,6 @@ function WorkAreaConfirmationBubble({
   suggestions: ProjectScopeSuggestion[];
   onConfirm: (selections: WorkAreaSelection[]) => void;
 }) {
-  const { flushInFlight } = useAssistantChat();
   const [states, setStates] = useState<Record<string, WorkAreaSuggestionState>>(
     () =>
       Object.fromEntries(
@@ -856,11 +1106,13 @@ function WorkAreaConfirmationBubble({
       )
   );
   const [submitted, setSubmitted] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const suggestionIds = suggestions.map((s) => s.id).join(",");
 
   useEffect(() => {
+    if (dismissed) return;
     setStates(
       Object.fromEntries(
         suggestions.map((s) => [s.id, "suggested" as WorkAreaSuggestionState])
@@ -868,20 +1120,14 @@ function WorkAreaConfirmationBubble({
     );
     setSubmitted(false);
     setError(null);
-  }, [suggestionIds, suggestions]);
-
-  useEffect(() => {
-    if (!flushInFlight) {
-      setSubmitted(false);
-    }
-  }, [flushInFlight]);
+  }, [suggestionIds, suggestions, dismissed]);
 
   function setState(id: string, state: WorkAreaSuggestionState) {
     setStates((prev) => ({ ...prev, [id]: state }));
   }
 
   function handleConfirm() {
-    if (submitted) return;
+    if (submitted || dismissed) return;
 
     const unresolved = suggestions.some(
       (s) => states[s.id] === "suggested"
@@ -892,6 +1138,7 @@ function WorkAreaConfirmationBubble({
     }
 
     setSubmitted(true);
+    setDismissed(true);
     setError(null);
     onConfirm(
       suggestions.map((s) => ({
@@ -900,6 +1147,8 @@ function WorkAreaConfirmationBubble({
       }))
     );
   }
+
+  if (dismissed) return null;
 
   return (
     <AssistantBubble>
@@ -959,7 +1208,7 @@ function WorkAreaConfirmationBubble({
         disabled={submitted}
         onClick={handleConfirm}
       >
-        {submitted ? "Saving…" : "Confirm work areas"}
+        {submitted ? "Saving…" : "Here's what I'll estimate"}
       </Button>
     </AssistantBubble>
   );
@@ -968,11 +1217,13 @@ function WorkAreaConfirmationBubble({
 function ConstraintBatchBubble({
   constraints,
   onSubmit,
+  actionsDisabled = false,
 }: {
   constraints: ConstraintQuestion[];
   onSubmit: (
     selections: { slug: string; label: string; apply: boolean }[]
   ) => void;
+  actionsDisabled?: boolean;
 }) {
   const { flushInFlight } = useAssistantChat();
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -980,6 +1231,7 @@ function ConstraintBatchBubble({
   const [error, setError] = useState<string | null>(null);
 
   const saving = submitted && flushInFlight;
+  const disabled = submitted || actionsDisabled;
 
   useEffect(() => {
     if (!flushInFlight) {
@@ -988,7 +1240,7 @@ function ConstraintBatchBubble({
   }, [flushInFlight]);
 
   function toggle(slug: string) {
-    if (submitted) return;
+    if (disabled) return;
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(slug)) next.delete(slug);
@@ -1006,14 +1258,14 @@ function ConstraintBatchBubble({
   }
 
   function handleSubmit() {
-    if (submitted) return;
+    if (disabled) return;
     setSubmitted(true);
     setError(null);
     onSubmit(buildSelections(false));
   }
 
   function handleNoneApply() {
-    if (submitted) return;
+    if (disabled) return;
     setSubmitted(true);
     setError(null);
     onSubmit(buildSelections(true));
@@ -1037,14 +1289,14 @@ function ConstraintBatchBubble({
             className={cn(
               "flex cursor-pointer items-center gap-2.5 rounded-lg border px-3 py-2 transition-colors hover:bg-muted/50",
               selected.has(c.slug) && "border-primary bg-primary/5",
-              submitted && "pointer-events-none opacity-70"
+              disabled && "pointer-events-none opacity-70"
             )}
           >
             <input
               type="checkbox"
               checked={selected.has(c.slug)}
               onChange={() => toggle(c.slug)}
-              disabled={submitted}
+              disabled={disabled}
               className="h-4 w-4 rounded border-input"
             />
             <span className="text-sm">

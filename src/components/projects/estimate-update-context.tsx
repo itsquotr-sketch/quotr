@@ -1,6 +1,7 @@
 "use client";
 
 import { autosaveDevLog } from "@/lib/autosave/autosave-dev-log";
+import { createSyncVersionTracker } from "@/lib/assistant-v2/sync-versioning";
 import {
   createContext,
   useCallback,
@@ -13,6 +14,18 @@ import {
 
 export type EstimateUpdateStatus = "idle" | "saving" | "updating" | "saved";
 
+export type PendingAction =
+  | "saving_answer"
+  | "updating_estimate"
+  | "changing_finish_level"
+  | "toggling_constraints"
+  | "removing_work_area"
+  | "adding_work_area"
+  | "retrying_estimate"
+  | "opening_insight"
+  | "applying_margin"
+  | null;
+
 export type EstimateChangeSummary = {
   costDelta: number | null;
   previousCompleteness: number | null;
@@ -22,6 +35,7 @@ export type EstimateChangeSummary = {
 
 type EstimateUpdateContextValue = {
   status: EstimateUpdateStatus;
+  pendingAction: PendingAction;
   lastUpdatedAt: Date | null;
   lastChange: EstimateChangeSummary | null;
   breakdownOpenRequest: number;
@@ -30,6 +44,10 @@ type EstimateUpdateContextValue = {
   markUpdating: () => void;
   markSaved: (change?: EstimateChangeSummary) => void;
   markIdle: () => void;
+  setPendingAction: (action: PendingAction) => void;
+  isActionPending: (action: Exclude<PendingAction, null>) => boolean;
+  beginSync: () => number;
+  isSyncCurrent: (version: number) => boolean;
   requestBreakdownOpen: () => void;
   requestWhyOpen: () => void;
   recordEstimateSnapshot: (
@@ -48,6 +66,7 @@ const EstimateUpdateContext = createContext<EstimateUpdateContextValue | null>(
 
 export function EstimateUpdateProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<EstimateUpdateStatus>("idle");
+  const [pendingAction, setPendingActionState] = useState<PendingAction>(null);
   const [lastUpdatedAt, setLastUpdatedAt] = useState<Date | null>(null);
   const [lastChange, setLastChange] = useState<EstimateChangeSummary | null>(
     null
@@ -55,6 +74,7 @@ export function EstimateUpdateProvider({ children }: { children: ReactNode }) {
   const [breakdownOpenRequest, setBreakdownOpenRequest] = useState(0);
   const [whyOpenRequest, setWhyOpenRequest] = useState(0);
   const recalcInFlightRef = useRef(false);
+  const syncVersionTrackerRef = useRef(createSyncVersionTracker());
   const snapshotRef = useRef<{
     costMid: number | null;
     completeness: number;
@@ -64,10 +84,33 @@ export function EstimateUpdateProvider({ children }: { children: ReactNode }) {
   const markUpdating = useCallback(() => setStatus("updating"), []);
   const markSaved = useCallback((change?: EstimateChangeSummary) => {
     setStatus("saved");
+    setPendingActionState(null);
     setLastUpdatedAt(new Date());
     if (change) setLastChange(change);
   }, []);
-  const markIdle = useCallback(() => setStatus("idle"), []);
+  const markIdle = useCallback(() => {
+    setStatus("idle");
+    setPendingActionState(null);
+  }, []);
+
+  const setPendingAction = useCallback((action: PendingAction) => {
+    setPendingActionState(action);
+  }, []);
+
+  const isActionPending = useCallback(
+    (action: Exclude<PendingAction, null>) => pendingAction === action,
+    [pendingAction]
+  );
+
+  const beginSync = useCallback(
+    () => syncVersionTrackerRef.current.beginSync(),
+    []
+  );
+
+  const isSyncCurrent = useCallback(
+    (version: number) => syncVersionTrackerRef.current.isCurrent(version),
+    []
+  );
   const requestBreakdownOpen = useCallback(
     () => setBreakdownOpenRequest((n) => n + 1),
     []
@@ -97,22 +140,26 @@ export function EstimateUpdateProvider({ children }: { children: ReactNode }) {
       }
 
       recalcInFlightRef.current = true;
+      setPendingActionState("retrying_estimate");
       markSaving();
       autosaveDevLog("estimate", `recalculating due to: ${reason}`);
       try {
         markUpdating();
         await fn();
         markSaved();
+      } catch {
+        markIdle();
       } finally {
         recalcInFlightRef.current = false;
       }
     },
-    [markSaving, markUpdating, markSaved]
+    [markSaving, markUpdating, markSaved, markIdle]
   );
 
   const value = useMemo(
     () => ({
       status,
+      pendingAction,
       lastUpdatedAt,
       lastChange,
       breakdownOpenRequest,
@@ -121,6 +168,10 @@ export function EstimateUpdateProvider({ children }: { children: ReactNode }) {
       markUpdating,
       markSaved,
       markIdle,
+      setPendingAction,
+      isActionPending,
+      beginSync,
+      isSyncCurrent,
       requestBreakdownOpen,
       requestWhyOpen,
       recordEstimateSnapshot,
@@ -128,6 +179,7 @@ export function EstimateUpdateProvider({ children }: { children: ReactNode }) {
     }),
     [
       status,
+      pendingAction,
       lastUpdatedAt,
       lastChange,
       breakdownOpenRequest,
@@ -136,6 +188,10 @@ export function EstimateUpdateProvider({ children }: { children: ReactNode }) {
       markUpdating,
       markSaved,
       markIdle,
+      setPendingAction,
+      isActionPending,
+      beginSync,
+      isSyncCurrent,
       requestBreakdownOpen,
       requestWhyOpen,
       recordEstimateSnapshot,

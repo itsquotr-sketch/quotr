@@ -111,6 +111,54 @@ export const bathroomRenovationScopeTemplate: ScopeTemplate = {
         defaultIncluded: false,
       },
     ],
+    componentAllocation: {
+      labour: [
+        { key: "demo_labour", label: "Demo labour", weight: 3, defaultIncluded: true },
+        { key: "carpentry_labour", label: "Carpentry labour", weight: 4, defaultIncluded: true },
+        { key: "project_management", label: "Project management", weight: 2, defaultIncluded: true },
+        { key: "painting_stopping", label: "Painting / stopping", weight: 2, defaultIncluded: true },
+      ],
+      materials: [
+        {
+          key: "fixtures_allowance",
+          label: "Fixtures allowance",
+          weight: 5,
+          defaultIncluded: true,
+          excludeWhenFacts: ["bathroom.fixtures_client_supplied"],
+        },
+        { key: "tile_materials", label: "Tile materials", weight: 4, defaultIncluded: true },
+        { key: "consumables", label: "Consumables", weight: 2, defaultIncluded: true },
+        {
+          key: "waterproofing_materials",
+          label: "Waterproofing materials",
+          weight: 3,
+          defaultIncluded: true,
+        },
+      ],
+      subcontractors: [
+        { key: "plumber", label: "Plumber", weight: 4, defaultIncluded: true },
+        { key: "electrician", label: "Electrician", weight: 3, defaultIncluded: true },
+        { key: "waterproofer", label: "Waterproofer", weight: 4, defaultIncluded: true },
+        { key: "tiler", label: "Tiler", weight: 5, defaultIncluded: true },
+      ],
+      allowances: [
+        { key: "demolition_allowance", label: "Demolition allowance", weight: 3, defaultIncluded: true },
+        { key: "cartage_allowance", label: "Cartage allowance", weight: 2, defaultIncluded: true },
+        {
+          key: "unknown_conditions",
+          label: "Unknown conditions allowance",
+          weight: 2,
+          defaultIncluded: true,
+        },
+        {
+          key: "rubbish_removal",
+          label: "Rubbish removal",
+          weight: 2,
+          includeWhenFacts: ["bathroom.rubbish_removal"],
+          defaultIncluded: false,
+        },
+      ],
+    },
   },
 
   constraints: {

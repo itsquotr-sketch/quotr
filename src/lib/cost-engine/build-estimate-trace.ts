@@ -46,6 +46,7 @@ export function buildEstimateTrace(input: {
   rangeQuality?: RangeQuality | string;
   scopeAllowances?: Record<string, string[]>;
   scopeAssumptions?: Record<string, string[]>;
+  scopeEstimateComponents?: Record<string, import("@/lib/cost-engine/estimate-components").EstimateComponent[]>;
 }): EstimateTrace {
   const extractedFacts: NonNullable<EstimateTrace["extractedFacts"]> = [];
   const missingFacts: NonNullable<EstimateTrace["missingFacts"]> = [];
@@ -126,6 +127,7 @@ export function buildEstimateTrace(input: {
     costBreakdown: input.costBreakdown,
     scopeAllowances: input.scopeAllowances,
     scopeAssumptions: input.scopeAssumptions,
+    scopeEstimateComponents: input.scopeEstimateComponents,
   });
 
   return {

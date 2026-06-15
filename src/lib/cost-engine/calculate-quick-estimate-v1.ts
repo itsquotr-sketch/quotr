@@ -8,10 +8,12 @@ import { applyQualityLevelToCentral } from "@/lib/cost-engine/apply-quality-leve
 import { constraintSlugsSuppressedByAllowanceKey } from "@/lib/assistant-v2/intent/allowance-keys";
 import { buildMissingInformation } from "@/lib/cost-engine/build-missing-information";
 import {
-  computeConfidenceScore,
-} from "@/lib/cost-engine/confidence/score";
+  evaluateConfidence,
+  buildQualityFactorsFromEvaluation,
+} from "@/lib/assistant-v2/confidence/evaluate-confidence";
 import {
   confidenceLevelLabel,
+  resolveConfidenceLevel,
   toLegacyConfidenceLevel,
 } from "@/lib/cost-engine/confidence/level";
 import { buildCostBreakdown } from "@/lib/cost-engine/build-cost-breakdown";
@@ -25,6 +27,7 @@ import {
 } from "@/lib/cost-engine/trace/types";
 import { isSiteConstraintsAssessed } from "@/lib/cost-engine/estimate-quality";
 import type { EstimateTraceDriver } from "@/lib/cost-engine/trace/types";
+import type { EstimateComponent } from "@/lib/cost-engine/estimate-components";
 import {
   getScopeRateDefinition,
   getScopeRateDefinitionByKey,
@@ -50,12 +53,22 @@ import { hasPositiveAnswer } from "@/lib/scope-answer-state";
 import {
   type QuickEstimateInput,
   type QuickEstimateOutput,
+  type UnpricedWorkArea,
 } from "@/lib/cost-engine/quick-estimate-input";
 import { getIncludedTradesForWorkAreas } from "@/lib/project-assistant-trades";
 import { calculateFromTemplate } from "@/lib/scope-templates/calculate";
 import { getScopeTemplateByWorkAreaType } from "@/lib/scope-templates";
 import { resolveStagedRateDetail } from "@/lib/cost-engine/resolve-staged-rate-detail";
 import { getScopeByWorkAreaType } from "@/lib/scopes";
+import {
+  buildScopeCacheFromResults,
+  buildScopeInputHash,
+  isScopeCacheValid,
+  type CachedScopeContribution,
+  type ScopeEstimateCache,
+} from "@/lib/cost-engine/cache/scope-estimate-cache";
+import { resolveScopePricingState } from "@/lib/scopes/pricing-state";
+import { buildPartialEstimateExclusionMessage } from "@/lib/assistant-v2/stages/required-fact-gating";
 
 const DEFAULT_CONTINGENCY_PERCENT = 5;
 
@@ -91,6 +104,7 @@ type AreaCalcResult = {
   scopeAllocation?: ScopeRateAllocation | null;
   allocationBreakdown?: WorkAreaEstimateTrace["allocationBreakdown"];
   traceDrivers?: EstimateTraceDriver[];
+  estimateComponents?: EstimateComponent[];
 };
 
 function calcGenericArea(name: string): AreaCalcResult {
@@ -163,6 +177,7 @@ export function calculateQuickEstimateV1(
   if (input.workAreas.length === 0) {
     return {
       canCalculate: false,
+      estimateStatus: "failed",
       reason: input.allWorkAreasExcluded
         ? "No work areas are currently included in the quick estimate."
         : "Confirm at least one work area to generate a quick estimate.",
@@ -218,6 +233,100 @@ export function calculateQuickEstimateV1(
     };
   }
 
+  const pricedWorkAreas: typeof input.workAreas = [];
+  const unpricedWorkAreas: UnpricedWorkArea[] = [];
+
+  for (const area of input.workAreas) {
+    const pricingState = resolveScopePricingState({
+      workAreaTypeKey: area.workAreaTypeKey,
+      scopeName: area.name,
+      answers: area.answers,
+      qualityLevel: input.quickEstimate.quality_level,
+    });
+
+    if (pricingState.canIncludeInEstimate) {
+      pricedWorkAreas.push(area);
+    } else {
+      unpricedWorkAreas.push({
+        name: area.name,
+        workAreaTypeKey: area.workAreaTypeKey,
+        reason: pricingState.message,
+      });
+    }
+  }
+
+  if (pricedWorkAreas.length === 0) {
+    const onlyCustom = unpricedWorkAreas.every(
+      (area) =>
+        area.workAreaTypeKey.toLowerCase().includes("custom") ||
+        area.reason.toLowerCase().includes("custom")
+    );
+
+    return {
+      canCalculate: false,
+      estimateStatus: "failed",
+      reason: onlyCustom
+        ? "Custom scope is not priced yet."
+        : unpricedWorkAreas.length === 1
+          ? unpricedWorkAreas[0]!.reason
+          : "No priced work areas yet.",
+      unpricedWorkAreas,
+      estimatedCostLow: null,
+      estimatedCostHigh: null,
+      estimatedCostTypical: null,
+      centralEstimate: null,
+      recommendedSellLow: null,
+      recommendedSellHigh: null,
+      targetMarginPercent,
+      contingencyPercent,
+      expectedMarginPercent: null,
+      confidenceLevel: "low",
+      confidenceScore: 0,
+      confidenceLevelLabel: "Very Low",
+      confidenceReasons: [],
+      questionsToHigh: 3,
+      budgetFit: "unknown",
+      includedTrades,
+      inputsUsed: [],
+      allowances: [],
+      assumptions: [],
+      risks: ["Draft estimate only — not quote-ready without detailed take-off"],
+      missingInformation: unpricedWorkAreas.map(
+        (area) => `${area.name} not included in estimate yet`
+      ),
+      constraintsApplied: [],
+      qualityLevel: "unknown",
+      qualityLevelNote: "Finish level unknown — estimate range kept wider.",
+      ratesSource: "fallback",
+      rateSourceDetail: "Rough placeholder",
+      stagedRateLevel: 0,
+      stagedRatePrompt: "Add more rates to make this estimate more accurate.",
+      rateSourceLines: [],
+      benchmarkScopesForOnboarding: [],
+      usedPackageRates: false,
+      templatesUsed: [],
+      keyFactsUsed: [],
+      confidenceReason: null,
+      rangeQuality: "rough",
+      rangeQualityLabel: "Rough",
+      rangeQualityReason: "No priced work areas.",
+      rangeWidthPercent: null,
+      rangeFactor: null,
+      tightenSuggestions: [],
+      rangeLowDrivers: [],
+      rangeHighDrivers: [],
+      qualityFactors: [],
+      estimateTrace: createEmptyTrace(),
+      calculationTrace: createEmptyEstimateTrace(
+        input.project.id,
+        input.organisationId
+      ),
+      rangeChangedMessage: null,
+    };
+  }
+
+  const isPartialEstimate = unpricedWorkAreas.length > 0;
+
   let centralEstimate = 0;
   let usedPackageRates = false;
   const inputsUsed: string[] = [];
@@ -233,9 +342,45 @@ export function calculateQuickEstimateV1(
     workAreaTypeKey: string;
     centralEstimate: number;
   }[] = [];
+  const scopeCacheContributions: CachedScopeContribution[] = [];
+  const scopeCache = input.scopeEstimateCache;
+  const pricingVersion = input.pricingContextVersion ?? 0;
 
-  for (const area of input.workAreas) {
+  for (const area of pricedWorkAreas) {
     Object.assign(allAnswers, area.answers);
+    const inputHash = buildScopeInputHash({
+      area,
+      constraints: input.constraints,
+      qualityLevel: effectiveQualityLevel,
+      pricingContextVersion: pricingVersion,
+      targetMarginPercent,
+      contingencyPercent,
+    });
+
+    const cachedScope = scopeCache?.scopes?.[area.scopeId];
+    if (isScopeCacheValid(cachedScope, inputHash) && cachedScope?.areaResult) {
+      const result = cachedScope.areaResult as unknown as AreaCalcResult;
+      centralEstimate += cachedScope.centralEstimate;
+      if (result.usedPackage) usedPackageRates = true;
+      areaResults.push(result);
+      areaBreakdownInputs.push({
+        name: area.name,
+        workAreaTypeKey: area.workAreaTypeKey,
+        centralEstimate: cachedScope.centralEstimate,
+      });
+      inputsUsed.push(...result.inputs.map((i) => `${area.name}: ${i}`));
+      allowances.push(...result.allowances);
+      assumptions.push(
+        result.templateKey
+          ? `${area.name} scoped using ${result.templateKey} template — subject to site check`
+          : `${area.name} scoped as ${area.workAreaTypeKey} — subject to site check`
+      );
+      rateSources.push(result.rateSource);
+      if (result.templateKey) templatesUsed.push(result.templateKey);
+      scopeCacheContributions.push(cachedScope);
+      continue;
+    }
+
     const template = getScopeTemplateByWorkAreaType(area.workAreaTypeKey);
 
     let result: AreaCalcResult;
@@ -265,6 +410,7 @@ export function calculateQuickEstimateV1(
         scopeAllocation: calc.scopeAllocation,
         allocationBreakdown: calc.allocationBreakdown,
         traceDrivers: calc.traceDrivers,
+        estimateComponents: calc.estimateComponents,
       };
       templatesUsed.push(template.key);
       rateSources.push(calc.rateSource);
@@ -293,7 +439,32 @@ export function calculateQuickEstimateV1(
         ? `${area.name} scoped using ${result.templateKey} template — subject to site check`
         : `${area.name} scoped as ${area.workAreaTypeKey} — subject to site check`
     );
+
+    scopeCacheContributions.push({
+      scopeId: area.scopeId,
+      inputHash,
+      centralEstimate: result.centralEstimate,
+      areaResult: result as unknown as Record<string, unknown>,
+      calculatedAt: new Date().toISOString(),
+    });
   }
+
+  const updatedScopeEstimateCache: ScopeEstimateCache = buildScopeCacheFromResults({
+    pricingContext: {
+      organisationId: input.organisationId,
+      version: pricingVersion,
+      loadedAt: new Date().toISOString(),
+      pricingSettings: null,
+      scopeRates: input.scopeRates,
+      packageRates: input.packageRates,
+      labourRates: input.labourRates,
+      materialRates: input.materialRates,
+      subcontractorRates: input.subcontractorRates,
+    },
+    globalHash: "",
+    contributions: scopeCacheContributions,
+    previousCache: scopeCache,
+  });
 
   const suppressedConstraintSlugs = new Set<string>();
   for (const allowance of input.userAllowances ?? []) {
@@ -354,12 +525,12 @@ export function calculateQuickEstimateV1(
     : applyQualityLevelToCentral(afterConstraints, effectiveQualityLevel);
   const baseCost = qualityAdjustment.centralEstimate + userAllowanceTotal;
 
-  const measuredAreaCount = input.workAreas.filter((area) =>
+  const measuredAreaCount = pricedWorkAreas.filter((area) =>
     hasKeyMeasurementsForArea(area.workAreaTypeKey, area.answers)
   ).length;
   const measurementFraction =
-    input.workAreas.length > 0
-      ? measuredAreaCount / input.workAreas.length
+    pricedWorkAreas.length > 0
+      ? measuredAreaCount / pricedWorkAreas.length
       : 0;
   const hasKeyMeasurements = measurementFraction >= 1;
 
@@ -367,11 +538,15 @@ export function calculateQuickEstimateV1(
     ? Number(input.quickEstimate.client_budget)
     : null;
 
-  const hasCustomScope = input.workAreas.some(
-    (area) =>
-      !getScopeTemplateByWorkAreaType(area.workAreaTypeKey) ||
+  const hasCustomScope =
+    unpricedWorkAreas.some((area) =>
       area.workAreaTypeKey.toLowerCase().includes("custom")
-  );
+    ) ||
+    pricedWorkAreas.some(
+      (area) =>
+        !getScopeTemplateByWorkAreaType(area.workAreaTypeKey) ||
+        area.workAreaTypeKey.toLowerCase().includes("custom")
+    );
 
   const siteConstraintsAssessed = isSiteConstraintsAssessed({
     constraintsAssessed: input.siteConstraintsAssessed,
@@ -379,25 +554,53 @@ export function calculateQuickEstimateV1(
     answeredQuestionKeys: input.answeredQuestionKeys,
   });
 
-  const confidenceResult = computeConfidenceScore({
-    workAreas: input.workAreas,
-    qualityLevel: effectiveQualityLevel,
-    rateSources,
-    clientBudget,
-    constraintsAssessed: siteConstraintsAssessed,
-    discoveryNotesLength: input.discovery?.facts?.length
-      ? input.sourceNotesLength
-      : 0,
-    hasCustomScope,
+  const primarySource = primaryRateSource(rateSources);
+
+  const rateSourceLines = pricedWorkAreas.map((area, index) => {
+    const result = areaResults[index];
+    const scopeDef =
+      getScopeRateDefinitionByKey(result?.scopeTypeKey ?? "") ??
+      getScopeRateDefinition(area.workAreaTypeKey);
+    const scopeLabel = scopeDef?.label ?? area.name;
+    return {
+      workAreaName: area.name,
+      workAreaTypeKey: area.workAreaTypeKey,
+      scopeTypeKey: result?.scopeTypeKey ?? scopeDef?.scopeTypeKey ?? "",
+      label: scopeLabel,
+      rateSource: result?.rateSource ?? "placeholder",
+      rateSourceLabel: rateSourceLabel(result?.rateSource ?? "placeholder", {
+        scopeLabel,
+        usesDefaultRateOnly: result?.usesDefaultRateOnly,
+        roughAllowance: area.workAreaTypeKey === "Kitchen renovation",
+      }),
+    };
   });
 
-  const primarySource = primaryRateSource(rateSources);
-  const rangeFactor = getRangeFactor(
-    confidenceResult.score,
-    hasCustomScope && confidenceResult.score < 25
+  const confidenceEvaluation = evaluateConfidence({
+    workAreas: pricedWorkAreas.map((area) => ({
+      scopeId: area.scopeId,
+      scopeName: area.name,
+      workAreaTypeKey: area.workAreaTypeKey,
+      answers: area.answers,
+      included: true,
+    })),
+    qualityLevel: effectiveQualityLevel,
+    siteConstraintsAssessed,
+    rateSourceLines,
+  });
+
+  const engineConfidenceScore = confidenceEvaluation.overallScore;
+  const questionsToHigh = Math.max(
+    0,
+    Math.ceil((90 - engineConfidenceScore) / 15)
   );
 
-  const [costLow, costHigh] = buildRange(baseCost, confidenceResult.score, {
+  const rangeFactor = getRangeFactor(
+    engineConfidenceScore,
+    hasCustomScope && engineConfidenceScore < 25
+  );
+
+  const [costLow, costHigh] = buildRange(baseCost, engineConfidenceScore, {
     isAdvisoryOnly: hasCustomScope,
   });
 
@@ -407,7 +610,7 @@ export function calculateQuickEstimateV1(
   const recommendedSellLow = Math.round(costLow * sellMultiplier);
   const recommendedSellHigh = Math.round(costHigh * sellMultiplier);
 
-  const confidenceLevel = toLegacyConfidenceLevel(confidenceResult.score);
+  const confidenceLevel = toLegacyConfidenceLevel(engineConfidenceScore);
 
   const rangeWidthPercent = computeRangeWidthPercent(costLow, costHigh, baseCost);
 
@@ -423,16 +626,26 @@ export function calculateQuickEstimateV1(
     rangeWidthPercent,
   });
 
-  const missingInformation = buildMissingInformation({
-    workAreas: input.workAreas,
-    effectiveQualityLevel,
-  });
+  const missingInformation = [
+    ...buildMissingInformation({
+      workAreas: pricedWorkAreas,
+      effectiveQualityLevel,
+    }),
+    ...unpricedWorkAreas.map((area) =>
+      buildPartialEstimateExclusionMessage(
+        area.name,
+        area.workAreaTypeKey,
+        input.workAreas.find((w) => w.name === area.name)?.answers ?? {},
+        area.reason.toLowerCase().includes("pricing support")
+      )
+    ),
+  ];
 
   const rangeDrivers = buildRangeDrivers({
     scopeQuestions: input.scopeQuestions,
     constraintsApplied,
     qualityLevelNote: qualityAdjustment.qualityNote,
-    workAreaAnswers: input.workAreas.map((area) => ({
+    workAreaAnswers: pricedWorkAreas.map((area) => ({
       workAreaTypeKey: area.workAreaTypeKey,
       workAreaName: area.name,
       answers: area.answers,
@@ -445,25 +658,6 @@ export function calculateQuickEstimateV1(
     primarySource === "package_rate"
       ? "saved"
       : "fallback";
-
-  const rateSourceLines = input.workAreas.map((area, index) => {
-    const result = areaResults[index];
-    const scopeDef =
-      getScopeRateDefinitionByKey(result?.scopeTypeKey ?? "") ??
-      getScopeRateDefinition(area.workAreaTypeKey);
-    const scopeLabel = scopeDef?.label ?? area.name;
-    return {
-      workAreaName: area.name,
-      workAreaTypeKey: area.workAreaTypeKey,
-      scopeTypeKey: result?.scopeTypeKey ?? scopeDef?.scopeTypeKey ?? "",
-      label: scopeLabel,
-      rateSource: result?.rateSource ?? "placeholder",
-      rateSourceLabel: rateSourceLabel(result?.rateSource ?? "placeholder", {
-        scopeLabel,
-        usesDefaultRateOnly: result?.usesDefaultRateOnly,
-      }),
-    };
-  });
 
   const benchmarkScopeKeysSeen = new Set<string>();
   const benchmarkScopesForOnboarding = rateSourceLines
@@ -494,10 +688,7 @@ export function calculateQuickEstimateV1(
     effect: "Finish level adjustment",
   }));
 
-  const qualityFactors = confidenceResult.reasons.map((label) => ({
-    label: label.replace(/^⚠ /, ""),
-    met: !label.startsWith("⚠"),
-  }));
+  const qualityFactors = buildQualityFactorsFromEvaluation(confidenceEvaluation);
 
   const scaledAreaBreakdown = areaBreakdownInputs.map((area, index) => ({
     ...area,
@@ -525,7 +716,7 @@ export function calculateQuickEstimateV1(
     materialRates: input.materialRates,
   });
 
-  const workAreaTraces: WorkAreaEstimateTrace[] = input.workAreas.map(
+  const workAreaTraces: WorkAreaEstimateTrace[] = pricedWorkAreas.map(
     (area, index) => {
       const result = areaResults[index];
       const scaledCentral =
@@ -548,15 +739,19 @@ export function calculateQuickEstimateV1(
 
   const scopeAllowances: Record<string, string[]> = {};
   const scopeAssumptions: Record<string, string[]> = {};
-  for (let i = 0; i < input.workAreas.length; i++) {
-    const area = input.workAreas[i];
+  const scopeEstimateComponents: Record<string, EstimateComponent[]> = {};
+  for (let i = 0; i < pricedWorkAreas.length; i++) {
+    const area = pricedWorkAreas[i];
     const result = areaResults[i];
     scopeAllowances[area.name] = result.allowances;
     scopeAssumptions[area.name] = result.assumptions;
+    if (result.estimateComponents?.length) {
+      scopeEstimateComponents[area.name] = result.estimateComponents;
+    }
   }
 
   const estimateTrace = buildEstimateTrace({
-    workAreas: input.workAreas,
+    workAreas: pricedWorkAreas,
     scopeKey: primaryArea?.templateKey ?? "generic",
     quantity: primaryArea?.quantity ?? 0,
     unit: primaryArea?.unit ?? "each",
@@ -569,7 +764,7 @@ export function calculateQuickEstimateV1(
     finishAdjustments: finishTraceAdjustments,
     contingencyPercent,
     marginPercent: targetMarginPercent,
-    confidenceScore: confidenceResult.score,
+    confidenceScore: engineConfidenceScore,
     rangeFactor,
     costLow,
     costHigh,
@@ -582,9 +777,10 @@ export function calculateQuickEstimateV1(
     rangeQuality: rangeQualityResult.level,
     scopeAllowances,
     scopeAssumptions,
+    scopeEstimateComponents,
   });
 
-  const scopeTraces = input.workAreas.map((area, index) => {
+  const scopeTraces = pricedWorkAreas.map((area, index) => {
     const result = areaResults[index];
     const scaledCentral =
       scaledAreaBreakdown[index]?.centralEstimate ?? result.centralEstimate;
@@ -600,7 +796,7 @@ export function calculateQuickEstimateV1(
       centralEstimate: result.centralEstimate,
       scaledCentral,
       effectiveQualityLevel,
-      confidenceScore: confidenceResult.score,
+      confidenceScore: engineConfidenceScore,
       contingencyPercent,
       marginPercent: targetMarginPercent,
       inputs: result.inputs,
@@ -608,6 +804,7 @@ export function calculateQuickEstimateV1(
       assumptions: result.assumptions,
       traceDrivers: result.traceDrivers,
       costBreakdown,
+      estimateComponents: result.estimateComponents,
     });
   });
 
@@ -624,8 +821,8 @@ export function calculateQuickEstimateV1(
     contingencyPercent,
     rangeQuality: rangeQualityResult.level,
     rangeWidthPercent,
-    confidenceScore: confidenceResult.score,
-    confidenceReasons: confidenceResult.reasons,
+    confidenceScore: engineConfidenceScore,
+    confidenceReasons: confidenceEvaluation.scopes.flatMap((s) => s.confirmed),
     tightenSuggestions: rangeDrivers.tightenSuggestions,
     constraintsApplied,
     qualityAdjustmentAssumptions: qualityAdjustment.assumptions,
@@ -634,13 +831,12 @@ export function calculateQuickEstimateV1(
     missingInformation,
   });
 
-  const tightenMessage =
-    confidenceResult.questionsToHigh > 0
-      ? `Answer ${confidenceResult.questionsToHigh} more key question${confidenceResult.questionsToHigh === 1 ? "" : "s"} to reach High confidence.`
-      : null;
+  const tightenMessage = confidenceEvaluation.nextBestProjectAction;
 
   return {
     canCalculate: true,
+    estimateStatus: isPartialEstimate ? "partial" : "ready",
+    unpricedWorkAreas: isPartialEstimate ? unpricedWorkAreas : undefined,
     estimatedCostLow: costLow,
     estimatedCostHigh: costHigh,
     estimatedCostTypical: baseCost,
@@ -651,10 +847,12 @@ export function calculateQuickEstimateV1(
     contingencyPercent,
     expectedMarginPercent: targetMarginPercent,
     confidenceLevel,
-    confidenceScore: confidenceResult.score,
-    confidenceLevelLabel: confidenceLevelLabel(confidenceResult.level),
-    confidenceReasons: confidenceResult.reasons,
-    questionsToHigh: confidenceResult.questionsToHigh,
+    confidenceScore: engineConfidenceScore,
+    confidenceLevelLabel: confidenceLevelLabel(
+      resolveConfidenceLevel(engineConfidenceScore)
+    ),
+    confidenceReasons: confidenceEvaluation.scopes.flatMap((s) => s.confirmed),
+    questionsToHigh,
     budgetFit: deriveBudgetFit(
       clientBudget,
       recommendedSellLow,
@@ -686,7 +884,7 @@ export function calculateQuickEstimateV1(
     confidenceReason: tightenMessage,
     rangeQuality: rangeQualityResult.level,
     rangeQualityLabel: rangeQualityResult.label,
-    rangeQualityReason: `Range width ~${rangeWidthPercent ?? 0}% based on ${confidenceResult.score}/100 confidence.`,
+    rangeQualityReason: `Range width ~${rangeWidthPercent ?? 0}% based on ${engineConfidenceScore}/100 confidence.`,
     rangeWidthPercent,
     rangeFactor,
     tightenSuggestions: rangeDrivers.tightenSuggestions,
@@ -696,5 +894,6 @@ export function calculateQuickEstimateV1(
     estimateTrace,
     calculationTrace,
     rangeChangedMessage: null,
+    scopeEstimateCache: updatedScopeEstimateCache,
   };
 }

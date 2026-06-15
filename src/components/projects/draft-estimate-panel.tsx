@@ -18,6 +18,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DEFAULT_TARGET_MARGIN_PERCENT } from "@/lib/constants/quick-estimate";
+import { EstimateRetryButton } from "@/components/projects/estimate-retry-button";
+import { resolveEstimatePanelState } from "@/lib/cost-engine/resolve-estimate-panel-state";
 import { parseQuickEstimateSummary } from "@/lib/project-assistant-summary";
 import { formatCurrencyRange } from "@/lib/format-currency";
 import type { QuickEstimate } from "@/types/database";
@@ -95,6 +97,7 @@ export function DraftEstimatePanel({
   const [generatePending, startGenerate] = useTransition();
 
   const summary = parseQuickEstimateSummary(quickEstimate?.notes ?? null);
+  const panelState = resolveEstimatePanelState(quickEstimate, summary);
 
   const hasResults =
     quickEstimate?.estimated_cost_low != null &&
@@ -180,6 +183,42 @@ export function DraftEstimatePanel({
           {summary.rangeChangedMessage}
         </p>
       )}
+
+      {panelState?.kind === "failed" && (
+        <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm">
+          <p className="font-medium">{panelState.title}</p>
+          <p className="mt-1 text-muted-foreground">{panelState.reason}</p>
+          {panelState.canRetry && (
+            <div className="mt-3">
+              <EstimateRetryButton
+                projectId={projectId}
+                onSuccess={() => router.refresh()}
+                compact
+              />
+            </div>
+          )}
+        </div>
+      )}
+
+      {panelState?.kind === "partial" && hasResults && (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs">
+          <p className="font-medium text-amber-800 dark:text-amber-300">
+            {panelState.title}
+          </p>
+          {panelState.unpricedAreas.map((area) => (
+            <p key={area} className="mt-1 text-muted-foreground">
+              {area} not included yet — pricing support/rates needed.
+            </p>
+          ))}
+        </div>
+      )}
+
+      {(panelState?.kind === "ready" || panelState?.kind === "partial") &&
+        panelState.warning && (
+          <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-800 dark:text-amber-300">
+            {panelState.warning}
+          </p>
+        )}
 
       {hasResults ? (
         <div
@@ -331,9 +370,22 @@ export function DraftEstimatePanel({
           <EstimateTracePanel trace={summary?.estimateTrace} />
         </div>
       ) : (
-        <p className="text-sm text-muted-foreground">
-          Answer the key questions to generate a draft estimate.
-        </p>
+        <div className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            {panelState?.kind === "failed"
+              ? panelState.reason
+              : panelState?.kind === "empty"
+                ? panelState.detail
+                : "Answer the key questions to generate a draft estimate."}
+          </p>
+          {panelState?.canRetry && panelState.kind !== "failed" && (
+            <EstimateRetryButton
+              projectId={projectId}
+              onSuccess={() => router.refresh()}
+              compact
+            />
+          )}
+        </div>
       )}
     </div>
   );

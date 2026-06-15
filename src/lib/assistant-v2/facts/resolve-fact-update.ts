@@ -166,6 +166,11 @@ const FACT_PHRASES: FactPhrase[] = [
     scopeHint: /deck/i,
   },
   {
+    patterns: [/demolition/i, /demo(?:lish)?/i],
+    factKeySuffix: "demolition_required",
+    scopeHint: /kitchen/i,
+  },
+  {
     patterns: [/demolition|demo(?:lish)?|existing\s*deck/i],
     factKeySuffix: "has_existing_deck",
     scopeHint: /deck/i,

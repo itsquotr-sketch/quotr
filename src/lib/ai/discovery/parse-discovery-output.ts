@@ -245,8 +245,16 @@ export function parseAiDiscoveryOutput(
     confidence: fact.confidence ?? 0.5,
   }));
 
+  const dedupedFacts: typeof facts = [];
+  const seenFactKeys = new Set<string>();
+  for (const fact of facts) {
+    if (seenFactKeys.has(fact.key)) continue;
+    seenFactKeys.add(fact.key);
+    dedupedFacts.push(fact);
+  }
+
   const factKeys = new Set(
-    facts.filter((f) => f.confidence >= 0.7).map((f) => f.key)
+    dedupedFacts.filter((f) => f.confidence >= 0.7).map((f) => f.key)
   );
 
   const questions = parsed.questions
@@ -261,6 +269,14 @@ export function parseAiDiscoveryOutput(
       inputType: mapQuestionInputType(q.questionType),
       unit: undefined,
     }));
+
+  const dedupedQuestions: typeof questions = [];
+  const seenQuestionKeys = new Set<string>();
+  for (const question of questions) {
+    if (seenQuestionKeys.has(question.key)) continue;
+    seenQuestionKeys.add(question.key);
+    dedupedQuestions.push(question);
+  }
 
   const constraints = parsed.constraints
     .filter((c) => c.value !== false)
@@ -281,8 +297,8 @@ export function parseAiDiscoveryOutput(
 
   return {
     workAreas,
-    facts,
-    questions,
+    facts: dedupedFacts,
+    questions: dedupedQuestions,
     constraints,
     trades,
     risks: parsed.risks,

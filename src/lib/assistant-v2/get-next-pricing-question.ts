@@ -1,5 +1,6 @@
-import { buildMergedAnswersForScope } from "@/lib/assistant-v2/build-merged-answers";
+import { applyInferredFacts, shouldSuppressQuestionAfterInference } from "@/lib/assistant-v2/facts/infer-related-facts";
 import { shouldSuppressQuestionForDerivedValue } from "@/lib/assistant-v2/facts/measurement-resolver";
+import { buildMergedAnswersForScope } from "@/lib/assistant-v2/build-merged-answers";
 import {
   getKnownFactsForScope,
   shouldSkipQuestion,
@@ -7,6 +8,7 @@ import {
 import type { DiscoveryResult } from "@/lib/ai/discovery/types";
 import type { QualityLevel } from "@/lib/constants/quality-level";
 import {
+  getQuestionDefsForWorkAreaType,
   resolveQuestionDef,
   resolveWorkAreaTypeKey,
 } from "@/lib/project-assistant-questions";
@@ -16,12 +18,20 @@ import {
   isFactKnownForScope,
   questionKeyMatchesScopeFact,
 } from "@/lib/scopes";
+import { getCanonicalScopeTemplateByWorkAreaType } from "@/lib/scopes/templates";
+import {
+  getMissingRequiredFactsForWorkArea,
+  getMissingUsefulFactsForWorkArea,
+  isCanonicalRequiredFactKey,
+} from "@/lib/assistant-v2/stages/required-fact-gating";
 import { normalizeQuestionKey } from "@/lib/question-keys";
 import {
   isTemplateAffectsEstimateQuestion,
   isTemplateRequiredQuestion,
 } from "@/lib/scope-templates";
+import { shouldSkipFinishLevelQuestion } from "@/lib/scopes/resolve-effective-finish";
 import { isAnswered } from "@/lib/scope-answer-state";
+import { isFactDependencyMet } from "@/lib/assistant-v2/questions/is-fact-dependency-met";
 
 export type PricingQuestion = {
   questionId: string;
@@ -42,6 +52,7 @@ export type ScopeGroupInput = {
   scopeName: string;
   scopeTypeName: string | null;
   questions: ScopeQuestionWithAnswers[];
+  answers?: Record<string, string>;
 };
 
 function parseSelectOptions(
@@ -78,6 +89,9 @@ function isRequiredFact(
   if (scope && key) {
     return scope.requiredFacts.some((f) => f.key === key);
   }
+  if (key && isCanonicalRequiredFactKey(typeKey, key)) {
+    return true;
+  }
   return isTemplateRequiredQuestion(typeKey, question.question_key);
 }
 
@@ -93,7 +107,11 @@ function isKnownQuestion(
   }
 ): boolean {
   const key = normalizeQuestionKey(question.question_key);
-  if (key && shouldSuppressQuestionForDerivedValue(key, mergedAnswers)) {
+  const inferredAnswers = applyInferredFacts(mergedAnswers);
+  if (key && shouldSuppressQuestionAfterInference(key, inferredAnswers)) {
+    return true;
+  }
+  if (key && shouldSuppressQuestionForDerivedValue(key, inferredAnswers)) {
     return true;
   }
 
@@ -175,29 +193,83 @@ function toPricingQuestion(
   };
 }
 
-const MAX_BATCH_QUESTIONS = 3;
+const MAX_BATCH_QUESTIONS = 8;
+const MAX_QUESTIONS_PER_SCOPE = 4;
 
-function questionPriority(questionKey: string, inputType: string): number {
+function questionPriority(
+  questionKey: string,
+  inputType: string,
+  required: boolean,
+  workAreaTypeKey: string
+): number {
   const key = questionKey.toLowerCase();
-  if (
-    inputType === "number" ||
-    key.includes("area") ||
-    key.includes("length") ||
-    key.includes("quantity") ||
-    key.includes("_m2") ||
-    key.includes("_m")
-  ) {
-    return 100;
+  const scope = getScopeByWorkAreaType(workAreaTypeKey);
+
+  if (required) {
+    if (
+      inputType === "number" ||
+      key.includes("area") ||
+      key.includes("length") ||
+      key.includes("height") ||
+      key.includes("quantity")
+    ) {
+      return 1000;
+    }
+    if (key.includes("material") || key.includes("type") || key.includes("level")) {
+      return 950;
+    }
+    return 900;
   }
-  if (key.includes("material")) return 70;
-  if (key.includes("access") || key.includes("level_type")) return 50;
-  if (key.includes("finish")) return 30;
-  return 60;
+
+  if (scope?.pricingDrivers) {
+    const driverIndex = scope.pricingDrivers.indexOf(questionKey);
+    if (driverIndex >= 0) return 800 - driverIndex * 5;
+  }
+
+  if (scope?.confidenceRules.highImpactOptionalKeys.includes(questionKey)) {
+    const hiIndex = scope.confidenceRules.highImpactOptionalKeys.indexOf(
+      questionKey
+    );
+    return 700 - hiIndex * 5;
+  }
+
+  if (
+    key.includes("rate") ||
+    key.includes("supply") ||
+    key.includes("demolition")
+  ) {
+    return 500;
+  }
+
+  if (
+    key.includes("access") ||
+    key.includes("ground") ||
+    key.includes("drainage") ||
+    key.includes("carting") ||
+    key.includes("spoil")
+  ) {
+    return 300;
+  }
+
+  if (key.includes("finish")) return 200;
+  return 250;
 }
 
 type RankedQuestion = PricingQuestion & { priority: number };
 
-function interleaveByScope(questions: RankedQuestion[], maxCount: number): PricingQuestion[] {
+function shouldAskQuestion(
+  questionKey: string,
+  typeKey: string,
+  mergedAnswers: Record<string, string>
+): boolean {
+  return isFactDependencyMet(typeKey, questionKey, mergedAnswers);
+}
+
+function interleaveByScope(
+  questions: RankedQuestion[],
+  maxCount: number,
+  maxPerScope = MAX_QUESTIONS_PER_SCOPE
+): PricingQuestion[] {
   const byScope = new Map<string, RankedQuestion[]>();
   for (const q of questions) {
     const list = byScope.get(q.scopeId) ?? [];
@@ -211,15 +283,20 @@ function interleaveByScope(questions: RankedQuestion[], maxCount: number): Prici
 
   const scopeIds = [...byScope.keys()];
   const result: PricingQuestion[] = [];
+  const perScopeCount = new Map<string, number>();
   let round = 0;
 
   while (result.length < maxCount && scopeIds.length > 0) {
     let added = false;
     for (const scopeId of scopeIds) {
+      const taken = perScopeCount.get(scopeId) ?? 0;
+      if (taken >= maxPerScope) continue;
+
       const list = byScope.get(scopeId);
       const item = list?.[round];
       if (item) {
         result.push(item);
+        perScopeCount.set(scopeId, taken + 1);
         added = true;
         if (result.length >= maxCount) break;
       }
@@ -229,6 +306,69 @@ function interleaveByScope(questions: RankedQuestion[], maxCount: number): Prici
   }
 
   return result;
+}
+
+function synthesizeQuestionsForGroup(
+  group: ScopeGroupInput,
+  typeKey: string,
+  merged: Record<string, string>,
+  requiredOnly: boolean,
+  input: {
+    qualityLevel?: QualityLevel;
+    selectedConstraintSlugs?: string[];
+    discovery: DiscoveryResult | null;
+    answeredQuestionKeys?: Set<string>;
+  }
+): RankedQuestion[] {
+  const answered = input.answeredQuestionKeys ?? new Set<string>();
+  const missingKeys = requiredOnly
+    ? new Set(
+        getMissingRequiredFactsForWorkArea(typeKey, merged, {
+          projectQualityLevel: input.qualityLevel,
+        }).map((f) => f.key)
+      )
+    : new Set(
+        getMissingUsefulFactsForWorkArea(typeKey, merged).map((f) => f.key)
+      );
+
+  if (missingKeys.size === 0) return [];
+
+  const results: RankedQuestion[] = [];
+  for (const def of getQuestionDefsForWorkAreaType(typeKey, group.scopeName)) {
+    const key = normalizeQuestionKey(def.key);
+    if (!key || !missingKeys.has(key)) continue;
+    if (answered.has(key)) continue;
+    if (!shouldAskQuestion(key, typeKey, merged)) continue;
+    if (
+      shouldSkipFinishLevelQuestion({
+        factKey: key,
+        scopeTypeKey: typeKey,
+        answers: merged,
+        projectQualityLevel: input.qualityLevel,
+      })
+    ) {
+      continue;
+    }
+    if (shouldSuppressQuestionAfterInference(key, applyInferredFacts(merged))) continue;
+    if (shouldSuppressQuestionForDerivedValue(key, applyInferredFacts(merged))) continue;
+
+    results.push({
+      questionId: `synthetic-${group.scopeId}-${key}`,
+      questionKey: key,
+      questionText: def.text,
+      scopeId: group.scopeId,
+      scopeName: group.scopeName,
+      workAreaTypeKey: typeKey,
+      inputType: def.inputType,
+      options: def.options ?? [],
+      required: requiredOnly,
+      unit: def.unit,
+      placeholder: def.placeholder,
+      priority: questionPriority(key, def.inputType, requiredOnly, typeKey),
+    });
+  }
+
+  return results;
 }
 
 function collectRankedQuestions(
@@ -247,13 +387,16 @@ function collectRankedQuestions(
 
   for (const group of input.scopeGroups) {
     const typeKey = resolveWorkAreaTypeKey(group.scopeTypeName, group.scopeName);
-    const merged = buildMergedAnswersForScope(
-      group.scopeId,
-      group.scopeName,
-      group.scopeTypeName,
-      input.scopeQuestions,
-      input.discovery
-    );
+    const merged = {
+      ...buildMergedAnswersForScope(
+        group.scopeId,
+        group.scopeName,
+        group.scopeTypeName,
+        input.scopeQuestions,
+        input.discovery
+      ),
+      ...(group.answers ?? {}),
+    };
 
     for (const question of group.questions) {
       if (!questionBelongsInFlow(question, typeKey)) continue;
@@ -263,14 +406,43 @@ function collectRankedQuestions(
 
       if (!requiredOnly) {
         const scope = getScopeByWorkAreaType(typeKey);
-        if (!scope) continue;
+        const canonical = getCanonicalScopeTemplateByWorkAreaType(typeKey);
         const key = normalizeQuestionKey(question.question_key);
-        const highImpact = new Set(scope.confidenceRules.highImpactOptionalKeys);
-        if (!key || !highImpact.has(key)) continue;
+        if (scope) {
+          const highImpact = new Set(scope.confidenceRules.highImpactOptionalKeys);
+          if (!key || !highImpact.has(key)) continue;
+        } else if (canonical) {
+          const usefulKeys = new Set(
+            canonical.facts.useful.map((f) => f.key)
+          );
+          if (!key || !usefulKeys.has(key)) continue;
+        } else {
+          continue;
+        }
       }
 
       const key = normalizeQuestionKey(question.question_key);
       if (key && answered.has(key)) continue;
+      if (key && !shouldAskQuestion(key, typeKey, merged)) continue;
+      if (requiredOnly && key) {
+        const missingKeys = new Set(
+          getMissingRequiredFactsForWorkArea(typeKey, merged, {
+            projectQualityLevel: input.qualityLevel,
+          }).map((f) => f.key)
+        );
+        if (!missingKeys.has(key)) continue;
+      }
+      if (
+        key &&
+        shouldSkipFinishLevelQuestion({
+          factKey: key,
+          scopeTypeKey: typeKey,
+          answers: merged,
+          projectQualityLevel: input.qualityLevel,
+        })
+      ) {
+        continue;
+      }
       if (
         isKnownQuestion(question, typeKey, merged, {
           scopeId: group.scopeId,
@@ -287,8 +459,31 @@ function collectRankedQuestions(
 
       questions.push({
         ...pq,
-        priority: questionPriority(pq.questionKey, pq.inputType),
+        priority: questionPriority(pq.questionKey, pq.inputType, requiredOnly, typeKey),
       });
+    }
+
+    const existingKeys = new Set(
+      questions
+        .filter((q) => q.scopeId === group.scopeId)
+        .map((q) => q.questionKey)
+    );
+    for (const sq of synthesizeQuestionsForGroup(
+      group,
+      typeKey,
+      merged,
+      requiredOnly,
+      {
+        qualityLevel: input.qualityLevel,
+        selectedConstraintSlugs: input.selectedConstraintSlugs,
+        discovery: input.discovery,
+        answeredQuestionKeys: input.answeredQuestionKeys,
+      }
+    )) {
+      if (!existingKeys.has(sq.questionKey)) {
+        questions.push(sq);
+        existingKeys.add(sq.questionKey);
+      }
     }
   }
 
@@ -305,10 +500,16 @@ export function getNextPricingQuestions(
     qualityLevel?: QualityLevel;
     selectedConstraintSlugs?: string[];
   },
-  maxCount = MAX_BATCH_QUESTIONS
+  maxCount = MAX_BATCH_QUESTIONS,
+  mode: "required_first" | "required_only" | "optional_only" = "required_first"
 ): PricingQuestion[] {
+  if (mode === "optional_only") {
+    const optional = collectRankedQuestions(input, false);
+    return interleaveByScope(optional, maxCount);
+  }
+
   const required = collectRankedQuestions(input, true);
-  if (required.length > 0) {
+  if (mode === "required_only" || required.length > 0) {
     return interleaveByScope(required, maxCount);
   }
 
@@ -323,13 +524,16 @@ export function getNextPricingQuestion(input: {
 }): PricingQuestion | null {
   for (const group of input.scopeGroups) {
     const typeKey = resolveWorkAreaTypeKey(group.scopeTypeName, group.scopeName);
-    const merged = buildMergedAnswersForScope(
-      group.scopeId,
-      group.scopeName,
-      group.scopeTypeName,
-      input.scopeQuestions,
-      input.discovery
-    );
+    const merged = {
+      ...buildMergedAnswersForScope(
+        group.scopeId,
+        group.scopeName,
+        group.scopeTypeName,
+        input.scopeQuestions,
+        input.discovery
+      ),
+      ...(group.answers ?? {}),
+    };
 
     for (const question of group.questions) {
       if (!questionBelongsInFlow(question, typeKey)) continue;
@@ -377,13 +581,16 @@ export function countMissingPricingQuestions(input: {
 
   for (const group of input.scopeGroups) {
     const typeKey = resolveWorkAreaTypeKey(group.scopeTypeName, group.scopeName);
-    const merged = buildMergedAnswersForScope(
-      group.scopeId,
-      group.scopeName,
-      group.scopeTypeName,
-      input.scopeQuestions,
-      input.discovery
-    );
+    const merged = {
+      ...buildMergedAnswersForScope(
+        group.scopeId,
+        group.scopeName,
+        group.scopeTypeName,
+        input.scopeQuestions,
+        input.discovery
+      ),
+      ...(group.answers ?? {}),
+    };
 
     for (const question of group.questions) {
       if (!questionBelongsInFlow(question, typeKey)) continue;

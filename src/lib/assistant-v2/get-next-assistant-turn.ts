@@ -5,22 +5,27 @@ import {
   type ConstraintQuestion,
 } from "@/lib/assistant-v2/get-next-constraint-question";
 import { buildMergedAnswersForScope } from "@/lib/assistant-v2/build-merged-answers";
-import { getKnownFactsForScope } from "@/lib/assistant-v2/facts/get-known-facts-for-scope";
 import { resolveWorkAreaTypeKey } from "@/lib/project-assistant-questions";
-import {
-  getNextPricingQuestions,
-  type PricingQuestion,
-  type ScopeGroupInput,
-} from "@/lib/assistant-v2/get-next-pricing-question";
+import type { PricingQuestion } from "@/lib/assistant-v2/get-next-pricing-question";
+import type { ScopeGroupInput } from "@/lib/assistant-v2/get-next-pricing-question";
 import type { ScopeQuestionWithAnswers } from "@/lib/project-assistant-data";
 import { normalizeQuestionKey } from "@/lib/question-keys";
-import { getMaterialQuestionTextForWorkArea } from "@/lib/scopes/material-categories";
+import {
+  buildAutopilotInputFromAssistantData,
+  getNextRequiredAssistantStep,
+} from "@/lib/assistant-v2/autopilot/get-next-required-assistant-step";
 
 export type QualityTurn = {
   kind: "quality";
   prompt: string;
   currentLevel: QualityLevel;
   options: { value: QualityLevel; label: string }[];
+};
+
+export type PricingSourceTurn = {
+  kind: "pricing_source";
+  message: string;
+  options: { id: string; label: string }[];
 };
 
 export type AssistantTurn =
@@ -31,37 +36,40 @@ export type AssistantTurn =
       hasRequired: boolean;
     }
   | { kind: "constraint_batch"; constraints: ConstraintQuestion[] }
-  | { kind: "quality"; turn: QualityTurn };
+  | { kind: "quality"; turn: QualityTurn }
+  | { kind: "pricing_source"; turn: PricingSourceTurn };
 
 const QUALITY_OPTIONS: { value: QualityLevel; label: string }[] = [
-  { value: "budget", label: "Budget" },
-  { value: "standard", label: "Standard" },
-  { value: "premium", label: "Premium" },
-  { value: "unknown", label: "Not Sure" },
+  { value: "budget", label: "Budget / basic" },
+  { value: "standard", label: "Standard / mid-spec" },
+  { value: "premium", label: "Premium / high-spec" },
+  { value: "unknown", label: "Not sure" },
 ];
 
-function scopeBatchIntro(questions: PricingQuestion[]): string {
-  const hasRequired = questions.some((q) => q.required);
-  if (hasRequired && questions.length === 1) {
-    return contextualScopePrompt(questions[0]!);
-  }
-  if (hasRequired) {
-    return "To tighten this estimate I need:";
-  }
-  return "I can price this now — these would sharpen the range:";
-}
-
-function contextualScopePrompt(q: PricingQuestion): string {
-  const key = q.questionKey.toLowerCase();
-  if (key.includes("level")) return "Is the deck ground-level or elevated?";
-  if (key.includes("balustrade")) return "Is a balustrade required?";
-  if (key.includes("stair")) return "Are stairs required?";
-  if (key.includes("material") || key.includes("finish_level")) {
-    const scopeSpecific = getMaterialQuestionTextForWorkArea(q.workAreaTypeKey);
-    if (scopeSpecific) return scopeSpecific;
-  }
-  if (key.includes("area")) return "What's the approximate area?";
-  return q.questionText;
+function buildStageWorkAreas(
+  scopeGroups: ScopeGroupInput[],
+  scopeQuestions: ScopeQuestionWithAnswers[],
+  discovery: DiscoveryResult | null
+) {
+  return scopeGroups.map((group) => ({
+    scopeId: group.scopeId,
+    scopeName: group.scopeName,
+    workAreaTypeKey: resolveWorkAreaTypeKey(
+      group.scopeTypeName,
+      group.scopeName
+    ),
+    answers: {
+      ...buildMergedAnswersForScope(
+        group.scopeId,
+        group.scopeName,
+        group.scopeTypeName,
+        scopeQuestions,
+        discovery
+      ),
+      ...(group.answers ?? {}),
+    },
+    included: true,
+  }));
 }
 
 export function getNextAssistantTurn(input: {
@@ -73,94 +81,125 @@ export function getNextAssistantTurn(input: {
   declinedConstraintSlugs: Set<string>;
   qualityLevel: QualityLevel;
   answeredQuestionKeys: Set<string>;
+  pendingSuggestionCount?: number;
+  hasEstimate?: boolean;
+  estimateReady?: boolean;
+  estimatePartial?: boolean;
+  userSkippedDetails?: boolean;
+  sourceNotes?: string;
 }): AssistantTurn | null {
-  const scopeQuestions = getNextPricingQuestions(
-    {
-      scopeGroups: input.scopeGroups,
-      discovery: input.discovery,
-      scopeQuestions: input.scopeQuestions,
-      answeredQuestionKeys: input.answeredQuestionKeys,
-      qualityLevel: input.qualityLevel,
-      selectedConstraintSlugs: input.selectedConstraintSlugs,
-    },
-    3
+  const workAreas = buildStageWorkAreas(
+    input.scopeGroups,
+    input.scopeQuestions,
+    input.discovery
   );
 
-  const requiredQuestions = scopeQuestions.filter((q) => q.required);
+  const autopilotInput = buildAutopilotInputFromAssistantData({
+    confirmedScopes: workAreas.map((a) => ({
+      id: a.scopeId,
+      name: a.scopeName,
+      scope_types: { name: a.workAreaTypeKey },
+      include_in_quick_estimate: true,
+    })),
+    scopeGroups: input.scopeGroups,
+    scopeQuestions: input.scopeQuestions,
+    discovery: input.discovery,
+    qualityLevel: input.qualityLevel,
+    sourceNotes: input.sourceNotes,
+    selectedConstraintSlugs: input.selectedConstraintSlugs,
+    declinedConstraintSlugs: [...input.declinedConstraintSlugs],
+    answeredQuestionKeys: input.answeredQuestionKeys,
+    pendingSuggestionCount: input.pendingSuggestionCount,
+    quickEstimate: input.hasEstimate
+      ? {
+          estimated_cost_low: input.estimateReady ? 1 : null,
+          estimated_cost_high: input.estimateReady ? 1 : null,
+          estimate_status: input.estimatePartial
+            ? "partial"
+            : input.estimateReady
+              ? "ready"
+              : null,
+        }
+      : null,
+    userSkippedDetails: input.userSkippedDetails,
+  });
 
-  if (requiredQuestions.length > 0) {
-    return {
-      kind: "scope_batch",
-      questions: requiredQuestions,
-      intro: scopeBatchIntro(requiredQuestions),
-      hasRequired: true,
-    };
+  const step = getNextRequiredAssistantStep(autopilotInput);
+
+  if (!step.shouldContinue) {
+    return null;
   }
 
-  if (input.qualityLevel === "unknown" && input.scopeGroups.length > 0) {
-    const finishStillMissing = input.scopeGroups.some((group) => {
-      const typeKey = resolveWorkAreaTypeKey(
-        group.scopeTypeName,
-        group.scopeName
-      );
-      const merged = buildMergedAnswersForScope(
-        group.scopeId,
-        group.scopeName,
-        group.scopeTypeName,
-        input.scopeQuestions,
-        input.discovery
-      );
-      const known = getKnownFactsForScope({
-        scopeId: group.scopeId,
-        scopeTypeKey: typeKey,
-        answers: merged,
-        discovery: input.discovery,
-        qualityLevel: input.qualityLevel,
-        selectedConstraintSlugs: input.selectedConstraintSlugs,
-      });
-      return !Object.keys(known.facts).some((k) => k.includes("finish_level"));
-    });
-
-    if (finishStillMissing) {
+  switch (step.step) {
+    case "ask_quality":
       return {
         kind: "quality",
         turn: {
           kind: "quality",
-          prompt: "What finish level should I assume?",
+          prompt: step.message,
           currentLevel: input.qualityLevel,
           options: QUALITY_OPTIONS,
         },
       };
-    }
+
+    case "ask_required_scope_questions":
+      if (step.questions.length > 0) {
+        return {
+          kind: "scope_batch",
+          questions: step.questions,
+          intro: step.message,
+          hasRequired: true,
+        };
+      }
+      return null;
+
+    case "ask_useful_refinement":
+      if (step.questions.length > 0) {
+        return {
+          kind: "scope_batch",
+          questions: step.questions,
+          intro: step.message,
+          hasRequired: false,
+        };
+      }
+      return null;
+
+    case "ask_pricing_source":
+      if (step.pricingAlert) {
+        return {
+          kind: "pricing_source",
+          turn: {
+            kind: "pricing_source",
+            message: step.message,
+            options: step.pricingAlert.options,
+          },
+        };
+      }
+      return null;
+
+    case "ask_site_conditions":
+      if (step.constraints && step.constraints.length > 0) {
+        return { kind: "constraint_batch", constraints: step.constraints };
+      }
+      {
+        const discoverySlugs =
+          input.discovery?.constraints?.map((c) => c.slug) ?? [];
+        const pendingConstraints = getUnknownSiteConditions({
+          workAreaTypeKeys: input.workAreaTypeKeys,
+          selectedConstraintSlugs: input.selectedConstraintSlugs,
+          discoveryConstraintSlugs: discoverySlugs,
+          answeredQuestionKeys: input.answeredQuestionKeys,
+          declinedConstraintSlugs: [...input.declinedConstraintSlugs],
+        });
+        if (pendingConstraints.length > 0) {
+          return { kind: "constraint_batch", constraints: pendingConstraints };
+        }
+      }
+      return null;
+
+    default:
+      return null;
   }
-
-  const discoverySlugs =
-    input.discovery?.constraints?.map((c) => c.slug) ?? [];
-
-  const pendingConstraints = getUnknownSiteConditions({
-    workAreaTypeKeys: input.workAreaTypeKeys,
-    selectedConstraintSlugs: input.selectedConstraintSlugs,
-    discoveryConstraintSlugs: discoverySlugs,
-    answeredQuestionKeys: input.answeredQuestionKeys,
-    declinedConstraintSlugs: [...input.declinedConstraintSlugs],
-  });
-
-  if (pendingConstraints.length > 0) {
-    return { kind: "constraint_batch", constraints: pendingConstraints };
-  }
-
-  const optionalQuestions = scopeQuestions.filter((q) => !q.required);
-
-  if (optionalQuestions.length > 0) {
-    return {
-      kind: "scope_batch",
-      questions: optionalQuestions,
-      intro: scopeBatchIntro(optionalQuestions),
-      hasRequired: false,
-    };
-  }
-
-  return null;
 }
 
 export function collectAnsweredQuestionKeys(

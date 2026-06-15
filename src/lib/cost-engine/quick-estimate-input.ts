@@ -2,6 +2,7 @@ import type { QuickEstimateBudgetFit, QuickEstimateConfidenceLevel } from "@/lib
 import type { QualityLevel } from "@/lib/constants/quality-level";
 import type { ScopeQuestionForMissing } from "@/lib/cost-engine/build-missing-information";
 import type { EstimateQualityFactor } from "@/lib/cost-engine/estimate-quality";
+import type { ConfidenceEvaluationResult } from "@/lib/assistant-v2/confidence/evaluate-confidence";
 import type { EstimateTrace } from "@/lib/cost-engine/estimate-trace";
 import type { RangeQuality } from "@/lib/cost-engine/range-quality";
 import type { DiscoveryResult } from "@/lib/ai/discovery/types";
@@ -66,11 +67,21 @@ export type QuickEstimateInput = {
   /** True when user has confirmed site conditions (selected or declined). */
   siteConstraintsAssessed?: boolean;
   userAllowances?: ProjectAllowance[];
+  pricingContextVersion?: number;
+  scopeEstimateCache?: import("@/lib/cost-engine/cache/scope-estimate-cache").ScopeEstimateCache | null;
+};
+
+export type UnpricedWorkArea = {
+  name: string;
+  workAreaTypeKey: string;
+  reason: string;
 };
 
 export type QuickEstimateOutput = {
   canCalculate: boolean;
+  estimateStatus?: "draft" | "ready" | "failed" | "partial";
   reason?: string;
+  unpricedWorkAreas?: UnpricedWorkArea[];
   estimatedCostLow: number | null;
   estimatedCostHigh: number | null;
   estimatedCostTypical: number | null;
@@ -122,9 +133,11 @@ export type QuickEstimateOutput = {
   rangeLowDrivers: string[];
   rangeHighDrivers: string[];
   qualityFactors: EstimateQualityFactor[];
+  confidenceEvaluation?: ConfidenceEvaluationResult;
   estimateTrace: EstimateTrace;
   calculationTrace: import("@/lib/cost-engine/trace/types").EstimateTrace;
   rangeChangedMessage: string | null;
+  scopeEstimateCache?: import("@/lib/cost-engine/cache/scope-estimate-cache").ScopeEstimateCache;
 };
 
 export function buildAnswersMap(

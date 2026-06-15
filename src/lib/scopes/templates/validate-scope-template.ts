@@ -136,6 +136,39 @@ export function validateScopeTemplate(template: ScopeTemplate): TemplateValidati
     }
   }
 
+  if (template.confidenceWeights?.length) {
+    const weightSum = template.confidenceWeights.reduce(
+      (sum, weight) => sum + weight.weight,
+      0
+    );
+    if (weightSum !== 100) {
+      issues.push({
+        path: "confidenceWeights",
+        message: `Confidence weights must sum to 100 (got ${weightSum})`,
+      });
+    }
+    for (const [index, weight] of template.confidenceWeights.entries()) {
+      if (!weight.key?.trim()) {
+        issues.push({
+          path: `confidenceWeights[${index}].key`,
+          message: "Weight key is required",
+        });
+      }
+      if (!weight.label?.trim()) {
+        issues.push({
+          path: `confidenceWeights[${index}].label`,
+          message: "Weight label is required",
+        });
+      }
+      if (weight.weight <= 0 || weight.weight > 100) {
+        issues.push({
+          path: `confidenceWeights[${index}].weight`,
+          message: "Weight must be between 1 and 100",
+        });
+      }
+    }
+  }
+
   if (template.materialCategories) {
     const mc = template.materialCategories;
     if (!mc.factKey?.trim()) {

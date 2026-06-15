@@ -1,6 +1,7 @@
 import { createHash } from "crypto";
 import { applyDiscoveryResults } from "@/lib/ai/discovery/apply-discovery-results";
 import { enrichDiscoveryContext } from "@/lib/ai/discovery/build-discovery-context";
+import { buildDiscoveryOutputRowsFromOutcome } from "@/lib/ai/discovery/build-discovery-outputs";
 import { discoverProjectWithPreferredProvider, discoverProjectWithRulesProvider } from "@/lib/ai/discovery/discover-project";
 import { validateDiscoveryResult } from "@/lib/ai/discovery/parse-discovery-output";
 import { buildRuleBasedFallbackOutcome } from "@/lib/ai/discovery/rule-based-discovery-provider";
@@ -33,79 +34,6 @@ function resultToLegacyJson(result: DiscoveryResult): {
     constraints: result.constraints as unknown as Json,
     trades: result.trades as unknown as Json,
   };
-}
-
-function buildDiscoveryOutputs(
-  organisationId: string,
-  projectId: string,
-  discoveryRunId: string,
-  outcome: DiscoveryRunOutcome
-) {
-  const { result } = outcome;
-  const rows: Database["public"]["Tables"]["discovery_outputs"]["Insert"][] =
-    [];
-
-  const push = (
-    outputType: Database["public"]["Tables"]["discovery_outputs"]["Insert"]["output_type"],
-    outputKey: string,
-    title: string | null,
-    content: unknown,
-    confidence: number | null
-  ) => {
-    rows.push({
-      organisation_id: organisationId,
-      project_id: projectId,
-      discovery_run_id: discoveryRunId,
-      output_type: outputType,
-      output_key: outputKey,
-      title,
-      content: content as Json,
-      confidence,
-      status: "pending",
-    });
-  };
-
-  for (const workArea of result.workAreas) {
-    push(
-      "work_area",
-      workArea.typeKey,
-      workArea.name,
-      workArea,
-      workArea.confidence
-    );
-  }
-  for (const fact of result.facts) {
-    push("fact", fact.key, fact.label, fact, fact.confidence);
-  }
-  for (const question of result.questions) {
-    push("question", question.key, question.text, question, null);
-  }
-  for (const constraint of result.constraints) {
-    push(
-      "constraint",
-      constraint.slug,
-      constraint.label,
-      constraint,
-      constraint.confidence
-    );
-  }
-  for (const trade of result.trades) {
-    push(
-      "trade",
-      `${trade.workAreaTypeKey}:${trade.name}`,
-      trade.name,
-      trade,
-      null
-    );
-  }
-  for (const risk of result.risks) {
-    push("risk", risk.title, risk.title, risk, null);
-  }
-  for (const assumption of result.assumptions) {
-    push("assumption", assumption, assumption, { text: assumption }, null);
-  }
-
-  return rows;
 }
 
 async function persistLegacyDiscoveryRun(
@@ -271,7 +199,7 @@ export async function runProjectDiscovery(
       logSupabaseError("runProjectDiscovery.updateRun", updateError);
     }
 
-    const outputs = buildDiscoveryOutputs(
+    const outputs = buildDiscoveryOutputRowsFromOutcome(
       organisationId,
       projectId,
       pendingRun.id,
@@ -281,7 +209,10 @@ export async function runProjectDiscovery(
     if (outputs.length > 0) {
       const { error: outputsError } = await supabase
         .from("discovery_outputs")
-        .insert(outputs);
+        .upsert(outputs, {
+          onConflict: "discovery_run_id,output_type,output_key",
+          ignoreDuplicates: false,
+        });
 
       if (outputsError) {
         logSupabaseError("runProjectDiscovery.insertOutputs", outputsError);

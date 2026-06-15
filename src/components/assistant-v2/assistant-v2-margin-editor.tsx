@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  syncAssistantState,
+  syncAssistantEstimateOnly,
   updateAssistantMargin,
   type AssistantSyncPayload,
 } from "@/actions/assistant-v2";
@@ -10,11 +10,12 @@ import { useEstimateUpdate } from "@/components/projects/estimate-update-context
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { TRUST_COPY } from "@/lib/assistant-v2/trust-messages";
 
 type AssistantV2MarginEditorProps = {
   projectId: string;
   defaultMargin: number;
-  onEstimateSync?: (payload: AssistantSyncPayload) => void;
+  onEstimateSync?: (payload: AssistantSyncPayload, syncVersion?: number) => void;
 };
 
 export function AssistantV2MarginEditor({
@@ -22,7 +23,8 @@ export function AssistantV2MarginEditor({
   defaultMargin,
   onEstimateSync,
 }: AssistantV2MarginEditorProps) {
-  const { markSaving, markUpdating, markSaved, markIdle } = useEstimateUpdate();
+  const { markSaving, markUpdating, markSaved, markIdle, beginSync, isSyncCurrent, setPendingAction } =
+    useEstimateUpdate();
   const [margin, setMargin] = useState(String(defaultMargin));
   const savedMarginRef = useRef(defaultMargin);
   const [pending, setPending] = useState(false);
@@ -53,6 +55,7 @@ export function AssistantV2MarginEditor({
     setErrorMsg(null);
     markSaving();
     markUpdating();
+    setPendingAction("applying_margin");
 
     try {
       const result = await updateAssistantMargin(projectId, parsed);
@@ -65,9 +68,10 @@ export function AssistantV2MarginEditor({
       savedMarginRef.current = parsed;
       setSuccessMsg(result.message ?? "Margin updated");
 
-      const syncResult = await syncAssistantState(projectId);
-      if (syncResult.data) {
-        onEstimateSync?.(syncResult.data);
+      const syncVersion = beginSync();
+      const syncResult = await syncAssistantEstimateOnly(projectId);
+      if (syncResult.data && isSyncCurrent(syncVersion)) {
+        onEstimateSync?.(syncResult.data, syncVersion);
       }
 
       markSaved({
@@ -123,7 +127,7 @@ export function AssistantV2MarginEditor({
           disabled={!canApply}
           onClick={() => void handleApply()}
         >
-          {pending ? "Applying…" : "Apply"}
+          {pending ? TRUST_COPY.applyingMargin : "Apply"}
         </Button>
       </div>
       {pending && (

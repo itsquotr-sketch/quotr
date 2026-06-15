@@ -106,7 +106,7 @@ describe("Sprint 11D — conversational intelligence hardening", () => {
       const path = buildRefinementPathForward([]);
       expect(path.message).not.toContain("No optional details left");
       expect(path.pathType).toBe("highly_refined");
-      expect(path.message).toContain("strong estimate");
+      expect(path.message).toContain("key information");
     });
 
     it("lists critical missing items when present", () => {

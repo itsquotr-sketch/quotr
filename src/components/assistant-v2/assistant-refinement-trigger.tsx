@@ -416,6 +416,14 @@ function RefinementQuestionRow({
   }
 
   if (question.inputType === "number") {
+    function submitNumeric() {
+      if (!numberValue.trim()) return;
+      const label = question.unit
+        ? `${numberValue.trim()} ${question.unit}`
+        : numberValue.trim();
+      onAnswer(numberValue.trim(), label);
+    }
+
     return (
       <div className="space-y-1.5">
         <p className="text-sm font-medium">{question.questionText}</p>
@@ -428,12 +436,11 @@ function RefinementQuestionRow({
             placeholder={question.placeholder ?? "e.g. 12"}
             className="h-9"
             onChange={(e) => setNumberValue(e.target.value)}
+            onBlur={submitNumeric}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && numberValue.trim()) {
-                const label = question.unit
-                  ? `${numberValue} ${question.unit}`
-                  : numberValue;
-                onAnswer(numberValue.trim(), label);
+              if (e.key === "Enter") {
+                e.preventDefault();
+                submitNumeric();
               }
             }}
           />
@@ -442,20 +449,9 @@ function RefinementQuestionRow({
               {question.unit}
             </span>
           )}
-          <Button
-            type="button"
-            size="sm"
-            variant="secondary"
-            disabled={!numberValue.trim()}
-            onClick={() => {
-              const label = question.unit
-                ? `${numberValue} ${question.unit}`
-                : numberValue;
-              onAnswer(numberValue.trim(), label);
-            }}
-          >
-            Save
-          </Button>
+          {selected && (
+            <span className="self-center text-xs text-primary">Updated.</span>
+          )}
         </div>
       </div>
     );
@@ -489,11 +485,13 @@ export function RefinementAnswerBatch({
   const [localAnswers, setLocalAnswers] = useState<
     Record<string, { answer: string; label: string }>
   >({});
+  const [submitted, setSubmitted] = useState(false);
   const flushedRef = useRef(false);
   const questionIds = questions.map((q) => q.questionId).join(",");
 
   useEffect(() => {
     flushedRef.current = false;
+    setSubmitted(false);
     setLocalAnswers({});
   }, [questionIds]);
 
@@ -529,6 +527,7 @@ export function RefinementAnswerBatch({
     });
 
     flushedRef.current = true;
+    setSubmitted(true);
     markUpdating();
     flushScopeBatch(batch);
     void syncAssistant().then(() => {
@@ -540,12 +539,6 @@ export function RefinementAnswerBatch({
       });
     });
   }, [allAnswered, questions, merged, flushScopeBatch, syncAssistant, markUpdating, markSaved]);
-
-  useEffect(() => {
-    if (allAnswered) {
-      tryFlush();
-    }
-  }, [allAnswered, tryFlush]);
 
   function handleAnswer(
     q: RefinementAnswerQuestion,
@@ -574,8 +567,19 @@ export function RefinementAnswerBatch({
           </div>
         ))}
       </div>
-      {allAnswered && (
-        <p className="mt-3 text-xs text-muted-foreground">Updating estimate…</p>
+      <Button
+        type="button"
+        size="sm"
+        className="mt-4"
+        disabled={!allAnswered || flushedRef.current}
+        onClick={tryFlush}
+      >
+        Submit answers
+      </Button>
+      {submitted && (
+        <p className="mt-2 text-xs text-muted-foreground">
+          Updated. Estimate refreshed.
+        </p>
       )}
     </div>
   );

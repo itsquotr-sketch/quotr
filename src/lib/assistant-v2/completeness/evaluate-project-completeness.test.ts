@@ -76,7 +76,7 @@ describe("evaluateProjectCompleteness", () => {
 
     const status = describeCompletenessStatus(withWall);
     expect(status.title).not.toMatch(/enough to work with/i);
-    expect(status.title).toMatch(/few details/i);
+    expect(status.title).toMatch(/before pricing this properly/i);
   });
 
   it("Test B — re-including excluded retaining wall triggers missing facts", () => {

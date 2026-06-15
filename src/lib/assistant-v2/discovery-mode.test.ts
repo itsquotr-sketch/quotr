@@ -70,7 +70,7 @@ describe("buildDiscoveryAssistantText", () => {
         needsClarification: false,
       })
     ).toBe(
-      "I found these work areas. Confirm what should be included in this estimate."
+      "I found these work areas. Here's what I'll estimate — confirm what should be included."
     );
   });
 

@@ -6,6 +6,7 @@ import {
   isBenchmarkRateSource,
   type RateSource,
 } from "@/lib/cost-engine/rates/get-base-rate-for-scope";
+import { TRUST_COPY } from "@/lib/assistant-v2/trust-messages";
 
 export type RateSourceBannerKind = "all_saved" | "all_benchmark" | "mixed";
 
@@ -39,7 +40,7 @@ export function resolveRateSourceBanner(
   if (savedCount === lines.length) {
     return {
       kind: "all_saved",
-      message: "Using your saved rates.",
+      message: `${TRUST_COPY.ratesSaved}.`,
       perScopeLines,
     };
   }
@@ -47,8 +48,7 @@ export function resolveRateSourceBanner(
   if (benchmarkCount === lines.length) {
     return {
       kind: "all_benchmark",
-      message:
-        "Using industry benchmarks — add your rates to improve accuracy.",
+      message: `${TRUST_COPY.ratesBenchmark} — add your rates to improve accuracy.`,
       perScopeLines,
     };
   }

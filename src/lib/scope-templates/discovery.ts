@@ -98,6 +98,7 @@ export function buildQuestionsFromTemplates(
 ): DiscoveryQuestion[] {
   const knownFactKeys = factKeysFromDiscovery(extractedFacts);
   const questions: DiscoveryQuestion[] = [];
+  const seenQuestionKeys = new Set<string>();
 
   for (const area of workAreas) {
     const template = getScopeTemplateByWorkAreaType(area.typeKey);
@@ -106,6 +107,8 @@ export function buildQuestionsFromTemplates(
     for (const question of template.questions) {
       const key = normalizeQuestionKey(question.questionKey) ?? question.questionKey;
       if (knownFactKeys.has(key)) continue;
+      if (seenQuestionKeys.has(key)) continue;
+      seenQuestionKeys.add(key);
 
       const def = templateQuestionToDef(question);
       questions.push({
