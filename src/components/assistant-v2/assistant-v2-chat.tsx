@@ -27,6 +27,7 @@ import {
   getNextAssistantTurn,
   type AssistantTurn,
 } from "@/lib/assistant-v2/get-next-assistant-turn";
+import { normalizeQuestionKey } from "@/lib/question-keys";
 import type { ScopeGroupInput } from "@/lib/assistant-v2/get-next-pricing-question";
 import type { PricingQuestion } from "@/lib/assistant-v2/get-next-pricing-question";
 import { countMissingPricingQuestions } from "@/lib/assistant-v2/get-next-pricing-question";
@@ -247,8 +248,11 @@ export function AssistantV2Chat({
 
   const mergedAnswers = useMemo(() => {
     const merged = collectAnsweredQuestionKeys(scopeQuestions);
-    for (const key of Object.keys(optimisticAnswers)) {
+    for (const [key, value] of Object.entries(optimisticAnswers)) {
+      if (!value) continue;
       merged.add(key);
+      const normalized = normalizeQuestionKey(key);
+      if (normalized) merged.add(normalized);
     }
     return merged;
   }, [scopeQuestions, optimisticAnswers]);
@@ -335,7 +339,9 @@ export function AssistantV2Chat({
     nextTurn &&
       confirmedScopes.length > 0 &&
       !showWorkAreaConfirmation &&
-      (!flushInFlight || nextTurn.kind === "quality")
+      (!flushInFlight ||
+        nextTurn.kind === "quality" ||
+        nextTurn.kind === "scope_batch")
   );
 
   const visibleMessages = useMemo(() => {
@@ -436,6 +442,7 @@ export function AssistantV2Chat({
     discovery &&
     !showWorkAreaConfirmation &&
     !flushInFlight &&
+    activeQuality !== "unknown" &&
     !blockingFlowStates.has(flowResult.state) &&
     (flowResult.state === "estimate_ready" ||
       flowResult.state === "optional_refinement");
@@ -458,6 +465,35 @@ export function AssistantV2Chat({
       });
     }
   }, [showActiveTurn, activeTurnFingerprint]);
+
+  useEffect(() => {
+    if (process.env.NODE_ENV !== "development") return;
+    console.log("[assistant.flow]", {
+      pendingSuggestions: pendingSuggestions.length,
+      confirmedScopes: confirmedScopes.length,
+      qualityLevel: activeQuality,
+      nextTurnKind: nextTurn?.kind ?? null,
+      showWorkAreaConfirmation,
+      showActiveTurn,
+      requiredQuestions:
+        nextTurn?.kind === "scope_batch" && nextTurn.hasRequired
+          ? nextTurn.questions.length
+          : 0,
+      nextTurnQuestionKeys:
+        nextTurn?.kind === "scope_batch"
+          ? nextTurn.questions.map((q) => q.questionKey)
+          : [],
+      answeredKeys: [...mergedAnswers],
+    });
+  }, [
+    pendingSuggestions.length,
+    confirmedScopes.length,
+    activeQuality,
+    nextTurn,
+    showWorkAreaConfirmation,
+    showActiveTurn,
+    mergedAnswers,
+  ]);
 
   return (
     <AssistantConversationPanel>
@@ -646,6 +682,7 @@ function ActiveTurnBubble({
   onScopeAnswer: (
     questionId: string,
     questionKey: string,
+    scopeId: string,
     answer: string,
     label: string
   ) => void;
@@ -653,6 +690,7 @@ function ActiveTurnBubble({
     answers: {
       questionId: string;
       questionKey: string;
+      scopeId: string;
       answer: string;
       label: string;
     }[]
@@ -800,6 +838,7 @@ function ScopeBatchBubble({
   onScopeAnswer: (
     questionId: string,
     questionKey: string,
+    scopeId: string,
     answer: string,
     label: string
   ) => void;
@@ -807,6 +846,7 @@ function ScopeBatchBubble({
     answers: {
       questionId: string;
       questionKey: string;
+      scopeId: string;
       answer: string;
       label: string;
     }[]
@@ -844,6 +884,16 @@ function ScopeBatchBubble({
 
   const allAnswered = questions.every((q) => merged[q.questionKey]);
 
+  const questionsByScope = useMemo(() => {
+    const groups = new Map<string, PricingQuestion[]>();
+    for (const q of questions) {
+      const list = groups.get(q.scopeName) ?? [];
+      list.push(q);
+      groups.set(q.scopeName, list);
+    }
+    return groups;
+  }, [questions]);
+
   const tryFlush = useCallback(() => {
     if (!allAnswered || flushedRef.current) return;
 
@@ -852,6 +902,7 @@ function ScopeBatchBubble({
       return {
         questionId: q.questionId,
         questionKey: q.questionKey,
+        scopeId: q.scopeId,
         answer: item.answer,
         label: item.label,
       };
@@ -871,7 +922,7 @@ function ScopeBatchBubble({
       ...prev,
       [q.questionKey]: { answer, label },
     }));
-    onScopeAnswer(q.questionId, q.questionKey, answer, label);
+    onScopeAnswer(q.questionId, q.questionKey, q.scopeId, answer, label);
   }
 
   const [naturalAnswer, setNaturalAnswer] = useState("");
@@ -884,6 +935,7 @@ function ScopeBatchBubble({
       onScopeAnswer(
         item.questionId,
         item.questionKey,
+        item.scopeId,
         item.answer,
         item.label
       );
@@ -929,21 +981,36 @@ function ScopeBatchBubble({
         {questions.length > 1 && (
           <>
             {"\n"}
-            {questions
-              .map((q, i) => `${i + 1}. ${contextualQuestionText(q)}`)
-              .join("\n")}
+            {[...questionsByScope.entries()]
+              .map(([groupScopeName, scopeQuestions]) =>
+                scopeQuestions
+                  .map(
+                    (q, i) =>
+                      `${groupScopeName}\n${i + 1}. ${contextualQuestionText(q)}`
+                  )
+                  .join("\n")
+              )
+              .join("\n\n")}
           </>
         )}
       </p>
-      <div className="mt-4 space-y-4">
-        {questions.map((q) => (
-          <ScopeQuestionRow
-            key={q.questionId}
-            question={q}
-            selected={merged[q.questionKey]?.answer ?? ""}
-            onAnswer={(answer, label) => handleAnswer(q, answer, label)}
-            disabled={actionsDisabled}
-          />
+      <div className="mt-4 space-y-6">
+        {[...questionsByScope.entries()].map(([groupScopeName, scopeQuestions]) => (
+          <div key={groupScopeName}>
+            <p className="text-sm font-semibold text-primary">{groupScopeName}</p>
+            <div className="mt-3 space-y-4">
+              {scopeQuestions.map((q) => (
+                <ScopeQuestionRow
+                  key={q.questionId}
+                  question={q}
+                  selected={merged[q.questionKey]?.answer ?? ""}
+                  onAnswer={(answer, label) => handleAnswer(q, answer, label)}
+                  disabled={actionsDisabled}
+                  showScopeLabel={questionsByScope.size === 1}
+                />
+              ))}
+            </div>
+          </div>
         ))}
       </div>
       {questions.length > 1 && (
@@ -995,11 +1062,13 @@ function ScopeQuestionRow({
   selected,
   onAnswer,
   disabled = false,
+  showScopeLabel = true,
 }: {
   question: PricingQuestion;
   selected: string;
   onAnswer: (answer: string, label: string) => void;
   disabled?: boolean;
+  showScopeLabel?: boolean;
 }) {
   const [numberValue, setNumberValue] = useState(selected);
   const prompt = contextualQuestionText(q);
@@ -1018,7 +1087,10 @@ function ScopeQuestionRow({
 
   return (
     <div>
-      <p className="text-sm font-medium">{prompt}</p>
+      {showScopeLabel && (
+        <p className="text-xs font-semibold text-primary">{q.scopeName}</p>
+      )}
+      <p className={cn("text-sm font-medium", showScopeLabel && "mt-1")}>{prompt}</p>
       {q.required && !selected && (
         <p className="mt-0.5 text-xs text-amber-700 dark:text-amber-400">
           Needed before pricing properly

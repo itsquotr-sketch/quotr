@@ -17,7 +17,15 @@ export function buildMergedAnswersForScope(
   for (const q of scopeQuestions.filter((sq) => sq.project_scope_id === scopeId)) {
     const row = q.scope_answers?.[0];
     const val = answerValueToString(row?.answer, row?.source);
-    if (q.question_key && val) answers[q.question_key] = val;
+    if (!val) continue;
+
+    const canonical = normalizeQuestionKey(q.question_key);
+    if (canonical) {
+      answers[canonical] = val;
+    }
+    if (q.question_key) {
+      answers[q.question_key] = val;
+    }
   }
 
   if (discovery?.facts?.length) {

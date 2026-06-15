@@ -9,7 +9,17 @@ import {
   SCOPE_TYPE_NAME_LOOKUP,
   deriveConfidenceLevel,
 } from "@/lib/scope-suggestion-rules";
-import { refreshDiscoveryQuestionsAndTrades } from "@/lib/discovery-data";
+import {
+  getLatestDiscoveryEngineRun,
+  getLatestDiscoveryRun,
+  normalizeDiscoveryResult,
+  parseDiscoveryEngineRun,
+  parseDiscoveryRun,
+  refreshDiscoveryQuestionsAndTrades,
+} from "@/lib/discovery-data";
+import { extractQualityLevelFromNotes } from "@/lib/ai/discovery/quality-level-rules";
+import { ensureQuickEstimateForProject } from "@/lib/quick-estimate-data";
+import { syncQualityLevelFromDiscovery } from "@/lib/sync-discovery-quality-level";
 import { projectStatusSchema } from "@/lib/validations/project";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database";
@@ -192,6 +202,64 @@ export async function confirmWorkAreaSelections(
         params.projectId,
         workAreas
       );
+    }
+
+    const quickEstimate = await ensureQuickEstimateForProject(
+      supabase,
+      params.organisationId,
+      params.projectId,
+      params.userId
+    );
+
+    const [{ data: latestEngineRun }, { data: latestDiscoveryRun }, projectRow] =
+      await Promise.all([
+        getLatestDiscoveryEngineRun(
+          supabase,
+          params.organisationId,
+          params.projectId
+        ),
+        getLatestDiscoveryRun(
+          supabase,
+          params.organisationId,
+          params.projectId
+        ),
+        supabase
+          .from("projects")
+          .select("initial_notes, client_brief")
+          .eq("id", params.projectId)
+          .eq("organisation_id", params.organisationId)
+          .maybeSingle(),
+      ]);
+
+    const discovery = normalizeDiscoveryResult(
+      parseDiscoveryEngineRun(latestEngineRun ?? null) ??
+        parseDiscoveryRun(latestDiscoveryRun ?? null)
+    );
+
+    if (quickEstimate?.id) {
+      const notesQuality = extractQualityLevelFromNotes(
+        projectRow.data?.initial_notes ??
+          projectRow.data?.client_brief ??
+          ""
+      );
+      const qualityFromDiscovery =
+        discovery?.qualityLevel ??
+        (notesQuality
+          ? {
+              value: notesQuality.value,
+              confidence: notesQuality.confidence,
+              reason: notesQuality.reason,
+            }
+          : undefined);
+
+      if (qualityFromDiscovery) {
+        await syncQualityLevelFromDiscovery(
+          supabase,
+          params.organisationId,
+          quickEstimate.id,
+          qualityFromDiscovery
+        );
+      }
     }
 
     await supabase

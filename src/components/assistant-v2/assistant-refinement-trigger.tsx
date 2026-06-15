@@ -516,11 +516,12 @@ export function RefinementAnswerBatch({
   const tryFlush = useCallback(() => {
     if (!allAnswered || flushedRef.current) return;
 
-    const batch = questions.map((q) => {
+      const batch = questions.map((q) => {
       const item = merged[q.questionKey]!;
       return {
         questionId: q.questionId,
         questionKey: q.questionKey,
+        scopeId: q.scopeId,
         answer: item.answer,
         label: item.label,
       };

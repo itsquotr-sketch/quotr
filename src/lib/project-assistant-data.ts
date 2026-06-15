@@ -72,6 +72,14 @@ export async function listScopeQuestionsForProject(
     answersByQuestion.set(answer.scope_question_id, list);
   }
 
+  for (const [questionId, list] of answersByQuestion.entries()) {
+    list.sort(
+      (a, b) =>
+        new Date(b.updated_at).getTime() - new Date(a.updated_at).getTime()
+    );
+    answersByQuestion.set(questionId, list);
+  }
+
   const combined: ScopeQuestionWithAnswers[] = (questions ?? []).map((q) => ({
     ...q,
     scope_answers: answersByQuestion.get(q.id) ?? [],

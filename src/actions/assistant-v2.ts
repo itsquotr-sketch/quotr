@@ -45,6 +45,7 @@ import { ensureQuestionsForProjectScopes } from "@/lib/scope-questions-seed";
 import { runAssistantAutopilot } from "@/lib/assistant-v2/autopilot/run-assistant-autopilot";
 import { recalculateQuickEstimate } from "@/lib/cost-engine/recalculate-quick-estimate";
 import { resolveWorkAreaTypeKey } from "@/lib/project-assistant-questions";
+import { listScopeSuggestions } from "@/lib/scope-builder-data";
 import { getProjectById } from "@/lib/projects-data";
 import type { ScopeQuestionWithAnswers } from "@/lib/project-assistant-data";
 import { createClient } from "@/lib/supabase/server";
@@ -54,6 +55,7 @@ import { quickEstimateMarginSchema } from "@/lib/validations/project-assistant";
 import type { QualityLevel } from "@/lib/constants/quality-level";
 import type {
   ProjectScope,
+  ProjectScopeSuggestion,
   QuickEstimate,
 } from "@/types/database";
 import type { AssistantMessageRow } from "@/lib/assistant-v2/assistant-messages-data";
@@ -264,6 +266,7 @@ export async function batchSaveAssistantScopeAnswers(
   answers: {
     questionId: string;
     questionKey: string;
+    scopeId: string;
     answer: string;
     label: string;
   }[]
@@ -307,7 +310,7 @@ export async function confirmAssistantWorkAreas(
     return { error: result.error };
   }
 
-  revalidateScopeAnswers(projectId);
+  revalidateProjectAssistant(projectId);
   return {
     success: true,
     message:
@@ -486,6 +489,7 @@ export type AssistantSyncPayload = {
   selectedConstraintSlugs?: string[];
   declinedConstraintSlugs?: string[];
   scopePackages?: import("@/types/database").ProjectScopePackage[];
+  suggestions?: ProjectScopeSuggestion[];
 };
 
 export type AssistantSyncOptions = {
@@ -555,6 +559,13 @@ async function loadAssistantSyncPayload(
         }
       )
     );
+    loaders.push(
+      listScopeSuggestions(supabase, organisationId, projectId).then(
+        ({ data: suggestions }) => {
+          payload.suggestions = suggestions ?? [];
+        }
+      )
+    );
   }
 
   if (kindSet.has("constraints")) {
@@ -612,6 +623,7 @@ export async function syncAssistantState(
         selectedConstraintSlugs: data.selectedConstraintSlugs,
         declinedConstraintSlugs: data.declinedConstraintSlugs,
         scopePackages: data.scopePackages ?? [],
+        suggestions: data.suggestions ?? [],
       },
     };
   }

@@ -352,8 +352,12 @@ function synthesizeQuestionsForGroup(
     if (shouldSuppressQuestionAfterInference(key, applyInferredFacts(merged))) continue;
     if (shouldSuppressQuestionForDerivedValue(key, applyInferredFacts(merged))) continue;
 
+    const dbQuestion = group.questions.find(
+      (q) => normalizeQuestionKey(q.question_key) === key
+    );
+
     results.push({
-      questionId: `synthetic-${group.scopeId}-${key}`,
+      questionId: dbQuestion?.id ?? `synthetic-${group.scopeId}-${key}`,
       questionKey: key,
       questionText: def.text,
       scopeId: group.scopeId,
@@ -422,7 +426,13 @@ function collectRankedQuestions(
       }
 
       const key = normalizeQuestionKey(question.question_key);
-      if (key && answered.has(key)) continue;
+      if (
+        key &&
+        (answered.has(key) ||
+          (question.question_key ? answered.has(question.question_key) : false))
+      ) {
+        continue;
+      }
       if (key && !shouldAskQuestion(key, typeKey, merged)) continue;
       if (requiredOnly && key) {
         const missingKeys = new Set(

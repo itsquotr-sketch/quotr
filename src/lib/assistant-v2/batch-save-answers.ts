@@ -11,15 +11,23 @@ import { persistScopeAnswersBatch } from "@/lib/scope-answers-persist";
 import { ensureQuestionsForProjectScopes } from "@/lib/scope-questions-seed";
 import { hasMeaningfulChange } from "@/lib/autosave/has-meaningful-change";
 import { userFacingConstraintPersistError } from "@/lib/supabase/log-error";
+import { resolveScopeQuestionIdForSave } from "@/lib/assistant-v2/resolve-scope-question-id";
+import { normalizeQuestionKey } from "@/lib/question-keys";
 import type { QualityLevel } from "@/lib/constants/quality-level";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/types/database";
 
 type Supabase = SupabaseClient<Database>;
 
+function logAnswerSave(payload: Record<string, unknown>): void {
+  if (process.env.NODE_ENV !== "development") return;
+  console.log("[assistant.answer.save]", payload);
+}
+
 export type BatchScopeAnswer = {
   questionId: string;
   questionKey: string;
+  scopeId: string;
   answer: string;
   label: string;
 };
@@ -63,19 +71,47 @@ export async function batchSaveScopeAnswers(
     return { error: ensureResult.error, changed: false };
   }
 
-  const questionIds = params.answers.map((a) => a.questionId);
+  const resolvedQuestions: {
+    item: BatchScopeAnswer;
+    questionId: string;
+    projectScopeId: string;
+    questionKey: string;
+  }[] = [];
 
-  const { data: questions, error: questionsError } = await supabase
-    .from("scope_questions")
-    .select("id, project_scope_id, question_key")
-    .in("id", questionIds);
+  for (const item of params.answers) {
+    const normalizedKey = normalizeQuestionKey(item.questionKey);
+    logAnswerSave({
+      phase: "before_resolve",
+      question_key: normalizedKey,
+      scope_id: item.scopeId,
+      answer_value: item.answer,
+      answer_source: "user",
+      question_id: item.questionId,
+    });
 
-  if (questionsError || !questions?.length) {
-    return { error: "Question not found.", changed: false };
+    const resolved = await resolveScopeQuestionIdForSave(supabase, {
+      organisationId: params.organisationId,
+      projectId: params.projectId,
+      questionId: item.questionId,
+      questionKey: item.questionKey,
+      projectScopeId: item.scopeId,
+    });
+
+    if ("error" in resolved) {
+      return { error: resolved.error, changed: false };
+    }
+
+    resolvedQuestions.push({
+      item,
+      questionId: resolved.questionId,
+      projectScopeId: resolved.projectScopeId,
+      questionKey: resolved.questionKey,
+    });
   }
 
-  const questionById = new Map(questions.map((q) => [q.id, q]));
-  const scopeIds = [...new Set(questions.map((q) => q.project_scope_id))];
+  const scopeIds = [
+    ...new Set(resolvedQuestions.map((r) => r.projectScopeId)),
+  ];
 
   const { data: scopes, error: scopesError } = await supabase
     .from("project_scopes")
@@ -91,7 +127,10 @@ export async function batchSaveScopeAnswers(
   const { data: existingAnswers } = await supabase
     .from("scope_answers")
     .select("scope_question_id, answer, source")
-    .in("scope_question_id", questionIds);
+    .in(
+      "scope_question_id",
+      resolvedQuestions.map((r) => r.questionId)
+    );
 
   const existingByQuestionId = new Map(
     (existingAnswers ?? []).map((row) => [row.scope_question_id, row])
@@ -103,25 +142,20 @@ export async function batchSaveScopeAnswers(
     answer: string;
   }[] = [];
 
-  for (const item of params.answers) {
-    const question = questionById.get(item.questionId);
-    if (!question) {
-      return { error: "Question not found.", changed: false };
-    }
-
-    const existing = existingByQuestionId.get(item.questionId);
+  for (const resolved of resolvedQuestions) {
+    const existing = existingByQuestionId.get(resolved.questionId);
     const existingValue =
       answerValueToString(existing?.answer ?? null, existing?.source ?? null) ??
       "";
 
-    if (!hasMeaningfulChange(existingValue, item.answer)) {
+    if (!hasMeaningfulChange(existingValue, resolved.item.answer)) {
       continue;
     }
 
     toPersist.push({
-      scopeQuestionId: item.questionId,
-      projectScopeId: question.project_scope_id,
-      answer: item.answer,
+      scopeQuestionId: resolved.questionId,
+      projectScopeId: resolved.projectScopeId,
+      answer: resolved.item.answer,
     });
   }
 
@@ -137,6 +171,15 @@ export async function batchSaveScopeAnswers(
 
   if (persistError) {
     return { error: "Could not save answers.", changed: false };
+  }
+
+  for (const row of toPersist) {
+    logAnswerSave({
+      phase: "after_save",
+      saved_question_id: row.scopeQuestionId,
+      saved_project_scope_id: row.projectScopeId,
+      saved_answer_value: row.answer,
+    });
   }
 
   const labels = params.answers.map((a) => a.label).join(", ");

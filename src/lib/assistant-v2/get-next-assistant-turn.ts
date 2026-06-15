@@ -10,6 +10,7 @@ import type { PricingQuestion } from "@/lib/assistant-v2/get-next-pricing-questi
 import type { ScopeGroupInput } from "@/lib/assistant-v2/get-next-pricing-question";
 import type { ScopeQuestionWithAnswers } from "@/lib/project-assistant-data";
 import { normalizeQuestionKey } from "@/lib/question-keys";
+import { answerValueToString } from "@/lib/scope-answer-state";
 import {
   buildAutopilotInputFromAssistantData,
   getNextRequiredAssistantStep,
@@ -206,12 +207,20 @@ export function collectAnsweredQuestionKeys(
   scopeQuestions: ScopeQuestionWithAnswers[]
 ): Set<string> {
   const keys = new Set<string>();
+
   for (const question of scopeQuestions) {
-    const key = normalizeQuestionKey(question.question_key);
-    if (key) keys.add(key);
-    if (question.scope_answers?.[0] && question.question_key) {
+    const row = question.scope_answers?.[0];
+    if (!row) continue;
+
+    const value = answerValueToString(row.answer, row.source);
+    if (!value) continue;
+
+    if (question.question_key) {
       keys.add(question.question_key);
+      const normalized = normalizeQuestionKey(question.question_key);
+      if (normalized) keys.add(normalized);
     }
   }
+
   return keys;
 }

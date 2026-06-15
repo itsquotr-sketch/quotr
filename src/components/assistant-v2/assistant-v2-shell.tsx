@@ -104,6 +104,7 @@ function AssistantV2ShellInner({
   );
   const [liveChatMessages, setLiveChatMessages] = useState(chatMessages);
   const [liveScopePackages, setLiveScopePackages] = useState(initialScopePackages);
+  const [liveSuggestions, setLiveSuggestions] = useState(suggestions);
 
   useEffect(() => {
     setLiveEstimate(quickEstimate);
@@ -113,6 +114,7 @@ function AssistantV2ShellInner({
     setLiveSelectedConstraints(selectedConstraintSlugs);
     setLiveChatMessages(chatMessages);
     setLiveScopePackages(initialScopePackages);
+    setLiveSuggestions(suggestions);
   }, [
     quickEstimate,
     scopeQuestions,
@@ -121,6 +123,7 @@ function AssistantV2ShellInner({
     selectedConstraintSlugs,
     chatMessages,
     initialScopePackages,
+    suggestions,
   ]);
 
   const handleAssistantSync = useCallback(
@@ -138,6 +141,7 @@ function AssistantV2ShellInner({
       if (payload.selectedConstraintSlugs)
         setLiveSelectedConstraints(payload.selectedConstraintSlugs);
       if (payload.scopePackages) setLiveScopePackages(payload.scopePackages);
+      if (payload.suggestions) setLiveSuggestions(payload.suggestions);
     },
     [isSyncCurrent]
   );
@@ -182,7 +186,7 @@ function AssistantV2ShellInner({
       qualityLevel: finishLevel,
       selectedConstraintSlugs: liveSelectedConstraints,
       declinedConstraintSlugs: liveDeclinedConstraints,
-      pendingSuggestionCount: suggestions.filter((s) => s.status === "pending")
+      pendingSuggestionCount: liveSuggestions.filter((s) => s.status === "pending")
         .length,
     });
   }, [
@@ -192,7 +196,7 @@ function AssistantV2ShellInner({
     finishLevel,
     liveSelectedConstraints,
     liveDeclinedConstraints,
-    suggestions,
+    liveSuggestions,
   ]);
 
   const estimateSummary = parseQuickEstimateSummary(liveEstimate?.notes ?? null);
@@ -281,7 +285,7 @@ function AssistantV2ShellInner({
     hasKeyMeasurements: projectCompleteness.overallCompleteness >= 50,
     workAreasConfirmed: workAreas.filter((a) => a.included !== false).length > 0,
     siteConstraintsAssessed,
-    pendingSuggestionCount: suggestions.filter((s) => s.status === "pending")
+    pendingSuggestionCount: liveSuggestions.filter((s) => s.status === "pending")
       .length,
     sourceNotes: project.initial_notes ?? project.client_brief ?? "",
     scopeQuestions: liveScopeQuestions,
@@ -337,7 +341,7 @@ function AssistantV2ShellInner({
             <div className="flex min-h-0 flex-1 flex-col">
               <AssistantV2Chat
                 projectId={projectId}
-                suggestions={suggestions}
+                suggestions={liveSuggestions}
                 confirmedScopes={liveConfirmedScopes}
                 discovery={discovery}
                 scopeGroups={scopeGroups}

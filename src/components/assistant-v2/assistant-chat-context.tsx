@@ -34,6 +34,8 @@ import { TRUST_COPY } from "@/lib/assistant-v2/trust-messages";
 import type { AssistantMessageRow } from "@/lib/assistant-v2/assistant-messages-data";
 import type { WorkAreaCompletenessInput } from "@/lib/assistant-v2/compute-information-completeness";
 import { computeProjectCompleteness } from "@/lib/assistant-v2/compute-information-completeness";
+import { collectAnsweredQuestionKeys } from "@/lib/assistant-v2/get-next-assistant-turn";
+import { normalizeQuestionKey } from "@/lib/question-keys";
 import type { EstimateChangeEvent } from "@/lib/cost-engine/recalculate-quick-estimate";
 import { parseQuickEstimateSummary } from "@/lib/project-assistant-summary";
 
@@ -82,6 +84,7 @@ function resolvePendingAssistantMessages(
 type ScopeAnswerItem = {
   questionId: string;
   questionKey: string;
+  scopeId: string;
   answer: string;
   label: string;
 };
@@ -105,6 +108,7 @@ type AssistantChatContextValue = {
   submitScopeAnswer: (
     questionId: string,
     questionKey: string,
+    scopeId: string,
     answer: string,
     label: string
   ) => void;
@@ -267,6 +271,25 @@ export function AssistantChatProvider({
         setPersistedMessages(payload.chatMessages);
       }
       onSync?.(payload, syncVersion);
+
+      if (payload.scopeQuestions) {
+        const confirmed = collectAnsweredQuestionKeys(payload.scopeQuestions);
+        setOptimisticAnswers((prev) => {
+          if (Object.keys(prev).length === 0) return prev;
+          const next = { ...prev };
+          for (const key of Object.keys(next)) {
+            const normalized = normalizeQuestionKey(key);
+            if (
+              confirmed.has(key) ||
+              (normalized != null && confirmed.has(normalized))
+            ) {
+              delete next[key];
+            }
+          }
+          return next;
+        });
+      }
+
       return true;
     },
     [onSync, isSyncCurrent]
@@ -301,7 +324,6 @@ export function AssistantChatProvider({
         });
         if (result.data && isSyncCurrent(syncVersion)) {
           applySyncPayload(result.data, syncVersion);
-          setOptimisticAnswers({});
           setOptimisticDeclinedSlugs([]);
           return result.data;
         }
@@ -330,7 +352,6 @@ export function AssistantChatProvider({
     const result = await syncAssistantState(projectId);
     if (result.data && isSyncCurrent(syncVersion)) {
       applySyncPayload(result.data, syncVersion);
-      setOptimisticAnswers({});
     }
   }, [projectId, applySyncPayload, beginSync, isSyncCurrent]);
 
@@ -431,6 +452,19 @@ export function AssistantChatProvider({
       setPendingAction("updating_estimate");
       startLoadingTimeout();
 
+      if (process.env.NODE_ENV === "development") {
+        console.log("[assistant.answer.save]", {
+          phase: "client_submit",
+          answers: answers.map((a) => ({
+            question_key: a.questionKey,
+            scope_id: a.scopeId,
+            answer_value: a.answer,
+            answer_source: "user",
+            question_id: a.questionId,
+          })),
+        });
+      }
+
       try {
         const result = await batchSaveAssistantScopeAnswers(projectId, answers);
         if (result.error) throw new Error(result.error);
@@ -459,10 +493,20 @@ export function AssistantChatProvider({
           : undefined;
 
         const syncPayload = await syncByKinds(
-          ["answers", "estimate", "scopes"],
+          ["answers", "estimate", "scopes", "messages"],
           firstScopeId
         );
         if (syncPayload) {
+          if (process.env.NODE_ENV === "development" && syncPayload.scopeQuestions) {
+            const answered = collectAnsweredQuestionKeys(syncPayload.scopeQuestions);
+            console.log("[assistant.answer.sync]", {
+              scopeQuestionsCount: syncPayload.scopeQuestions.length,
+              questionsWithAnswers: syncPayload.scopeQuestions.filter(
+                (q) => q.scope_answers?.[0]
+              ).length,
+              answeredKeys: [...answered],
+            });
+          }
           applyEstimateChangeFromPayload(
             syncPayload,
             answers.length === 1
@@ -678,6 +722,7 @@ export function AssistantChatProvider({
           "scopes",
           "answers",
           "messages",
+          "estimate",
         ]);
         if (syncPayload) {
           applyEstimateChangeFromPayload(syncPayload, "Work areas confirmed.");
@@ -780,12 +825,13 @@ export function AssistantChatProvider({
     (
       questionId: string,
       questionKey: string,
+      scopeId: string,
       answer: string,
       label: string
     ) => {
       markSaving();
       applyOptimisticScopeAnswers([
-        { questionId, questionKey, answer, label },
+        { questionId, questionKey, scopeId, answer, label },
       ]);
     },
     [markSaving, applyOptimisticScopeAnswers]

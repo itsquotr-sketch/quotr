@@ -42,6 +42,7 @@ export function parseNaturalLanguageBatchAnswers(
 ): {
   questionId: string;
   questionKey: string;
+  scopeId: string;
   answer: string;
   label: string;
 }[] {
@@ -55,6 +56,7 @@ export function parseNaturalLanguageBatchAnswers(
   const results: {
     questionId: string;
     questionKey: string;
+    scopeId: string;
     answer: string;
     label: string;
   }[] = [];
@@ -71,6 +73,7 @@ export function parseNaturalLanguageBatchAnswers(
           results.push({
             questionId: question.questionId,
             questionKey: question.questionKey,
+            scopeId: question.scopeId,
             answer: num,
             label,
           });
@@ -87,6 +90,7 @@ export function parseNaturalLanguageBatchAnswers(
         results.push({
           questionId: question.questionId,
           questionKey: question.questionKey,
+          scopeId: question.scopeId,
           answer: value,
           label,
         });
@@ -98,6 +102,7 @@ export function parseNaturalLanguageBatchAnswers(
         results.push({
           questionId: question.questionId,
           questionKey: question.questionKey,
+          scopeId: question.scopeId,
           answer: token,
           label: token,
         });

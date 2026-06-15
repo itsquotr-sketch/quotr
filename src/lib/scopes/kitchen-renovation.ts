@@ -130,9 +130,11 @@ export const kitchenRenovationScope: ScopeDefinition = {
       questionText: "Approximate kitchen floor area?",
       placeholder: "e.g. 12",
       extractionPatterns: [
-        /(?:around|approx(?:\.|imately)?|about)\s*(\d+(?:\.\d+)?)\s*(?:m2|m²|sqm)(?:\s+floor\s*area)?/i,
+        /(?:around|approx(?:\.|imately)?|about)\s*(\d+(?:\.\d+)?)\s*(?:m2|m²|sqm|square\s*met(?:re|er)s?)(?:\s+floor\s*area)?/i,
         /(\d+(?:\.\d+)?)\s*(?:m2|m²|sqm|square\s*met(?:re|er)s?)\s*(?:kitchen|floor\s*area)/i,
-        /kitchen\s*(?:floor\s*)?(?:area|size)?\s*(?:of|about|approx(?:imately)?\.?|around|is)?\s*(\d+(?:\.\d+)?)\s*(?:m2|m²|sqm)/i,
+        /kitchen\s*(?:floor\s*)?(?:area|size)?\s*(?:of|about|approx(?:imately)?\.?|around|is)?\s*(\d+(?:\.\d+)?)\s*(?:m2|m²|sqm|square\s*met(?:re|er)s?)/i,
+        /kitchen\s+renovation\s+(\d+(?:\.\d+)?)\s*(?:m2|m²|sqm|square\s*met(?:re|er)s?)/i,
+        /kitchen\s+(\d+(?:\.\d+)?)\s*(?:m2|m²|sqm|square\s*met(?:re|er)s?)/i,
         /floor\s*area\s*(?:(?:of|is|about|around|approx(?:\.|imately)?)\s*)?(\d+(?:\.\d+)?)\s*(?:m2|m²|sqm)/i,
       ],
       extractValue: (m) => m[1] ?? null,

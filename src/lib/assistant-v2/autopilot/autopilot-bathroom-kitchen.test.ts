@@ -3,7 +3,10 @@ import {
   buildAutopilotInputFromAssistantData,
   getNextRequiredAssistantStep,
 } from "@/lib/assistant-v2/autopilot/get-next-required-assistant-step";
-import { getNextAssistantTurn } from "@/lib/assistant-v2/get-next-assistant-turn";
+import {
+  collectAnsweredQuestionKeys,
+  getNextAssistantTurn,
+} from "@/lib/assistant-v2/get-next-assistant-turn";
 import { resolveAssistantFlowState } from "@/lib/assistant-v2/flow/resolve-assistant-flow-state";
 
 const kitchenAnswers: Record<string, string> = {
@@ -152,5 +155,24 @@ describe("Assistant autopilot — bathroom + kitchen MVP flow", () => {
       estimateReady: true,
     });
     expect(flow.state).toBe("needs_required_scope_details");
+  });
+
+  it("Test F — collectAnsweredQuestionKeys only marks saved answers", () => {
+    const answeredKeys = collectAnsweredQuestionKeys([
+      {
+        id: "q1",
+        question_key: "bathroom.floor_area_m2",
+        scope_answers: [{ id: "a1", answer: "5", source: "user", updated_at: "" }],
+      } as never,
+      {
+        id: "q2",
+        question_key: "bathroom.layout_changing",
+        scope_answers: [],
+      } as never,
+    ]);
+
+    expect(answeredKeys.has("bathroom.floor_area_m2")).toBe(true);
+    expect(answeredKeys.has("bathroom.layout_changing")).toBe(false);
+    expect(answeredKeys.size).toBe(1);
   });
 });

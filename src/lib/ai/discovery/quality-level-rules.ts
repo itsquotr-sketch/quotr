@@ -33,6 +33,8 @@ const STANDARD_KEYWORDS = [
   "standard",
   "mid-range",
   "mid range",
+  "mid spec",
+  "mid-spec",
   "normal finish",
   "typical finish",
   "standard finish",

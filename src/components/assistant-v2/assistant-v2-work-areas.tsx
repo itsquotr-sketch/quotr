@@ -342,6 +342,7 @@ function WorkAreaCard({
       {
         questionId: question.id,
         questionKey: fact.key,
+        scopeId: question.project_scope_id,
         answer,
         label: `${fact.label}: ${label}`,
       },
