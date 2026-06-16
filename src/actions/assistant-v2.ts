@@ -356,6 +356,19 @@ export async function commitAssistantAnswerBatch(
   const { user, organisationId } = await requireOrganisation();
   const supabase = await createClient();
 
+  if (process.env.NODE_ENV === "development") {
+    console.log("[dev:assistant.answer.serverReceived]", {
+      projectId,
+      answersCount: answers.length,
+      answers: answers.map((a) => ({
+        questionId: a.questionId,
+        questionKey: a.questionKey,
+        scopeId: a.scopeId,
+        answer: a.answer,
+      })),
+    });
+  }
+
   const saveResult = await batchSaveScopeAnswers(supabase, {
     organisationId,
     projectId,
@@ -364,6 +377,9 @@ export async function commitAssistantAnswerBatch(
   });
 
   if (saveResult.error) {
+    if (process.env.NODE_ENV === "development") {
+      console.log("[dev:assistant.answer.saveFailed]", { error: saveResult.error });
+    }
     return {
       success: false,
       changed: false,
@@ -380,6 +396,19 @@ export async function commitAssistantAnswerBatch(
     userId: user.id,
     projectScopeId: options?.projectScopeId,
   });
+
+  if (process.env.NODE_ENV === "development") {
+    const answeredCount = state.scopeQuestions.filter((q) => q.scope_answers?.[0]?.answer).length;
+    console.log("[dev:assistant.answer.freshState]", {
+      scopeQuestionsTotal: state.scopeQuestions.length,
+      questionsWithAnswers: answeredCount,
+      estimateStatus: state.quickEstimate?.estimate_status ?? null,
+      estimateLow: state.quickEstimate?.estimated_cost_low ?? null,
+      estimateHigh: state.quickEstimate?.estimated_cost_high ?? null,
+      changed: saveResult.changed,
+      estimateUpdated: saveResult.estimateUpdated,
+    });
+  }
 
   revalidateScopeAnswers(projectId, options?.projectScopeId);
 

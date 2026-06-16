@@ -94,47 +94,45 @@ export async function batchSaveScopeAnswers(
     };
   }
 
-  const resolvedQuestions: {
-    item: BatchScopeAnswer;
-    questionId: string;
-    projectScopeId: string;
-    questionKey: string;
-  }[] = [];
+  const t0 = Date.now();
 
-  for (const item of params.answers) {
-    const normalizedKey = normalizeQuestionKey(item.questionKey);
-    logAnswerSave({
-      phase: "before_resolve",
-      question_key: normalizedKey,
-      scope_id: item.scopeId,
-      answer_value: item.answer,
-      answer_source: "user",
-      question_id: item.questionId,
-    });
+  const resolveResults = await Promise.all(
+    params.answers.map(async (item) => {
+      const normalizedKey = normalizeQuestionKey(item.questionKey);
+      logAnswerSave({
+        phase: "before_resolve",
+        question_key: normalizedKey,
+        scope_id: item.scopeId,
+        answer_value: item.answer,
+        answer_source: "user",
+        question_id: item.questionId,
+      });
+      const resolved = await resolveScopeQuestionIdForSave(supabase, {
+        organisationId: params.organisationId,
+        projectId: params.projectId,
+        questionId: item.questionId,
+        questionKey: item.questionKey,
+        projectScopeId: item.scopeId,
+      });
+      return { item, resolved };
+    })
+  );
 
-    const resolved = await resolveScopeQuestionIdForSave(supabase, {
-      organisationId: params.organisationId,
-      projectId: params.projectId,
-      questionId: item.questionId,
-      questionKey: item.questionKey,
-      projectScopeId: item.scopeId,
-    });
-
+  for (const { resolved } of resolveResults) {
     if ("error" in resolved) {
-      return {
-        error: resolved.error,
-        changed: false,
-        answersSaved: false,
-        estimateUpdated: false,
-      };
+      return { error: resolved.error, changed: false, answersSaved: false, estimateUpdated: false };
     }
+  }
 
-    resolvedQuestions.push({
-      item,
-      questionId: resolved.questionId,
-      projectScopeId: resolved.projectScopeId,
-      questionKey: resolved.questionKey,
-    });
+  const resolvedQuestions = resolveResults.map(({ item, resolved }) => ({
+    item,
+    questionId: (resolved as { questionId: string; projectScopeId: string; questionKey: string }).questionId,
+    projectScopeId: (resolved as { questionId: string; projectScopeId: string; questionKey: string }).projectScopeId,
+    questionKey: (resolved as { questionId: string; projectScopeId: string; questionKey: string }).questionKey,
+  }));
+
+  if (process.env.NODE_ENV === "development") {
+    console.log("[perf:assistant.answerBatch]", { stage: "resolve", ms: Date.now() - t0, count: resolvedQuestions.length });
   }
 
   const scopeIds = [
@@ -224,21 +222,37 @@ export async function batchSaveScopeAnswers(
         savedCount: 0,
         savedRows: [],
         error: null,
-        note: "all_answers_already_persisted",
+        note: "all_answers_already_persisted_recalculating",
       });
     }
+    // Answers are already in DB — still recalculate in case estimate is stale/failed
+    const recalcResult = await recalculateQuickEstimate(
+      supabase,
+      params.organisationId,
+      params.projectId,
+      { triggerEvent: "answer_changed", changeReason: "answers confirmed" }
+    );
+    await runAssistantAutopilot(supabase, {
+      organisationId: params.organisationId,
+      projectId: params.projectId,
+      userId: params.userId,
+    });
     return {
       changed: false,
       answersSaved: true,
-      estimateUpdated: false,
+      estimateUpdated: recalcResult.success,
     };
   }
 
+  const t1 = Date.now();
   const persistError = await persistScopeAnswersBatch(
     supabase,
     params.organisationId,
     toPersist
   );
+  if (process.env.NODE_ENV === "development") {
+    console.log("[perf:assistant.answerBatch]", { stage: "persist", ms: Date.now() - t1, count: toPersist.length });
+  }
 
   if (persistError) {
     if (process.env.NODE_ENV === "development") {
@@ -342,6 +356,7 @@ export async function batchSaveScopeAnswers(
       ? params.answers[0]!.label
       : `${params.answers.length} details confirmed`;
 
+  const t2 = Date.now();
   const recalcResult = await recalculateQuickEstimate(
     supabase,
     params.organisationId,
@@ -354,6 +369,7 @@ export async function batchSaveScopeAnswers(
       success: recalcResult.success,
       error: recalcResult.success ? null : recalcResult.error,
     });
+    console.log("[perf:assistant.answerBatch]", { stage: "recalc", ms: Date.now() - t2, total_ms: Date.now() - t0 });
   }
 
   if (process.env.NODE_ENV === "development") {

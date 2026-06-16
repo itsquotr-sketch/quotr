@@ -98,15 +98,18 @@ export async function persistScopeAnswer(
   }
 
   if (error && isMissingDiscoverySourceCheck(error)) {
-    if (columnSource === "user_answered" || columnSource === "user_prompt") {
+    const safeSource =
+      columnSource === "user_answered" || columnSource === "user_prompt"
+        ? "user"
+        : "notes";
+    ({ error } = await supabase.from("scope_answers").upsert(
+      { ...row, source: safeSource },
+      { onConflict: "scope_question_id" }
+    ));
+    if (error?.code === "42P10" || error?.message?.includes("ON CONFLICT")) {
       ({ error } = await supabase.from("scope_answers").upsert(
-        { ...row, source: "user" },
-        { onConflict: "scope_question_id" }
-      ));
-    } else {
-      ({ error } = await supabase.from("scope_answers").upsert(
-        { ...row, source: "notes" },
-        { onConflict: "scope_question_id" }
+        { ...row, source: safeSource },
+        { onConflict: "project_scope_id,scope_question_id" }
       ));
     }
   }
@@ -167,11 +170,15 @@ async function updateExistingAnswer(
     return persistScopeAnswer(supabase, params);
   }
 
+  const safeUpdateSource =
+    columnSource === "user_answered" || columnSource === "user_prompt"
+      ? "user"
+      : columnSource;
   let { error: updateError } = await supabase
     .from("scope_answers")
     .update({
       answer: serialized,
-      source: columnSource,
+      source: safeUpdateSource,
       organisation_id: params.organisationId,
     })
     .eq("id", existing.id);
@@ -224,7 +231,7 @@ export async function persistScopeAnswersBatch(
     const error = await persistScopeAnswer(supabase, {
       organisationId,
       ...item,
-      source: "user_answered",
+      source: "user", // DB constraint only allows 'user', 'notes', 'discovery'
     });
     if (error) {
       return error;

@@ -345,23 +345,23 @@ export function AssistantV2Chat({
   );
 
   const visibleMessages = useMemo(() => {
-    let messages = allMessages;
-    if (activeTurnFingerprint) {
-      messages = messages.filter((message) => {
-        const persisted = persistedMessages.find((m) => m.id === message.id);
-        if (!persisted) return true;
-        const meta = persisted.metadata as Record<string, unknown> | null;
-        return meta?.batchFingerprint !== activeTurnFingerprint;
-      });
-    }
+    return allMessages.filter((message) => {
+      const persisted = persistedMessages.find((m) => m.id === message.id);
+      if (!persisted) return true; // optimistic messages always visible
 
-    return messages.filter(
-      (message) =>
-        !(
-          message.role === "assistant" &&
-          isEstimateFailureMessage(message.content, message.error)
-        )
-    );
+      const meta = persisted.metadata as Record<string, unknown> | null;
+
+      // question_batch messages render via ActiveTurnBubble when active; hide from history
+      if (meta?.messageType === "question_batch") return false;
+
+      // active turn message (e.g. quality question) shown via ActiveTurnBubble — hide from stream
+      if (activeTurnFingerprint && meta?.batchFingerprint === activeTurnFingerprint) return false;
+
+      // hide stale estimate failure messages
+      if (message.role === "assistant" && isEstimateFailureMessage(message.content, message.error)) return false;
+
+      return true;
+    });
   }, [allMessages, persistedMessages, activeTurnFingerprint]);
 
   const userMessageCount = useMemo(
@@ -970,12 +970,23 @@ function ScopeBatchBubble({
   }, [allAnswered, actionsDisabled, tryFlush]);
 
   if (submitted || (allAnswered && flushedRef.current)) {
+    const answeredRows = questions.map((q) => {
+      const item = merged[q.questionKey];
+      return { label: q.questionText.replace(/\?$/, ""), value: item?.label ?? item?.answer ?? "—" };
+    });
     return (
       <AssistantBubble>
         <p className="text-xs text-muted-foreground">
           {hasRequired ? "Required details answered." : "Details updated."}
         </p>
-        <p className="mt-1 font-medium whitespace-pre-wrap">{intro}</p>
+        <div className="mt-2 space-y-0.5">
+          {answeredRows.map((row) => (
+            <p key={row.label} className="text-sm">
+              <span className="text-muted-foreground">{row.label}:</span>{" "}
+              <span className="font-medium">{row.value}</span>
+            </p>
+          ))}
+        </div>
       </AssistantBubble>
     );
   }

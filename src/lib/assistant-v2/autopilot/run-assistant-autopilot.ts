@@ -263,6 +263,16 @@ export async function runAssistantAutopilot(
 
   const turn = getNextRequiredAssistantStep(autopilotInput);
 
+  if (process.env.NODE_ENV === "development") {
+    console.log("[dev:assistant.nextTurn]", {
+      step: turn.step,
+      shouldContinue: turn.shouldContinue,
+      questionCount: "questions" in turn ? turn.questions?.length ?? 0 : 0,
+      questionKeys: "questions" in turn ? turn.questions?.map((q) => q.questionKey) ?? [] : [],
+      answeredKeys: [...answeredKeys].slice(0, 20),
+    });
+  }
+
   if (turn.step === "generate_estimate" && params.allowEstimateGeneration !== false) {
     const result = await recalculateQuickEstimate(
       supabase,

@@ -103,6 +103,9 @@ export const retainingWallScope: ScopeDefinition = {
       extractionPatterns: [
         /\bno\s+digger\b/i,
         /\bmachine\s+access\s+limited\b/i,
+        /\bpoor\s+access\b/i,
+        /\bhand\s+dig(?:ging)?\b/i,
+        /\bno\s+machine\s+access\b/i,
       ],
       extractValue: () => "no",
     },

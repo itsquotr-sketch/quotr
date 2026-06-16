@@ -199,6 +199,16 @@ export async function buildQuickEstimateInput(
       }
     }
 
+    if (process.env.NODE_ENV === "development") {
+      console.log("[dev:estimate.input.scopeFacts]", {
+        scopeId: s.id,
+        scopeName: s.name,
+        workAreaTypeKey,
+        answerKeys: Object.keys(answers),
+        answers,
+      });
+    }
+
     return {
       scopeId: s.id,
       name: s.name,

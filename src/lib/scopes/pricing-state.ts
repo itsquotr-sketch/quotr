@@ -137,6 +137,14 @@ export function resolveScopePricingState(input: {
       const missingMessage =
         buildScopeMissingFactsMessage(label, workAreaTypeKey, answers) ??
         `${label} needs a few details before I can include it.`;
+      if (process.env.NODE_ENV === "development") {
+        console.log("[dev:estimate.excludedScope]", {
+          workAreaTypeKey,
+          missingKeys: missingRequired.map((f) => f.key),
+          answersProvided: Object.keys(answers),
+          message: missingMessage,
+        });
+      }
       return {
         state: "supported_unpriced",
         userLabel: "Needs details",
