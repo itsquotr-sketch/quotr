@@ -31,6 +31,14 @@ import {
   suggestionsToPricingQuestions,
 } from "@/lib/assistant-v2/refinement/suggestions-to-pricing-questions";
 import { buildQuickEstimateInput } from "@/lib/cost-engine/build-quick-estimate-input";
+import {
+  getLatestDiscoveryEngineRun,
+  getLatestDiscoveryRun,
+  normalizeDiscoveryResult,
+  parseDiscoveryEngineRun,
+  parseDiscoveryRun,
+} from "@/lib/discovery-data";
+import { normaliseQualityLevel } from "@/lib/constants/quality-level";
 import { listScopeQuestionsForProject } from "@/lib/project-assistant-data";
 import { parseQuickEstimateSummary } from "@/lib/project-assistant-summary";
 import { getQuickEstimateForProject } from "@/lib/quick-estimate-data";
@@ -517,13 +525,6 @@ export async function executeRefinementAddMoreDetail(
     params.projectId
   );
 
-  const { data: quickEstimate } = await getQuickEstimateForProject(
-    supabase,
-    params.organisationId,
-    params.projectId
-  );
-  const summary = parseQuickEstimateSummary(quickEstimate?.notes ?? null);
-
   const { data: scopes } = await supabase
     .from("project_scopes")
     .select("*, scope_types(name)")
@@ -542,9 +543,27 @@ export async function executeRefinementAddMoreDetail(
     null
   );
 
+  const [{ data: latestEngineRun }, { data: latestDiscoveryRun }] =
+    await Promise.all([
+      getLatestDiscoveryEngineRun(
+        supabase,
+        params.organisationId,
+        params.projectId
+      ),
+      getLatestDiscoveryRun(supabase, params.organisationId, params.projectId),
+    ]);
+  const discovery = normalizeDiscoveryResult(
+    parseDiscoveryEngineRun(latestEngineRun ?? null) ??
+      parseDiscoveryRun(latestDiscoveryRun ?? null)
+  );
+  const projectQualityLevel = normaliseQualityLevel(
+    String(discovery?.qualityLevel ?? "unknown")
+  );
+
   let missingItems = getCurrentMissingItems({
     workAreas,
-    estimateTrace: summary?.estimateTrace,
+    estimateTrace: null,
+    projectQualityLevel,
   });
 
   if (params.scopeId) {

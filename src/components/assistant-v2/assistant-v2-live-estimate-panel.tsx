@@ -9,7 +9,6 @@ import {
   type AssistantSyncPayload,
 } from "@/actions/assistant-v2";
 import { AssistantV2MarginEditor } from "@/components/assistant-v2/assistant-v2-margin-editor";
-import { AnswerChips } from "@/components/assistant-v2/answer-chips";
 import {
   formatLastUpdated,
   useEstimateUpdate,
@@ -29,7 +28,7 @@ import { buildWhatEstimateCovers } from "@/lib/cost-engine/contractor-estimate-l
 import type { EstimateChangeEvent } from "@/lib/cost-engine/recalculate-quick-estimate";
 import { resolveRateSourceBanner } from "@/lib/cost-engine/resolve-rate-source-banner";
 import { formatCurrencyRange } from "@/lib/format-currency";
-import { resolveEstimatePanelState } from "@/lib/cost-engine/resolve-estimate-panel-state";
+import { resolveEstimatePanelState, formatPartialExclusionLine } from "@/lib/cost-engine/resolve-estimate-panel-state";
 import { parseQuickEstimateSummary } from "@/lib/project-assistant-summary";
 import type { QuickEstimate } from "@/types/database";
 import { cn } from "@/lib/utils";
@@ -206,7 +205,6 @@ export function AssistantV2LiveEstimatePanel({
   actionableMissingItems = [],
   workAreaTypeKeys = {},
   onMissingItemClick,
-  onMissingItemAnswer,
   onQualityLevelSelect,
   onPrefillComposer,
   flowPanelAction,
@@ -597,12 +595,25 @@ export function AssistantV2LiveEstimatePanel({
           <p className="font-medium text-amber-800 dark:text-amber-300">
             {panelState.title}
           </p>
+          {summary?.workAreasIncluded && summary.workAreasIncluded.length > 0 && (
+            <div className="mt-2">
+              <p className="font-medium text-foreground">Included:</p>
+              <ul className="mt-1 space-y-0.5 text-muted-foreground">
+                {summary.workAreasIncluded.map((area) => (
+                  <li key={area}>• {area}</li>
+                ))}
+              </ul>
+            </div>
+          )}
           {panelState.unpricedAreas.length > 0 ? (
-            <ul className="mt-1 space-y-0.5 text-muted-foreground">
-              {panelState.unpricedAreas.map((area) => (
-                <li key={area}>{area}</li>
-              ))}
-            </ul>
+            <div className="mt-2">
+              <p className="font-medium text-foreground">Not included:</p>
+              <ul className="mt-1 space-y-0.5 text-muted-foreground">
+                {panelState.unpricedAreas.map((area) => (
+                  <li key={area.name}>{formatPartialExclusionLine(area)}</li>
+                ))}
+              </ul>
+            </div>
           ) : (
             <p className="mt-1 text-muted-foreground">
               Some work areas are not included in this estimate yet.
@@ -1047,29 +1058,16 @@ export function AssistantV2LiveEstimatePanel({
                             <X className="mt-0.5 h-3 w-3 shrink-0" />
                             <span>{label}</span>
                           </button>
-                          {prompt &&
-                            prompt.options.length > 0 &&
-                            missingItem && (
-                              <div className="ml-4 mt-1">
-                                <AnswerChips
-                                  options={prompt.options}
-                                  onSelect={(value) => {
-                                    const option = prompt.options.find(
-                                      (o) => o.value === value
-                                    );
-                                    onMissingItemAnswer?.(
-                                      missingItem,
-                                      value,
-                                      option?.label ?? value
-                                    );
-                                  }}
-                                />
-                              </div>
-                            )}
                         </li>
                       );
                     })}
                 </ul>
+                <div className="mt-3">
+                  <AddMoreDetailButton
+                    projectId={projectId}
+                    label="Answer optional details"
+                  />
+                </div>
               </>
             ) : optionalOnlyMissing ? (
               <p className="mt-2 text-xs text-muted-foreground">

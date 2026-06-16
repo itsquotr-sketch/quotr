@@ -7,6 +7,10 @@ import { persistConstraintAssessmentBatch } from "@/lib/project-constraints-pers
 import { ensureQuickEstimateForProject } from "@/lib/quick-estimate-data";
 import { listScopeBuilderInputs } from "@/lib/scope-builder-data";
 import { answerValueToString } from "@/lib/scope-answer-state";
+import {
+  isDiscoverySource,
+  parseScopeAnswer,
+} from "@/lib/scope-answer-format";
 import { persistScopeAnswersBatch } from "@/lib/scope-answers-persist";
 import { ensureQuestionsForProjectScopes } from "@/lib/scope-questions-seed";
 import { hasMeaningfulChange } from "@/lib/autosave/has-meaningful-change";
@@ -38,6 +42,15 @@ export type BatchConstraintSelection = {
   apply: boolean;
 };
 
+export type BatchSaveScopeAnswersResult = {
+  error?: string;
+  changed: boolean;
+  answersSaved: boolean;
+  estimateUpdated: boolean;
+  errorCode?: string;
+  userMessage?: string;
+};
+
 export async function batchSaveScopeAnswers(
   supabase: Supabase,
   params: {
@@ -46,9 +59,9 @@ export async function batchSaveScopeAnswers(
     userId: string;
     answers: BatchScopeAnswer[];
   }
-): Promise<{ error?: string; changed: boolean }> {
+): Promise<BatchSaveScopeAnswersResult> {
   if (params.answers.length === 0) {
-    return { changed: false };
+    return { changed: false, answersSaved: false, estimateUpdated: false };
   }
 
   const { data: project, error: projectError } = await getProjectById(
@@ -58,7 +71,12 @@ export async function batchSaveScopeAnswers(
   );
 
   if (projectError || !project) {
-    return { error: "Project not found.", changed: false };
+    return {
+      error: "Project not found.",
+      changed: false,
+      answersSaved: false,
+      estimateUpdated: false,
+    };
   }
 
   const ensureResult = await ensureQuestionsForProjectScopes(
@@ -68,7 +86,12 @@ export async function batchSaveScopeAnswers(
   );
 
   if (ensureResult.error) {
-    return { error: ensureResult.error, changed: false };
+    return {
+      error: ensureResult.error,
+      changed: false,
+      answersSaved: false,
+      estimateUpdated: false,
+    };
   }
 
   const resolvedQuestions: {
@@ -98,7 +121,12 @@ export async function batchSaveScopeAnswers(
     });
 
     if ("error" in resolved) {
-      return { error: resolved.error, changed: false };
+      return {
+        error: resolved.error,
+        changed: false,
+        answersSaved: false,
+        estimateUpdated: false,
+      };
     }
 
     resolvedQuestions.push({
@@ -121,7 +149,12 @@ export async function batchSaveScopeAnswers(
     .eq("project_id", params.projectId);
 
   if (scopesError || scopes?.length !== scopeIds.length) {
-    return { error: "Work area not found.", changed: false };
+    return {
+      error: "Work area not found.",
+      changed: false,
+      answersSaved: false,
+      estimateUpdated: false,
+    };
   }
 
   const { data: existingAnswers } = await supabase
@@ -147,8 +180,33 @@ export async function batchSaveScopeAnswers(
     const existingValue =
       answerValueToString(existing?.answer ?? null, existing?.source ?? null) ??
       "";
+    const existingSource =
+      parseScopeAnswer(existing?.answer ?? null, existing?.source ?? null)
+        ?.source ??
+      existing?.source ??
+      null;
+    const isUpgradingSource =
+      (existingSource != null && isDiscoverySource(existingSource)) ||
+      existingSource === "extracted" ||
+      existingSource === "assumed";
 
-    if (!hasMeaningfulChange(existingValue, resolved.item.answer)) {
+    if (process.env.NODE_ENV === "development") {
+      console.log("[assistant.answer.dedup]", {
+        questionKey: resolved.questionKey,
+        existingValue,
+        existingSource,
+        newValue: resolved.item.answer,
+        isUpgradingSource,
+        willSkip:
+          !isUpgradingSource &&
+          !hasMeaningfulChange(existingValue, resolved.item.answer),
+      });
+    }
+
+    if (
+      !isUpgradingSource &&
+      !hasMeaningfulChange(existingValue, resolved.item.answer)
+    ) {
       continue;
     }
 
@@ -160,7 +218,20 @@ export async function batchSaveScopeAnswers(
   }
 
   if (toPersist.length === 0) {
-    return { changed: false };
+    if (process.env.NODE_ENV === "development") {
+      console.log("[dev:scopeAnswers.batchSave.result]", {
+        success: true,
+        savedCount: 0,
+        savedRows: [],
+        error: null,
+        note: "all_answers_already_persisted",
+      });
+    }
+    return {
+      changed: false,
+      answersSaved: true,
+      estimateUpdated: false,
+    };
   }
 
   const persistError = await persistScopeAnswersBatch(
@@ -170,7 +241,41 @@ export async function batchSaveScopeAnswers(
   );
 
   if (persistError) {
-    return { error: "Could not save answers.", changed: false };
+    if (process.env.NODE_ENV === "development") {
+      console.log("[dev:scopeAnswers.batchSave.result]", {
+        success: false,
+        savedCount: 0,
+        savedRows: [],
+        error: persistError.message,
+      });
+    }
+    return {
+      error: "Could not save answers.",
+      changed: false,
+      answersSaved: false,
+      estimateUpdated: false,
+    };
+  }
+
+  if (process.env.NODE_ENV === "development") {
+    console.log("[assistant.answer.persisted]", {
+      count: toPersist.length,
+      rows: toPersist.map((r) => ({
+        scopeQuestionId: r.scopeQuestionId,
+        projectScopeId: r.projectScopeId,
+        answer: r.answer,
+      })),
+    });
+    console.log("[dev:scopeAnswers.batchSave.result]", {
+      success: true,
+      savedCount: toPersist.length,
+      savedRows: toPersist.map((row) => ({
+        scope_question_id: row.scopeQuestionId,
+        project_scope_id: row.projectScopeId,
+        answer_value: row.answer,
+      })),
+      error: null,
+    });
   }
 
   for (const row of toPersist) {
@@ -237,12 +342,60 @@ export async function batchSaveScopeAnswers(
       ? params.answers[0]!.label
       : `${params.answers.length} details confirmed`;
 
-  await recalculateQuickEstimate(
+  const recalcResult = await recalculateQuickEstimate(
     supabase,
     params.organisationId,
     params.projectId,
     { triggerEvent: "answer_changed", changeReason }
   );
+
+  if (process.env.NODE_ENV === "development") {
+    console.log("[assistant.answer.recalc]", {
+      success: recalcResult.success,
+      error: recalcResult.success ? null : recalcResult.error,
+    });
+  }
+
+  if (process.env.NODE_ENV === "development") {
+    const summary = recalcResult.success
+      ? await supabase
+          .from("quick_estimates")
+          .select(
+            "estimate_status, estimated_cost_low, estimated_cost_high, notes"
+          )
+          .eq("project_id", params.projectId)
+          .eq("organisation_id", params.organisationId)
+          .maybeSingle()
+      : { data: null };
+
+    let includedWorkAreas: string[] = [];
+    let unpricedWorkAreas: string[] = [];
+    if (summary.data?.notes) {
+      try {
+        const parsed = JSON.parse(summary.data.notes) as {
+          workAreasIncluded?: string[];
+          unpricedWorkAreas?: { name?: string }[];
+        };
+        includedWorkAreas = parsed.workAreasIncluded ?? [];
+        unpricedWorkAreas = (parsed.unpricedWorkAreas ?? []).map(
+          (area) => area.name ?? ""
+        );
+      } catch {
+        // ignore parse errors in dev log
+      }
+    }
+
+    console.log("[dev:quickEstimate.recalculate.result]", {
+      success: recalcResult.success,
+      estimateStatus: summary.data?.estimate_status ?? null,
+      low: summary.data?.estimated_cost_low ?? null,
+      high: summary.data?.estimated_cost_high ?? null,
+      includedWorkAreas,
+      unpricedWorkAreas,
+      failureReason: recalcResult.success ? null : recalcResult.userMessage,
+      error: recalcResult.success ? null : recalcResult.error,
+    });
+  }
 
   await runAssistantAutopilot(supabase, {
     organisationId: params.organisationId,
@@ -250,7 +403,17 @@ export async function batchSaveScopeAnswers(
     userId: params.userId,
   });
 
-  return { changed: true };
+  if (!recalcResult.success) {
+    return {
+      changed: true,
+      answersSaved: true,
+      estimateUpdated: false,
+      errorCode: recalcResult.errorCode,
+      userMessage: "Answers saved. Estimate refresh needs retry.",
+    };
+  }
+
+  return { changed: true, answersSaved: true, estimateUpdated: true };
 }
 
 export async function batchSaveConstraintAnswers(

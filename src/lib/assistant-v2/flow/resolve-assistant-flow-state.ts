@@ -205,6 +205,49 @@ function mapAutopilotToFlow(
     case "ready":
     default:
       if (input.hasEstimate && input.estimateReady && !input.estimatePartial) {
+        const hasRequiredGaps = confidence.scopes.some(
+          (s) => s.missingCritical.length > 0
+        );
+        const hasUsefulGaps = confidence.scopes.some(
+          (s) => s.missingUseful.length > 0
+        );
+        const rateOnly = scopesHeldBackByRatesOnly(confidence);
+
+        if (hasRequiredGaps) {
+          return {
+            state: "needs_required_scope_details",
+            reason: "Required scope facts still need answers.",
+            nextBestAction: {
+              type: "ask_required",
+              label: "Answer required details",
+            },
+          };
+        }
+
+        if (hasUsefulGaps || confidence.optionalOnlyMissing) {
+          return {
+            state: "optional_refinement",
+            reason:
+              "Enough detail for a draft estimate — optional details would sharpen it.",
+            nextBestAction: {
+              type: "add_optional",
+              label: "Add optional details",
+            },
+          };
+        }
+
+        if (rateOnly.length > 0) {
+          return {
+            state: "optional_refinement",
+            reason: "Draft estimate ready — adding your rates would improve pricing.",
+            nextBestAction: {
+              type: "add_rate",
+              label: "Add your rates",
+              scopeTypeKey: rateOnly[0],
+            },
+          };
+        }
+
         return {
           state: "estimate_ready",
           reason: autopilot.message,
@@ -307,12 +350,14 @@ export function describeFlowStatusMessage(
     case "optional_refinement":
       if (options?.hasUsefulGaps) {
         return {
-          title: "Solid draft — a few details would sharpen it.",
+          title:
+            "You've provided enough information for a draft estimate. I can still sharpen it with optional details.",
           subtitle: "Optional details would tighten the range.",
         };
       }
       return {
-        title: "Enough information has been provided for a draft estimate.",
+        title:
+          "You've provided enough information for a draft estimate. I can still sharpen it with optional details.",
         subtitle: "Add more detail anytime to sharpen the range.",
       };
     case "ready_for_estimate":

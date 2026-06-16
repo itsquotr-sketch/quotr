@@ -19,7 +19,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { DEFAULT_TARGET_MARGIN_PERCENT } from "@/lib/constants/quick-estimate";
 import { EstimateRetryButton } from "@/components/projects/estimate-retry-button";
-import { resolveEstimatePanelState } from "@/lib/cost-engine/resolve-estimate-panel-state";
+import { resolveEstimatePanelState, formatPartialExclusionLine } from "@/lib/cost-engine/resolve-estimate-panel-state";
 import { parseQuickEstimateSummary } from "@/lib/project-assistant-summary";
 import { formatCurrencyRange } from "@/lib/format-currency";
 import type { QuickEstimate } from "@/types/database";
@@ -206,8 +206,8 @@ export function DraftEstimatePanel({
             {panelState.title}
           </p>
           {panelState.unpricedAreas.map((area) => (
-            <p key={area} className="mt-1 text-muted-foreground">
-              {area} not included yet — pricing support/rates needed.
+            <p key={area.name} className="mt-1 text-muted-foreground">
+              {formatPartialExclusionLine(area)}
             </p>
           ))}
         </div>

@@ -11,8 +11,7 @@ export const TRUST_COPY = {
   emptyNoScopes:
     "Tell Quotr what you're building to start your estimate.",
   emptyNoPricing: "Scope captured, but pricing is not available yet.",
-  partialEstimate:
-    "Partial estimate — some work areas are not included yet.",
+  partialEstimate: "Partial estimate",
   failedEstimate: "Could not calculate estimate.",
   tracePending:
     "Estimate generated. Breakdown is still being prepared.",

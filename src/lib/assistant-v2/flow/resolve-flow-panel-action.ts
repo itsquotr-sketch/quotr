@@ -26,19 +26,21 @@ export function resolveFlowPanelAction(
     case "needs_quality_confirmation":
       return { kind: "scroll_chat", label: "Choose spec level" };
     case "needs_required_scope_details":
-      return { kind: "scroll_chat", label: "Answer missing details" };
+      return { kind: "scroll_chat", label: "Answer required details" };
     case "needs_pricing_source_confirmation":
       return { kind: "scroll_chat", label: "Resolve pricing" };
     case "needs_site_conditions":
       return { kind: "scroll_chat", label: "Confirm site conditions" };
     case "needs_confidence_refinement":
       if (flow.nextBestAction.type === "add_rate") {
-        return { kind: "add_rate", label: "Add your rate" };
+        return { kind: "add_rate", label: "Add your rates" };
       }
-      return {
-        kind: "scroll_chat",
-        label: flow.nextBestAction.label || "Improve estimate",
-      };
+      return { kind: "scroll_chat", label: "Add optional details" };
+    case "optional_refinement":
+      if (flow.nextBestAction.type === "add_rate") {
+        return { kind: "add_rate", label: "Add your rates" };
+      }
+      return { kind: "scroll_chat", label: "Add optional details" };
     case "estimate_ready":
       return { kind: "view_estimate", label: "View estimate detail" };
     case "ready_for_estimate":

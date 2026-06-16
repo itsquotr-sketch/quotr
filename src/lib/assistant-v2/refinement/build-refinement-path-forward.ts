@@ -66,9 +66,9 @@ export function buildRefinementPathForward(
     message: [
       options?.confidence
         ? buildProjectConfidenceMessage(options.confidence)
-        : "You've provided the key information.",
+        : "You've provided the key scope information.",
       "",
-      "You can review the breakdown or add your own rates to improve pricing.",
+      "The next improvement would be adding your own rates or reviewing the breakdown.",
     ].join("\n"),
   };
 }

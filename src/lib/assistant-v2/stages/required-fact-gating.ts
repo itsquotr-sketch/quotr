@@ -240,29 +240,39 @@ export function getMissingRequiredFactsForWorkArea(
 
 export function getMissingUsefulFactsForWorkArea(
   workAreaTypeKey: string,
-  answers: Record<string, string>
+  answers: Record<string, string>,
+  options?: { projectQualityLevel?: QualityLevel | string | null }
 ): ScopeFactDefinition[] {
   const scope = getScopeByWorkAreaType(workAreaTypeKey);
+  let missing: ScopeFactDefinition[];
+
   if (scope) {
     const highImpact = new Set(scope.confidenceRules.highImpactOptionalKeys);
-    return scope.optionalFacts.filter(
+    missing = scope.optionalFacts.filter(
       (fact) =>
         highImpact.has(fact.key) &&
         (fact.affectsEstimate || fact.affectsConfidence) &&
         !factIsAnsweredFromMap(fact, answers)
     );
+  } else {
+    const canonical = getCanonicalScopeTemplateByWorkAreaType(workAreaTypeKey);
+    if (!canonical) return [];
+
+    missing = canonical.facts.useful
+      .filter(
+        (f) =>
+          (f.affectsEstimate ?? true) &&
+          !factIsAnsweredFromMap(canonicalToScopeFact(f, false), answers)
+      )
+      .map((f) => canonicalToScopeFact(f, false));
   }
 
-  const canonical = getCanonicalScopeTemplateByWorkAreaType(workAreaTypeKey);
-  if (!canonical) return [];
-
-  return canonical.facts.useful
-    .filter(
-      (f) =>
-        (f.affectsEstimate ?? true) &&
-        !factIsAnsweredFromMap(canonicalToScopeFact(f, false), answers)
-    )
-    .map((f) => canonicalToScopeFact(f, false));
+  return filterMissingFactsForGlobalFinish(
+    missing,
+    workAreaTypeKey,
+    answers,
+    options?.projectQualityLevel
+  );
 }
 
 export function isCanonicalRequiredFactKey(

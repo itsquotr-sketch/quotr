@@ -28,10 +28,12 @@ import {
 import { resetAssistantState } from "@/lib/assistant-v2/reset-assistant";
 import { saveConstraintAnswer } from "@/lib/assistant-v2/save-constraint-answer";
 import { saveQualityLevel } from "@/lib/assistant-v2/save-quality-level";
+import { normaliseQualityLevel } from "@/lib/constants/quality-level";
 import {
   batchSaveConstraintAnswers,
   batchSaveScopeAnswers,
 } from "@/lib/assistant-v2/batch-save-answers";
+import { loadFreshAssistantState, type FreshAssistantState } from "@/lib/assistant-v2/load-fresh-state";
 import { saveScopeAnswer } from "@/lib/assistant-v2/save-scope-answer";
 import {
   confirmPendingAssistantCommand,
@@ -76,6 +78,10 @@ export type AssistantV2ActionState = {
   message?: string;
   warning?: string;
   needsEstimateRecalc?: boolean;
+  answersSaved?: boolean;
+  estimateUpdated?: boolean;
+  errorCode?: string;
+  userMessage?: string;
   fieldErrors?: Record<string, string[]>;
   analysingMode?: "ai" | "rules";
   usedFallback?: boolean;
@@ -271,6 +277,20 @@ export async function batchSaveAssistantScopeAnswers(
     label: string;
   }[]
 ): Promise<AssistantV2ActionState> {
+  if (process.env.NODE_ENV === "development") {
+    console.log("[dev:scopeAnswers.submit.start]", {
+      projectId,
+      answersCount: answers.length,
+      answers: answers.map((a) => ({
+        questionId: a.questionId,
+        questionKey: a.questionKey,
+        scopeId: a.scopeId,
+        answer: a.answer,
+        label: a.label,
+      })),
+    });
+  }
+
   const { user, organisationId } = await requireOrganisation();
   const supabase = await createClient();
 
@@ -282,14 +302,96 @@ export async function batchSaveAssistantScopeAnswers(
   });
 
   if (result.error) {
-    return { error: result.error };
+    return { error: result.error, answersSaved: false, estimateUpdated: false };
   }
 
-  if (result.changed) {
-    revalidateScopeAnswers(projectId);
+  revalidateScopeAnswers(projectId);
+
+  if (result.estimateUpdated) {
+    revalidateEstimateOnly(projectId);
   }
 
-  return { success: true };
+  return {
+    success: true,
+    answersSaved: result.answersSaved,
+    estimateUpdated: result.estimateUpdated,
+    errorCode: result.errorCode,
+    userMessage: result.userMessage,
+    needsEstimateRecalc: result.answersSaved && !result.estimateUpdated,
+  };
+}
+
+export async function commitAssistantAnswerBatch(
+  projectId: string,
+  answers: {
+    questionId: string;
+    questionKey: string;
+    scopeId: string;
+    answer: string;
+    label: string;
+  }[],
+  options?: {
+    projectScopeId?: string;
+  }
+): Promise<{
+  success: boolean;
+  changed: boolean;
+  answersSaved: boolean;
+  estimateUpdated: boolean;
+  state: FreshAssistantState | null;
+  error?: string;
+  errorCode?: string;
+  userMessage?: string;
+}> {
+  if (answers.length === 0) {
+    return {
+      success: true,
+      changed: false,
+      answersSaved: false,
+      estimateUpdated: false,
+      state: null,
+    };
+  }
+
+  const { user, organisationId } = await requireOrganisation();
+  const supabase = await createClient();
+
+  const saveResult = await batchSaveScopeAnswers(supabase, {
+    organisationId,
+    projectId,
+    userId: user.id,
+    answers,
+  });
+
+  if (saveResult.error) {
+    return {
+      success: false,
+      changed: false,
+      answersSaved: false,
+      estimateUpdated: false,
+      state: null,
+      error: saveResult.error,
+    };
+  }
+
+  const state = await loadFreshAssistantState(supabase, {
+    organisationId,
+    projectId,
+    userId: user.id,
+    projectScopeId: options?.projectScopeId,
+  });
+
+  revalidateScopeAnswers(projectId, options?.projectScopeId);
+
+  return {
+    success: true,
+    changed: saveResult.changed,
+    answersSaved: saveResult.answersSaved,
+    estimateUpdated: saveResult.estimateUpdated,
+    state,
+    errorCode: saveResult.errorCode,
+    userMessage: saveResult.userMessage,
+  };
 }
 
 export async function confirmAssistantWorkAreas(
@@ -1055,6 +1157,9 @@ export async function exportEstimateSummary(
   const actionableMissingItems = getCurrentMissingItems({
     workAreas,
     estimateTrace,
+    projectQualityLevel: normaliseQualityLevel(
+      String(data.discovery?.qualityLevel ?? "unknown")
+    ),
   });
 
   const scopeBreakdownItems = buildScopeBreakdown({

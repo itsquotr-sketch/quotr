@@ -13,6 +13,7 @@ import type { RateSource } from "@/lib/cost-engine/rates/get-base-rate-for-scope
 import type { EstimateTrace as CalculationTrace } from "@/lib/cost-engine/trace/types";
 import { parseEstimateTrace } from "@/lib/cost-engine/trace/types";
 
+import type { ExclusionReasonCode } from "@/lib/scopes/pricing-state";
 import type { QuickEstimate } from "@/types/database";
 
 export function resolveCalculationTrace(
@@ -25,6 +26,39 @@ export function resolveCalculationTrace(
   const fromColumn = parseEstimateTrace(quickEstimate.trace);
   if (fromColumn) return fromColumn;
   return parseQuickEstimateSummary(quickEstimate.notes ?? null)?.calculationTrace;
+}
+
+function normalizeUnpricedWorkAreas(
+  value: unknown
+): {
+  name: string;
+  workAreaTypeKey: string;
+  reason: string;
+  reasonCode?: ExclusionReasonCode;
+}[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .filter(
+      (row): row is {
+        name: string;
+        workAreaTypeKey?: string;
+        reason?: string;
+        reasonCode?: string;
+      } =>
+        Boolean(row) &&
+        typeof row === "object" &&
+        typeof (row as { name?: unknown }).name === "string"
+    )
+    .map((row) => ({
+      name: row.name,
+      workAreaTypeKey: row.workAreaTypeKey ?? "",
+      reason: row.reason ?? "Pricing source or required details missing.",
+      reasonCode:
+        typeof row.reasonCode === "string"
+          ? (row.reasonCode as ExclusionReasonCode)
+          : undefined,
+    }));
 }
 
 function asStringArray(value: unknown): string[] {
@@ -297,7 +331,18 @@ export function parseQuickEstimateSummary(notes: string | null): {
   costBreakdown?: CostBreakdown;
   estimateStatus?: "draft" | "ready" | "failed" | "partial";
   failureReason?: string | null;
-  unpricedWorkAreas?: { name: string; workAreaTypeKey: string; reason: string }[];
+  unpricedWorkAreas?: {
+    name: string;
+    workAreaTypeKey: string;
+    reason: string;
+    reasonCode?: ExclusionReasonCode;
+  }[];
+  workAreasExcludedDetails?: {
+    name: string;
+    workAreaTypeKey: string;
+    reason: string;
+    reasonCode?: ExclusionReasonCode;
+  }[];
   traceWarning?: string | null;
 } | null {
   if (!notes) return null;
@@ -358,6 +403,13 @@ export function parseQuickEstimateSummary(notes: string | null): {
         name: string;
         workAreaTypeKey: string;
         reason: string;
+        reasonCode?: string;
+      }[];
+      workAreasExcludedDetails?: {
+        name: string;
+        workAreaTypeKey: string;
+        reason: string;
+        reasonCode?: string;
       }[];
       traceWarning?: string | null;
     };
@@ -440,9 +492,10 @@ export function parseQuickEstimateSummary(notes: string | null): {
           ),
         estimateStatus: parsed.estimateStatus,
         failureReason: parsed.failureReason ?? null,
-        unpricedWorkAreas: Array.isArray(parsed.unpricedWorkAreas)
-          ? parsed.unpricedWorkAreas
-          : [],
+        unpricedWorkAreas: normalizeUnpricedWorkAreas(parsed.unpricedWorkAreas),
+        workAreasExcludedDetails: normalizeUnpricedWorkAreas(
+          parsed.workAreasExcludedDetails
+        ),
         traceWarning: parsed.traceWarning ?? null,
       };
     }

@@ -8,6 +8,7 @@ import type { ScopeDefinition, ScopeFactDefinition } from "@/lib/scopes/types";
 import { isMaterialFactAnsweredForKey } from "@/lib/scopes/material-categories";
 import { getCanonicalScopeTemplateByWorkAreaType } from "@/lib/scopes/templates";
 import { getMissingRequiredFactsForWorkArea } from "@/lib/assistant-v2/stages/required-fact-gating";
+import { filterMissingFactsForGlobalFinish } from "@/lib/scopes/resolve-effective-finish";
 import {
   isAnswered,
   isAnsweredSelect,
@@ -125,52 +126,62 @@ export function getMissingRequiredFacts(
 
 export function getMissingOptionalHighImpact(
   workAreaTypeKey: string,
-  answers: Record<string, string>
+  answers: Record<string, string>,
+  options?: { projectQualityLevel?: QualityLevel | string | null }
 ): ScopeFactDefinition[] {
   const scope = getScopeByWorkAreaType(workAreaTypeKey);
+  let missing: ScopeFactDefinition[];
+
   if (scope) {
     const highImpact = new Set(scope.confidenceRules.highImpactOptionalKeys);
-    return scope.optionalFacts.filter(
+    missing = scope.optionalFacts.filter(
       (fact) =>
         highImpact.has(fact.key) &&
         (fact.affectsEstimate || fact.affectsConfidence) &&
         !factIsAnsweredFromMap(fact, answers)
     );
+  } else {
+    const canonical = getCanonicalScopeTemplateByWorkAreaType(workAreaTypeKey);
+    if (!canonical) return [];
+
+    missing = canonical.facts.useful
+      .filter(
+        (f) =>
+          (f.affectsEstimate ?? true) &&
+          !factIsAnsweredFromMap(
+            {
+              key: f.key,
+              label: f.label,
+              type: f.type ?? "text",
+              unit: f.unit,
+              required: false,
+              affectsEstimate: f.affectsEstimate ?? true,
+              affectsConfidence: f.affectsConfidence ?? true,
+              questionText: f.questionText ?? f.label,
+              options: f.options,
+            },
+            answers
+          )
+      )
+      .map((f) => ({
+        key: f.key,
+        label: f.label,
+        type: f.type ?? "text",
+        unit: f.unit,
+        required: false,
+        affectsEstimate: f.affectsEstimate ?? true,
+        affectsConfidence: f.affectsConfidence ?? true,
+        questionText: f.questionText ?? f.label,
+        options: f.options,
+      }));
   }
 
-  const canonical = getCanonicalScopeTemplateByWorkAreaType(workAreaTypeKey);
-  if (!canonical) return [];
-
-  return canonical.facts.useful
-    .filter(
-      (f) =>
-        (f.affectsEstimate ?? true) &&
-        !factIsAnsweredFromMap(
-          {
-            key: f.key,
-            label: f.label,
-            type: f.type ?? "text",
-            unit: f.unit,
-            required: false,
-            affectsEstimate: f.affectsEstimate ?? true,
-            affectsConfidence: f.affectsConfidence ?? true,
-            questionText: f.questionText ?? f.label,
-            options: f.options,
-          },
-          answers
-        )
-    )
-    .map((f) => ({
-      key: f.key,
-      label: f.label,
-      type: f.type ?? "text",
-      unit: f.unit,
-      required: false,
-      affectsEstimate: f.affectsEstimate ?? true,
-      affectsConfidence: f.affectsConfidence ?? true,
-      questionText: f.questionText ?? f.label,
-      options: f.options,
-    }));
+  return filterMissingFactsForGlobalFinish(
+    missing,
+    workAreaTypeKey,
+    answers,
+    options?.projectQualityLevel
+  );
 }
 
 /** Single source: required facts minus known facts (labels only). */

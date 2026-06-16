@@ -25,6 +25,53 @@ export type ScopePricingStateResult = {
   usesRoughAllowance: boolean;
 };
 
+export type ExclusionReasonCode =
+  | "no_pricing_source"
+  | "missing_required_quantity"
+  | "unsupported_scope"
+  | "excluded_by_user"
+  | "calculation_failed";
+
+export function deriveExclusionReasonCode(input: {
+  pricingState: ScopePricingStateResult;
+  workAreaTypeKey: string;
+  answers?: Record<string, string>;
+  qualityLevel?: QualityLevel | string | null;
+}): ExclusionReasonCode {
+  const { pricingState, workAreaTypeKey } = input;
+  const answers = input.answers ?? {};
+
+  if (pricingState.state === "custom") {
+    return "unsupported_scope";
+  }
+
+  if (pricingState.state === "recognised_unsupported") {
+    return "unsupported_scope";
+  }
+
+  const missingRequired = getMissingRequiredFactsForWorkArea(
+    workAreaTypeKey,
+    answers,
+    { projectQualityLevel: input.qualityLevel }
+  );
+  if (missingRequired.length > 0) {
+    return "missing_required_quantity";
+  }
+
+  if (
+    pricingState.message.toLowerCase().includes("pricing support") ||
+    pricingState.message.toLowerCase().includes("rate")
+  ) {
+    return "no_pricing_source";
+  }
+
+  if (pricingState.state === "supported_unpriced") {
+    return "missing_required_quantity";
+  }
+
+  return "no_pricing_source";
+}
+
 function isCustomWorkArea(workAreaTypeKey: string, scopeName?: string): boolean {
   const lower = workAreaTypeKey.toLowerCase();
   if (lower.includes("custom")) return true;

@@ -460,7 +460,8 @@ export function evaluateScopeConfidence(
 
   const missingUseful = getMissingOptionalHighImpact(
     area.workAreaTypeKey,
-    area.answers
+    area.answers,
+    { projectQualityLevel: input.qualityLevel }
   ).map((f) => f.label);
 
   const optionalFacts = legacyScope?.optionalFacts ?? [];

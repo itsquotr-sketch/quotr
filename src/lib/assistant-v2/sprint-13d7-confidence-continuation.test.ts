@@ -226,7 +226,7 @@ describe("Sprint 13D.7 — confidence continuation", () => {
 
     const action = resolveFlowPanelAction(flow);
     expect(action?.label).toMatch(
-      /Improve estimate|Answer \d+ details|Answer missing details/i
+      /Improve estimate|Answer \d+ details|Answer missing details|Answer required details|Add optional details/i
     );
     expect(action?.label).not.toMatch(/Add more detail/i);
   });

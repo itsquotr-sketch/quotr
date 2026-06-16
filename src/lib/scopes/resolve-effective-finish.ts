@@ -91,3 +91,27 @@ export function filterMissingFactsForGlobalFinish(
 
   return facts.filter((fact) => !fact.key.includes("finish_level"));
 }
+
+/** Single helper: global quality satisfies per-scope finish_level unless overridden. */
+export function isScopeFactKnown(
+  scopeTypeKey: string,
+  factKey: string,
+  answers: Record<string, string>,
+  projectQualityLevel?: QualityLevel | string | null
+): boolean {
+  if (factKey.includes("finish_level")) {
+    return isFinishLevelKnown({
+      scopeTypeKey,
+      answers,
+      projectQualityLevel,
+    });
+  }
+
+  const scope = getScopeByWorkAreaType(scopeTypeKey);
+  if (!scope) return false;
+
+  const fact = getAllFactsForScope(scope).find((f) => f.key === factKey);
+  if (!fact) return false;
+
+  return factIsAnsweredFromMap(fact, answers);
+}

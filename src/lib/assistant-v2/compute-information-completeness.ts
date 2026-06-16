@@ -138,7 +138,8 @@ export function formatKnownFactLabels(
 
 
 export function buildMissingInformationLabels(
-  workAreas: WorkAreaCompletenessInput[]
+  workAreas: WorkAreaCompletenessInput[],
+  projectQualityLevel?: import("@/lib/constants/quality-level").QualityLevel | string | null
 ): string[] {
   const items = getCurrentMissingItems({
     workAreas: workAreas.map((area) => ({
@@ -148,6 +149,7 @@ export function buildMissingInformationLabels(
       answers: area.answers,
       included: area.included !== false,
     })),
+    projectQualityLevel,
   });
   return buildScopedMissingLabelsFromItems(getCriticalOrUsefulMissing(items));
 }

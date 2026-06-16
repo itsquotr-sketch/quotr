@@ -25,6 +25,8 @@ import { describeEstimateQualityTier } from "@/lib/cost-engine/estimate-quality"
 import type { QuickEstimateConfidenceLevel } from "@/lib/constants/quick-estimate";
 import type { QualityLevel } from "@/lib/constants/quality-level";
 import { resolveEstimatePanelState } from "@/lib/cost-engine/resolve-estimate-panel-state";
+import { normalizeQuestionKey } from "@/lib/question-keys";
+import type { CurrentMissingItem } from "@/lib/assistant-v2/missing/get-current-missing-items";
 
 type BasePanelProps = Omit<
   ComponentProps<typeof AssistantV2LiveEstimatePanel>,
@@ -75,7 +77,7 @@ export function AssistantV2ConnectedEstimatePanel({
   const {
     workAreas,
     optimisticAnswers,
-    submitChatMessage,
+    flushScopeBatch,
     prefillComposer,
     submitQualityLevel,
     effectiveDeclinedConstraintSlugs,
@@ -98,9 +100,10 @@ export function AssistantV2ConnectedEstimatePanel({
     () =>
       getCurrentMissingItems({
         workAreas: mergedWorkAreas,
-        estimateTrace,
+        estimateTrace: null,
+        projectQualityLevel: qualityLevel,
       }),
-    [mergedWorkAreas, estimateTrace]
+    [mergedWorkAreas, qualityLevel]
   );
 
   const criticalMissing = useMemo(
@@ -237,19 +240,33 @@ export function AssistantV2ConnectedEstimatePanel({
     [prefillComposer]
   );
 
+  // Structured estimate facts must use flushScopeBatch, not submitChatMessage,
+  // otherwise they will not persist to scope_answers or recalculate the estimate.
   const handleMissingItemAnswer = useCallback(
-    (
-      item: (typeof allMissingItems)[number],
-      value: string,
-      label: string
-    ) => {
-      const scopeName = item.scopeLabel;
-      const factLabel = item.label
-        .replace(`${scopeName}: `, "")
-        .replace(/ not confirmed$/i, "");
-      void submitChatMessage(`${scopeName} ${factLabel}: ${label}`);
+    (item: CurrentMissingItem, value: string, label: string) => {
+      const question = scopeQuestions.find(
+        (q) =>
+          q.project_scope_id === item.scopeId &&
+          normalizeQuestionKey(q.question_key) ===
+            normalizeQuestionKey(item.factKey)
+      );
+
+      if (!question || !item.scopeId) {
+        prefillComposer(`${item.scopeLabel}: ${item.label}: ${label}`);
+        return;
+      }
+
+      flushScopeBatch([
+        {
+          questionId: question.id,
+          questionKey: question.question_key ?? item.factKey,
+          scopeId: item.scopeId,
+          answer: value,
+          label,
+        },
+      ]);
     },
-    [submitChatMessage]
+    [scopeQuestions, flushScopeBatch, prefillComposer]
   );
 
   const handleQualityLevelSelect = useCallback(

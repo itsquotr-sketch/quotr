@@ -75,6 +75,7 @@ export type UnpricedWorkArea = {
   name: string;
   workAreaTypeKey: string;
   reason: string;
+  reasonCode?: import("@/lib/scopes/pricing-state").ExclusionReasonCode;
 };
 
 export type QuickEstimateOutput = {

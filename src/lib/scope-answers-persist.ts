@@ -30,6 +30,11 @@ function isMissingDiscoverySourceCheck(error: PostgrestError): boolean {
   );
 }
 
+function devLogPersist(payload: Record<string, unknown>): void {
+  if (process.env.NODE_ENV !== "development") return;
+  console.log("[dev:scopeAnswers.persist]", payload);
+}
+
 type PersistScopeAnswerParams = {
   organisationId: string;
   scopeQuestionId: string;
@@ -93,10 +98,35 @@ export async function persistScopeAnswer(
   }
 
   if (error && isMissingDiscoverySourceCheck(error)) {
-    ({ error } = await supabase.from("scope_answers").upsert(
-      { ...row, source: "notes" },
-      { onConflict: "scope_question_id" }
-    ));
+    if (columnSource === "user_answered" || columnSource === "user_prompt") {
+      ({ error } = await supabase.from("scope_answers").upsert(
+        { ...row, source: "user" },
+        { onConflict: "scope_question_id" }
+      ));
+    } else {
+      ({ error } = await supabase.from("scope_answers").upsert(
+        { ...row, source: "notes" },
+        { onConflict: "scope_question_id" }
+      ));
+    }
+  }
+
+  if (!error) {
+    const { data: savedRow } = await supabase
+      .from("scope_answers")
+      .select("id, source")
+      .eq("scope_question_id", params.scopeQuestionId)
+      .maybeSingle();
+
+    devLogPersist({
+      project_scope_id: params.projectScopeId,
+      question_key: params.scopeQuestionId,
+      answer_value: params.answer,
+      answer_label: params.answer,
+      source: savedRow?.source ?? columnSource,
+      confidence: "confirmed",
+      rowId: savedRow?.id ?? null,
+    });
   }
 
   if (error?.code === "23505") {
@@ -165,6 +195,16 @@ async function updateExistingAnswer(
 
   if (updateError) {
     logSupabaseError("persistScopeAnswer.update", updateError);
+  } else {
+    devLogPersist({
+      project_scope_id: params.projectScopeId,
+      question_key: params.scopeQuestionId,
+      answer_value: params.answer,
+      answer_label: params.answer,
+      source: columnSource,
+      confidence: "confirmed",
+      rowId: existing.id,
+    });
   }
 
   return updateError;
@@ -184,7 +224,7 @@ export async function persistScopeAnswersBatch(
     const error = await persistScopeAnswer(supabase, {
       organisationId,
       ...item,
-      source: "user",
+      source: "user_answered",
     });
     if (error) {
       return error;

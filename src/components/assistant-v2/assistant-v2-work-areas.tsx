@@ -182,13 +182,20 @@ function WorkAreaCard({
   const keyFactDefs = getCardKeyFactDefinitions(typeKey);
   const requiredMissing = isBroad
     ? []
-    : getMissingRequiredFactsForWorkArea(typeKey, mergedAnswers).map(
-        (f) => f.label
-      );
+    : getMissingRequiredFactsForWorkArea(typeKey, mergedAnswers, {
+        projectQualityLevel: projectQuality,
+      }).map((f) => f.label);
 
   const scopeMissingItems = isBroad
     ? []
-    : getScopeMissingItems(typeKey, scope.id, scope.name, mergedAnswers);
+    : getScopeMissingItems(
+        typeKey,
+        scope.id,
+        scope.name,
+        mergedAnswers,
+        true,
+        projectQuality
+      );
   const usefulMissing = getCriticalOrUsefulMissing(scopeMissingItems)
     .filter((item) => item.importance === "useful")
     .map((item) => item.label.replace(/^[^:]+:\s*/, ""));

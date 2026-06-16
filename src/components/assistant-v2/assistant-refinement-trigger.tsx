@@ -313,17 +313,86 @@ export function SharpeningOptionsActions({
 }
 
 export function RefinementStatusActions({ projectId }: { projectId: string }) {
+  const { syncAssistant } = useAssistantChat();
+  const { markUpdating, markSaved } = useEstimateUpdate();
+  const [rateDialogOpen, setRateDialogOpen] = useState(false);
+  const [exportPending, startExport] = useTransition();
+
+  function scrollToEstimateBreakdown() {
+    document
+      .getElementById("assistant-live-estimate-panel")
+      ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  function handleExportScope() {
+    startExport(async () => {
+      const { exportScopeSummary } = await import("@/actions/assistant-v2");
+      const result = await exportScopeSummary(projectId);
+      if (result.error) {
+        toast.error(result.error);
+        return;
+      }
+      if (result.summary) {
+        await navigator.clipboard.writeText(result.summary);
+        toast.success("Scope summary copied to clipboard.");
+      }
+    });
+  }
+
   return (
-    <div className="mt-2 flex flex-wrap gap-2">
-      <AssistantRefinementTrigger
+    <>
+      <div className="mt-3 flex flex-wrap gap-2">
+        <AddMoreDetailButton
+          projectId={projectId}
+          label="Add optional details"
+        />
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-8 text-xs"
+          onClick={scrollToEstimateBreakdown}
+        >
+          Review estimate breakdown
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-8 text-xs"
+          onClick={() => setRateDialogOpen(true)}
+        >
+          Add my rates
+        </Button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-8 text-xs"
+          disabled={exportPending}
+          onClick={handleExportScope}
+        >
+          {exportPending ? "Exporting…" : "Export scope"}
+        </Button>
+      </div>
+
+      <ScopeRateOnboardingDialog
         projectId={projectId}
-        message="What details would help?"
-        label="What details would help?"
-        variant="outline"
-        size="sm"
+        scope={null}
+        open={rateDialogOpen}
+        onOpenChange={setRateDialogOpen}
+        onSaved={async () => {
+          markUpdating();
+          await syncAssistant();
+          markSaved({
+            costDelta: null,
+            previousCompleteness: null,
+            newCompleteness: null,
+            changeLabel: "after rate saved",
+          });
+        }}
       />
-      <AddMoreDetailButton projectId={projectId} />
-    </div>
+    </>
   );
 }
 
@@ -356,6 +425,18 @@ export function AddMoreDetailButton({
           return;
         }
         await syncAssistant();
+        requestAnimationFrame(() => {
+          const latestBatch = document.querySelector(
+            "[data-assistant-refinement-batch]:last-of-type"
+          );
+          if (latestBatch) {
+            latestBatch.scrollIntoView({ behavior: "smooth", block: "nearest" });
+            return;
+          }
+          document
+            .getElementById("assistant-pricing-questions")
+            ?.scrollIntoView({ behavior: "smooth", block: "nearest" });
+        });
         markSaved({
           costDelta: null,
           previousCompleteness: null,
@@ -480,8 +561,7 @@ export function RefinementAnswerBatch({
 }: {
   questions: RefinementAnswerQuestion[];
 }) {
-  const { flushScopeBatch, optimisticAnswers, syncAssistant } = useAssistantChat();
-  const { markUpdating, markSaved } = useEstimateUpdate();
+  const { flushScopeBatch, optimisticAnswers } = useAssistantChat();
   const [localAnswers, setLocalAnswers] = useState<
     Record<string, { answer: string; label: string }>
   >({});
@@ -529,17 +609,8 @@ export function RefinementAnswerBatch({
 
     flushedRef.current = true;
     setSubmitted(true);
-    markUpdating();
     flushScopeBatch(batch);
-    void syncAssistant().then(() => {
-      markSaved({
-        costDelta: null,
-        previousCompleteness: null,
-        newCompleteness: null,
-        changeLabel: "after refinement",
-      });
-    });
-  }, [allAnswered, questions, merged, flushScopeBatch, syncAssistant, markUpdating, markSaved]);
+  }, [allAnswered, questions, merged, flushScopeBatch]);
 
   function handleAnswer(
     q: RefinementAnswerQuestion,
@@ -553,7 +624,10 @@ export function RefinementAnswerBatch({
   }
 
   return (
-    <div className="mt-2 max-w-[90%] rounded-2xl rounded-bl-md border bg-card px-4 py-3 text-sm shadow-sm">
+    <div
+      className="mt-2 max-w-[90%] rounded-2xl rounded-bl-md border bg-card px-4 py-3 text-sm shadow-sm"
+      data-assistant-refinement-batch
+    >
       <div className="space-y-4">
         {questions.map((q, index) => (
           <div key={q.questionId}>

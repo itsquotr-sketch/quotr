@@ -43,6 +43,14 @@ export {
   buildScopeQualityFactors,
 } from "@/lib/scopes/confidence";
 
+export {
+  isScopeFactKnown,
+  isFinishLevelKnown,
+  resolveEffectiveFinishLevel,
+  shouldSkipFinishLevelQuestion,
+  filterMissingFactsForGlobalFinish,
+} from "@/lib/scopes/resolve-effective-finish";
+
 export { scopeToTemplate } from "@/lib/scopes/to-template";
 
 export {

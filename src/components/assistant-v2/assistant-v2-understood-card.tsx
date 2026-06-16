@@ -35,11 +35,15 @@ interface AssistantV2UnderstoodCardProps {
 function WorkAreaSummary({
   area,
   workAreaInput,
+  qualityLevel,
 }: {
   area: ProjectCompletenessResult["workAreas"][number];
   workAreaInput: WorkAreaCompletenessInput | undefined;
+  qualityLevel: string;
 }) {
   if (!workAreaInput || workAreaInput.included === false) return null;
+
+  const projectQuality = normaliseQualityLevel(qualityLevel);
 
   const knownFacts = formatKnownFactsForScope(
     workAreaInput.workAreaTypeKey,
@@ -48,7 +52,8 @@ function WorkAreaSummary({
 
   const missingCritical = getMissingRequiredFacts(
     workAreaInput.workAreaTypeKey,
-    workAreaInput.answers
+    workAreaInput.answers,
+    { projectQualityLevel: projectQuality }
   ).map((f) => f.label);
 
   const missingUseful = getMissingOptionalHighImpact(
@@ -224,6 +229,7 @@ export function AssistantV2UnderstoodCard({
               key={area.scopeId}
               area={area}
               workAreaInput={workAreas.find((w) => w.scopeId === area.scopeId)}
+              qualityLevel={qualityLevel}
             />
           ))}
 

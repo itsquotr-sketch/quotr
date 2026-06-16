@@ -126,7 +126,8 @@ export function scopedMissingLabel(scopeName: string, factLabel: string): string
 }
 
 export function buildScopedMissingInformationLabels(
-  workAreas: EvaluateWorkAreaInput[]
+  workAreas: EvaluateWorkAreaInput[],
+  projectQualityLevel?: QualityLevel
 ): string[] {
   const labels: string[] = [];
 
@@ -135,14 +136,16 @@ export function buildScopedMissingInformationLabels(
 
     for (const fact of getMissingRequiredFacts(
       area.workAreaTypeKey,
-      area.answers
+      area.answers,
+      { projectQualityLevel }
     )) {
       labels.push(scopedMissingLabel(area.scopeName, fact.label));
     }
 
     for (const fact of getMissingOptionalHighImpact(
       area.workAreaTypeKey,
-      area.answers
+      area.answers,
+      { projectQualityLevel }
     )) {
       labels.push(scopedMissingLabel(area.scopeName, fact.label));
     }
@@ -152,13 +155,16 @@ export function buildScopedMissingInformationLabels(
 }
 
 function allScopesReadyForConstraints(
-  includedAreas: EvaluateWorkAreaInput[]
+  includedAreas: EvaluateWorkAreaInput[],
+  projectQualityLevel?: QualityLevel
 ): boolean {
   return (
     includedAreas.length > 0 &&
     includedAreas.every(
       (area) =>
-        getMissingRequiredFacts(area.workAreaTypeKey, area.answers).length === 0
+        getMissingRequiredFacts(area.workAreaTypeKey, area.answers, {
+          projectQualityLevel,
+        }).length === 0
     )
   );
 }
@@ -196,13 +202,20 @@ function scopeHasMeasurementOrBenchmark(
   return hasMeasurement || Boolean(scope.benchmarkRates);
 }
 
-function scopeMeetsDraftThreshold(area: EvaluateWorkAreaInput): boolean {
+function scopeMeetsDraftThreshold(
+  area: EvaluateWorkAreaInput,
+  projectQualityLevel?: QualityLevel
+): boolean {
   if (!area.included) return true;
 
   const scope = getScopeByWorkAreaType(area.workAreaTypeKey);
   if (!scope) return false;
 
-  if (getMissingRequiredFacts(area.workAreaTypeKey, area.answers).length > 0) {
+  if (
+    getMissingRequiredFacts(area.workAreaTypeKey, area.answers, {
+      projectQualityLevel,
+    }).length > 0
+  ) {
     return false;
   }
 
@@ -227,7 +240,8 @@ function buildWorkAreaCompleteness(
 
   const missingUseful = getMissingOptionalHighImpact(
     area.workAreaTypeKey,
-    area.answers
+    area.answers,
+    { projectQualityLevel }
   ).map((f) => f.label);
 
   const nextBestQuestions = [
@@ -321,7 +335,10 @@ function resolveNextBestAction(
     };
   }
 
-  if (pendingConstraints > 0 && allScopesReadyForConstraints(includedAreas)) {
+  if (
+    pendingConstraints > 0 &&
+    allScopesReadyForConstraints(includedAreas, input.qualityLevel)
+  ) {
     return {
       type: "assess_constraints",
       label: "Confirm site conditions",
@@ -392,14 +409,19 @@ export function evaluateProjectCompleteness(
 
   const allDraftReady =
     includedAreas.length > 0 &&
-    includedAreas.every((area) => scopeMeetsDraftThreshold(area));
+    includedAreas.every((area) =>
+      scopeMeetsDraftThreshold(area, input.qualityLevel)
+    );
 
   const anyMissingCritical = includedResults.some(
     (w) => w.missingCriticalFacts.length > 0
   );
 
   const finishResolved = projectFinishLevelResolved(input, includedAreas);
-  const constraintsReady = allScopesReadyForConstraints(includedAreas);
+  const constraintsReady = allScopesReadyForConstraints(
+    includedAreas,
+    input.qualityLevel
+  );
 
   let projectStatus: ProjectStatus;
 

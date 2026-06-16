@@ -1,11 +1,15 @@
 import { z } from "zod";
 
-export type ScopeAnswerSource = "user" | "discovery";
+export type ScopeAnswerSource =
+  | "user"
+  | "discovery"
+  | "user_answered"
+  | "user_prompt";
 
 const scopeAnswerPayloadSchema = z.object({
   value: z.union([z.string(), z.number(), z.boolean()]),
   unit: z.string().optional(),
-  source: z.enum(["user", "discovery", "notes"]).optional(),
+  source: z.enum(["user", "discovery", "notes", "user_answered", "user_prompt"]).optional(),
   updatedAt: z.string().optional(),
 });
 
@@ -20,6 +24,8 @@ function normalizeSource(
   source: string | undefined | null
 ): ScopeAnswerSource {
   if (source === "discovery" || source === "notes") return "discovery";
+  if (source === "user_answered") return "user_answered";
+  if (source === "user_prompt") return "user_prompt";
   return "user";
 }
 
@@ -75,7 +81,20 @@ export function serializeScopeAnswer(
 
 /** Column value for scope_answers.source — mirrors JSON source. */
 export function sourceToColumn(source: ScopeAnswerSource): string {
-  return source === "discovery" ? "discovery" : "user";
+  if (source === "discovery") return "discovery";
+  if (source === "user_answered") return "user_answered";
+  if (source === "user_prompt") return "user_prompt";
+  return "user";
+}
+
+export function isUserConfirmedSource(
+  source: ScopeAnswerSource | string | null | undefined
+): boolean {
+  return (
+    source === "user" ||
+    source === "user_answered" ||
+    source === "user_prompt"
+  );
 }
 
 export function isDiscoverySource(source: ScopeAnswerSource | string): boolean {

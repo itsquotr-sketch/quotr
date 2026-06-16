@@ -15,7 +15,7 @@ import {
 import {
   autoSaveQualityLevel,
   batchSaveAssistantConstraintAnswers,
-  batchSaveAssistantScopeAnswers,
+  commitAssistantAnswerBatch,
   confirmAssistantWorkAreas,
   reopenSiteConditions,
   submitAssistantNotes,
@@ -241,6 +241,16 @@ export function AssistantChatProvider({
   }, [initialMessages]);
 
   useEffect(() => {
+    if (flushInFlightRef.current) return;
+    setWorkAreas(initialWorkAreas);
+  }, [initialWorkAreas]);
+
+  useEffect(() => {
+    if (flushInFlightRef.current) return;
+    setOptimisticQualityLevel(initialQualityLevel);
+  }, [initialQualityLevel]);
+
+  useEffect(() => {
     setDeclinedConstraintSlugs(initialDeclinedConstraintSlugs);
     setOptimisticDeclinedSlugs([]);
   }, [initialDeclinedConstraintSlugs]);
@@ -372,6 +382,29 @@ export function AssistantChatProvider({
     []
   );
 
+  const rollbackOptimisticScopeAnswers = useCallback(
+    (answers: ScopeAnswerItem[]) => {
+      const keys = new Set(answers.map((a) => a.questionKey));
+      setOptimisticAnswers((prev) => {
+        const next = { ...prev };
+        for (const key of keys) {
+          delete next[key];
+        }
+        return next;
+      });
+      setWorkAreas((prev) =>
+        prev.map((area) => {
+          const nextAnswers = { ...area.answers };
+          for (const key of keys) {
+            delete nextAnswers[key];
+          }
+          return { ...area, answers: nextAnswers };
+        })
+      );
+    },
+    []
+  );
+
   const applyEstimateChangeFromPayload = useCallback(
     (payload: AssistantSyncPayload, changeLabel: string | null) => {
       const estimate = payload.quickEstimate;
@@ -419,7 +452,6 @@ export function AssistantChatProvider({
       flushInFlightRef.current = true;
       setFlushInFlight(true);
       markSaving();
-      setPendingAction("toggling_constraints");
       setPendingAction("saving_answer");
 
       const prevCompleteness = computeProjectCompleteness(workAreas);
@@ -427,6 +459,25 @@ export function AssistantChatProvider({
         answers.length === 1
           ? answers[0]!.label
           : answers.map((a) => a.label).join(", ");
+
+      const recalcStatusMessage =
+        answers.length === 1
+          ? "Updated details. Recalculating estimate…"
+          : "Updated details. Recalculating estimate…";
+
+      if (process.env.NODE_ENV === "development") {
+        console.log("[dev:scopeAnswers.submit.start]", {
+          projectId,
+          answersCount: answers.length,
+          answers: answers.map((a) => ({
+            questionId: a.questionId,
+            questionKey: a.questionKey,
+            scopeId: a.scopeId,
+            answer: a.answer,
+            label: a.label,
+          })),
+        });
+      }
 
       setOptimisticMessages((prev) => [
         ...prev,
@@ -440,7 +491,7 @@ export function AssistantChatProvider({
         {
           id: `batch-asst-${Date.now()}`,
           role: "assistant",
-          content: TRUST_COPY.updatingEstimate,
+          content: recalcStatusMessage,
           pending: true,
           createdAt: new Date(Date.now() + 1).toISOString(),
           sequenceIndex: Date.now() + 1,
@@ -452,90 +503,109 @@ export function AssistantChatProvider({
       setPendingAction("updating_estimate");
       startLoadingTimeout();
 
-      if (process.env.NODE_ENV === "development") {
-        console.log("[assistant.answer.save]", {
-          phase: "client_submit",
-          answers: answers.map((a) => ({
-            question_key: a.questionKey,
-            scope_id: a.scopeId,
-            answer_value: a.answer,
-            answer_source: "user",
-            question_id: a.questionId,
-          })),
-        });
-      }
+      let estimateStatusSettled = false;
 
       try {
-        const result = await batchSaveAssistantScopeAnswers(projectId, answers);
-        if (result.error) throw new Error(result.error);
+        const firstScopeId = answers[0]?.scopeId;
 
-        const newCompleteness = computeProjectCompleteness(
-          workAreas.map((area) => ({
-            ...area,
-            answers: {
-              ...area.answers,
-              ...Object.fromEntries(
-                answers.map((a) => [a.questionKey, a.answer])
-              ),
-            },
-          }))
+        const commitResult = await commitAssistantAnswerBatch(
+          projectId,
+          answers,
+          { projectScopeId: firstScopeId }
         );
 
         clearLoadingTimeout();
-        resolvePendingAssistantMessages(setOptimisticMessages, "success");
 
-        const firstScopeId = answers[0]?.questionId
-          ? workAreas.find((a) =>
-              Object.keys(a.answers).some((k) =>
-                answers.some((ans) => ans.questionKey === k)
-              )
-            )?.scopeId
-          : undefined;
+        if (process.env.NODE_ENV === "development") {
+          const questionsWithAnswers =
+            commitResult.state?.scopeQuestions.filter(
+              (q) => q.scope_answers?.[0]
+            ).length ?? 0;
+          console.log("[assistant.commit.result]", {
+            success: commitResult.success,
+            changed: commitResult.changed,
+            scopeQuestionsCount:
+              commitResult.state?.scopeQuestions.length ?? 0,
+            questionsWithAnswers,
+            estimateLow:
+              commitResult.state?.quickEstimate?.estimated_cost_low ?? null,
+            estimateHigh:
+              commitResult.state?.quickEstimate?.estimated_cost_high ?? null,
+          });
+        }
 
-        const syncPayload = await syncByKinds(
-          ["answers", "estimate", "scopes", "messages"],
-          firstScopeId
+        if (!commitResult.success) {
+          rollbackOptimisticScopeAnswers(answers);
+          markIdle();
+          resolvePendingAssistantMessages(
+            setOptimisticMessages,
+            "error",
+            commitResult.error ?? "Could not save answers. Try again."
+          );
+          estimateStatusSettled = true;
+          return;
+        }
+
+        const estimateUpdated = commitResult.estimateUpdated !== false;
+        const statusMessage = estimateUpdated
+          ? "Estimate updated."
+          : commitResult.userMessage ??
+            "Answers saved. Estimate updated with available pricing.";
+
+        resolvePendingAssistantMessages(
+          setOptimisticMessages,
+          estimateUpdated ? "success" : "error",
+          estimateUpdated ? undefined : statusMessage
         );
-        if (syncPayload) {
-          if (process.env.NODE_ENV === "development" && syncPayload.scopeQuestions) {
-            const answered = collectAnsweredQuestionKeys(syncPayload.scopeQuestions);
-            console.log("[assistant.answer.sync]", {
-              scopeQuestionsCount: syncPayload.scopeQuestions.length,
-              questionsWithAnswers: syncPayload.scopeQuestions.filter(
-                (q) => q.scope_answers?.[0]
-              ).length,
-              answeredKeys: [...answered],
+
+        if (commitResult.state) {
+          const syncPayload: AssistantSyncPayload = {
+            scopeQuestions: commitResult.state.scopeQuestions,
+            quickEstimate: commitResult.state.quickEstimate,
+            chatMessages: commitResult.state.messages,
+          };
+
+          applySyncPayload(syncPayload);
+
+          if (process.env.NODE_ENV === "development") {
+            console.log("[assistant.commit.stateApplied]", {
+              scopeQuestionsCount: commitResult.state.scopeQuestions.length,
+              messagesCount: commitResult.state.messages.length,
+              estimateLow:
+                commitResult.state.quickEstimate?.estimated_cost_low ?? null,
+              estimateHigh:
+                commitResult.state.quickEstimate?.estimated_cost_high ?? null,
             });
           }
-          applyEstimateChangeFromPayload(
-            syncPayload,
-            answers.length === 1
-              ? `${answers[0]!.label} updated. Estimate refreshed.`
-              : `Updated ${answers.length} details. Estimate refreshed.`
-          );
+
+          applyEstimateChangeFromPayload(syncPayload, statusMessage);
         } else {
           markSaved({
             costDelta: null,
             previousCompleteness: prevCompleteness,
-            newCompleteness,
-            changeLabel:
-              answers.length === 1
-                ? `after ${answers[0]!.label.toLowerCase()}`
-                : `after updating ${answers.length} details`,
+            newCompleteness: computeProjectCompleteness(workAreas),
+            changeLabel: statusMessage,
           });
         }
+
+        estimateStatusSettled = true;
       } catch {
         clearLoadingTimeout();
+        rollbackOptimisticScopeAnswers(answers);
         markIdle();
         resolvePendingAssistantMessages(
           setOptimisticMessages,
           "error",
-          "Answers saved. Estimate refresh needs retry."
+          "Could not save answers. Try again."
         );
+        estimateStatusSettled = true;
       } finally {
         clearLoadingTimeout();
         flushInFlightRef.current = false;
         setFlushInFlight(false);
+        if (!estimateStatusSettled) {
+          markIdle();
+        }
       }
     },
     [
@@ -546,10 +616,11 @@ export function AssistantChatProvider({
       markIdle,
       workAreas,
       applyOptimisticScopeAnswers,
+      rollbackOptimisticScopeAnswers,
       applyEstimateChangeFromPayload,
+      applySyncPayload,
       startLoadingTimeout,
       clearLoadingTimeout,
-      syncByKinds,
       setPendingAction,
     ]
   );
@@ -829,12 +900,11 @@ export function AssistantChatProvider({
       answer: string,
       label: string
     ) => {
-      markSaving();
       applyOptimisticScopeAnswers([
         { questionId, questionKey, scopeId, answer, label },
       ]);
     },
-    [markSaving, applyOptimisticScopeAnswers]
+    [applyOptimisticScopeAnswers]
   );
 
   const submitQualityLevel = useCallback(

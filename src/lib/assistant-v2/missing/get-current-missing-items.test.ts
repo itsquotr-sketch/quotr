@@ -39,6 +39,27 @@ describe("getCurrentMissingItems", () => {
     }
   });
 
+  it("suppresses finish_level when global quality is set", () => {
+    const items = getCurrentMissingItems({
+      workAreas: [
+        {
+          scopeId: "bath-1",
+          scopeName: "Bathroom",
+          workAreaTypeKey: "Bathroom renovation",
+          included: true,
+          answers: { "bathroom.floor_area_m2": "5" },
+        },
+      ],
+      projectQualityLevel: "premium",
+    });
+
+    expect(
+      items.some(
+        (i) => i.factKey.includes("finish_level") && i.status === "missing"
+      )
+    ).toBe(false);
+  });
+
   it("removes retaining wall items when answers are provided", () => {
     const unanswered = getCurrentMissingItems({
       workAreas: [

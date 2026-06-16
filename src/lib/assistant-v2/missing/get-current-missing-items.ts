@@ -1,4 +1,5 @@
 import type { EvaluateWorkAreaInput } from "@/lib/assistant-v2/completeness/evaluate-project-completeness";
+import type { QualityLevel } from "@/lib/constants/quality-level";
 import type { EstimateTrace } from "@/lib/cost-engine/estimate-trace";
 import { getTrackableFactsForWorkAreaType } from "@/lib/assistant-v2/discovery/generic-scope-discovery";
 import { shouldSuppressQuestionForDerivedValue } from "@/lib/assistant-v2/facts/measurement-resolver";
@@ -8,6 +9,7 @@ import {
   getMissingOptionalHighImpact,
   getMissingRequiredFacts,
 } from "@/lib/scopes/missing-facts";
+import { isScopeFactKnown } from "@/lib/scopes/resolve-effective-finish";
 import {
   getMissingRequiredFactsForWorkArea,
   getMissingUsefulFactsForWorkArea,
@@ -47,6 +49,8 @@ export type GetCurrentMissingItemsInput = {
   /** Keys the user explicitly skipped in refinement (optional). */
   skippedFactKeys?: Set<string>;
   estimateTrace?: EstimateTrace | null;
+  /** Global finish/spec level — satisfies per-scope finish_level when set. */
+  projectQualityLevel?: QualityLevel | string | null;
 };
 
 function formatMissingLabel(scopeName: string, factLabel: string): string {
@@ -92,12 +96,19 @@ function getMissingOptionalLowImpact(
 
 function isTrackableFactAnswered(
   fact: ReturnType<typeof getTrackableFactsForWorkAreaType>[number],
-  answers: Record<string, string>
+  answers: Record<string, string>,
+  workAreaTypeKey: string,
+  projectQualityLevel?: QualityLevel | string | null
 ): boolean {
   if (shouldSuppressQuestionForDerivedValue(fact.key, answers)) {
     return true;
   }
-  return factIsAnsweredFromMap(fact as ScopeFactDefinition, answers);
+  return isScopeFactKnown(
+    workAreaTypeKey,
+    fact.key,
+    answers,
+    projectQualityLevel
+  );
 }
 
 /**
@@ -107,6 +118,7 @@ export function getCurrentMissingItems(
   input: GetCurrentMissingItemsInput
 ): CurrentMissingItem[] {
   const skipped = input.skippedFactKeys ?? new Set<string>();
+  const projectQualityLevel = input.projectQualityLevel;
   const items: CurrentMissingItem[] = [];
 
   for (const area of input.workAreas) {
@@ -119,13 +131,15 @@ export function getCurrentMissingItems(
     const missingRequiredKeys = new Set(
       getMissingRequiredFactsForWorkArea(
         area.workAreaTypeKey,
-        area.answers
+        area.answers,
+        { projectQualityLevel }
       ).map((f) => f.key)
     );
     const missingUsefulKeys = new Set(
       getMissingUsefulFactsForWorkArea(
         area.workAreaTypeKey,
-        area.answers
+        area.answers,
+        { projectQualityLevel }
       ).map((f) => f.key)
     );
 
@@ -145,7 +159,12 @@ export function getCurrentMissingItems(
         }
       }
 
-      const answered = isTrackableFactAnswered(fact, area.answers);
+      const answered = isTrackableFactAnswered(
+        fact,
+        area.answers,
+        area.workAreaTypeKey,
+        projectQualityLevel
+      );
       const isSkipped = skipped.has(fact.key);
 
       if (answered) {
@@ -171,6 +190,14 @@ export function getCurrentMissingItems(
 
   const traceFacts = input.estimateTrace?.missingCriticalFacts ?? [];
   for (const traceLabel of traceFacts) {
+    if (
+      projectQualityLevel &&
+      projectQualityLevel !== "unknown" &&
+      traceLabel.toLowerCase().includes("finish")
+    ) {
+      continue;
+    }
+
     const alreadyTracked = items.some(
       (item) =>
         item.label.toLowerCase().includes(traceLabel.toLowerCase()) &&
@@ -271,9 +298,10 @@ function importancePriority(importance: MissingItemImportance): number {
 
 /** Re-export helpers used by refinement suggestions for backwards compatibility. */
 export function buildMissingFromWorkAreas(
-  workAreas: EvaluateWorkAreaInput[]
+  workAreas: EvaluateWorkAreaInput[],
+  projectQualityLevel?: QualityLevel | string | null
 ): CurrentMissingItem[] {
-  return getCurrentMissingItems({ workAreas });
+  return getCurrentMissingItems({ workAreas, projectQualityLevel });
 }
 
 /** Facts still missing for a single work area (for work area cards). */
@@ -282,7 +310,8 @@ export function getScopeMissingItems(
   scopeId: string,
   scopeName: string,
   answers: Record<string, string>,
-  included = true
+  included = true,
+  projectQualityLevel?: QualityLevel | string | null
 ): CurrentMissingItem[] {
   return getCurrentMissingItems({
     workAreas: [
@@ -294,6 +323,7 @@ export function getScopeMissingItems(
         included,
       },
     ],
+    projectQualityLevel,
   });
 }
 

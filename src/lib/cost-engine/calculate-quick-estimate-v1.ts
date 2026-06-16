@@ -67,7 +67,10 @@ import {
   type CachedScopeContribution,
   type ScopeEstimateCache,
 } from "@/lib/cost-engine/cache/scope-estimate-cache";
-import { resolveScopePricingState } from "@/lib/scopes/pricing-state";
+import {
+  deriveExclusionReasonCode,
+  resolveScopePricingState,
+} from "@/lib/scopes/pricing-state";
 import { buildPartialEstimateExclusionMessage } from "@/lib/assistant-v2/stages/required-fact-gating";
 
 const DEFAULT_CONTINGENCY_PERCENT = 5;
@@ -251,6 +254,12 @@ export function calculateQuickEstimateV1(
         name: area.name,
         workAreaTypeKey: area.workAreaTypeKey,
         reason: pricingState.message,
+        reasonCode: deriveExclusionReasonCode({
+          pricingState,
+          workAreaTypeKey: area.workAreaTypeKey,
+          answers: area.answers,
+          qualityLevel: input.quickEstimate.quality_level,
+        }),
       });
     }
   }

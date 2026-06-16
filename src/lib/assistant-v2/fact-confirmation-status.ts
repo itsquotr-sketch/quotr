@@ -1,5 +1,9 @@
 import { getAnswerValue } from "@/lib/question-keys";
-import { isDiscoverySource } from "@/lib/scope-answer-format";
+import {
+  isDiscoverySource,
+  isUserConfirmedSource,
+  parseScopeAnswer,
+} from "@/lib/scope-answer-format";
 import type { ScopeQuestionWithAnswers } from "@/lib/project-assistant-data";
 import type { DiscoveryResult } from "@/lib/ai/discovery/types";
 import type { ScopeFactDefinition } from "@/lib/scopes/types";
@@ -30,24 +34,31 @@ export function getFactConfirmationStatus(
       normalizeQuestionKey(q.question_key) === fact.key
   );
   const row = question?.scope_answers?.[0];
-  if (row?.source && isDiscoverySource(row.source)) {
-    return "assumed";
+
+  if (row?.answer) {
+    const parsedSource =
+      parseScopeAnswer(row.answer, row.source)?.source ?? row.source;
+    if (parsedSource && isDiscoverySource(parsedSource)) {
+      return "assumed";
+    }
+    if (isUserConfirmedSource(parsedSource ?? row.source)) {
+      return "confirmed";
+    }
+    return "confirmed";
   }
 
   const typeKey = resolveWorkAreaTypeKey(scopeTypeName, scopeName);
-  const hasDiscoveryOnly =
-    !row?.answer &&
-    discovery?.facts?.some(
-      (f) =>
-        normalizeQuestionKey(f.key) === fact.key &&
-        (!f.workAreaTypeKey || f.workAreaTypeKey === typeKey)
-    );
+  const hasDiscoveryFact = discovery?.facts?.some(
+    (f) =>
+      normalizeQuestionKey(f.key) === fact.key &&
+      (!f.workAreaTypeKey || f.workAreaTypeKey === typeKey)
+  );
 
-  if (hasDiscoveryOnly) {
+  if (hasDiscoveryFact) {
     return "assumed";
   }
 
-  return row?.answer ? "confirmed" : "assumed";
+  return "assumed";
 }
 
 export function formatRateSourceDisclosure(

@@ -433,7 +433,8 @@ export function AssistantV2Chat({
   );
 
   const showRefinementActions =
-    flowResult.state === "estimate_ready" &&
+    (flowResult.state === "estimate_ready" ||
+      flowResult.state === "optional_refinement") &&
     !blockingFlowStates.has(flowResult.state);
 
   const showDerivedStatus =
@@ -962,6 +963,23 @@ function ScopeBatchBubble({
       ? `${scopeName}: ${questions.length} of ${remainingQuestionCount} useful details in this batch.`
       : null;
 
+  useEffect(() => {
+    if (allAnswered && !flushedRef.current && !actionsDisabled) {
+      tryFlush();
+    }
+  }, [allAnswered, actionsDisabled, tryFlush]);
+
+  if (submitted || (allAnswered && flushedRef.current)) {
+    return (
+      <AssistantBubble>
+        <p className="text-xs text-muted-foreground">
+          {hasRequired ? "Required details answered." : "Details updated."}
+        </p>
+        <p className="mt-1 font-medium whitespace-pre-wrap">{intro}</p>
+      </AssistantBubble>
+    );
+  }
+
   return (
     <AssistantBubble>
       <p className="text-xs text-muted-foreground">{progressLabel}</p>
@@ -1074,6 +1092,8 @@ function ScopeQuestionRow({
   const prompt = contextualQuestionText(q);
   const isPendingNumeric =
     q.inputType === "number" && numberValue.trim() !== "" && !selected;
+  const selectedLabel =
+    q.options.find((o) => o.value === selected)?.label ?? selected;
 
   useEffect(() => {
     setNumberValue(selected);
@@ -1083,6 +1103,22 @@ function ScopeQuestionRow({
     if (!numberValue.trim()) return;
     const label = q.unit ? `${numberValue.trim()} ${q.unit}` : numberValue.trim();
     onAnswer(numberValue.trim(), label);
+  }
+
+  if (selected) {
+    return (
+      <div className="rounded-md border border-primary/20 bg-primary/5 px-3 py-2">
+        {showScopeLabel && (
+          <p className="text-xs font-semibold text-primary">{q.scopeName}</p>
+        )}
+        <p className={cn("text-sm font-medium", showScopeLabel && "mt-1")}>
+          {prompt}
+        </p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          Answered: <span className="text-foreground">{selectedLabel}</span>
+        </p>
+      </div>
+    );
   }
 
   return (

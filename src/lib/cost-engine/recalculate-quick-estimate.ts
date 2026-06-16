@@ -337,6 +337,20 @@ export async function recalculateQuickEstimate(
     ? null
     : mapEstimateFailureUserMessage(result.reason);
 
+  const userExcludedWorkAreas = (input.excludedWorkAreaNames ?? []).map(
+    (name) => ({
+      name,
+      workAreaTypeKey: "",
+      reason: "Excluded manually.",
+      reasonCode: "excluded_by_user" as const,
+    })
+  );
+
+  const allUnpricedWorkAreas = [
+    ...(result.unpricedWorkAreas ?? []),
+    ...userExcludedWorkAreas,
+  ];
+
   const summaryNote = JSON.stringify({
     workAreasIncluded: input.workAreas
       .filter((area) =>
@@ -347,11 +361,10 @@ export async function recalculateQuickEstimate(
       .map((w) => w.name),
     workAreasExcluded: [
       ...(input.excludedWorkAreaNames ?? []),
-      ...(result.unpricedWorkAreas ?? []).map(
-        (area) => `${area.name} (not priced yet)`
-      ),
+      ...(result.unpricedWorkAreas ?? []).map((area) => area.name),
     ],
-    unpricedWorkAreas: result.unpricedWorkAreas ?? [],
+    workAreasExcludedDetails: allUnpricedWorkAreas,
+    unpricedWorkAreas: allUnpricedWorkAreas,
     estimateStatus,
     failureReason,
     questionsAnswered: input.questionsAnswered,
