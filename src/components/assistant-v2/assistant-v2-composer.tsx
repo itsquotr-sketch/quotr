@@ -8,6 +8,7 @@ import { useAssistantChat } from "@/components/assistant-v2/assistant-chat-conte
 import { useEstimateUpdate } from "@/components/projects/estimate-update-context";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { cn } from "@/lib/utils";
 
 interface AssistantV2ComposerProps {
   projectId: string;
@@ -28,11 +29,12 @@ export function AssistantV2Composer({
     syncAssistant,
     clearOptimisticMessages,
   } = useAssistantChat();
-  const { markSaving, markUpdating, markSaved, markIdle, requestBreakdownOpen } =
+  const { markSaving, markUpdating, markSaved, markIdle, requestBreakdownOpen, status } =
     useEstimateUpdate();
   const [pending, startTransition] = useTransition();
   const [text, setText] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const isSavingAnswer = status === "saving" || status === "updating";
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -106,7 +108,10 @@ export function AssistantV2Composer({
           placeholder="e.g. 50m² timber deck, standard finish, tight access…"
           rows={2}
           disabled={disabled || pending}
-          className="min-h-0 flex-1 resize-none border-0 bg-transparent shadow-none focus-visible:ring-0"
+          className={cn(
+            "min-h-0 flex-1 resize-none border-0 bg-transparent shadow-none focus-visible:ring-0",
+            isSavingAnswer && "opacity-75 ring-1 ring-primary/30 animate-pulse"
+          )}
           onKeyDown={(e) => {
             if (e.key === "Enter" && !e.shiftKey) {
               e.preventDefault();
@@ -129,6 +134,9 @@ export function AssistantV2Composer({
           )}
         </Button>
       </div>
+      {isSavingAnswer && (
+        <p className="text-[10px] text-muted-foreground">(saving…)</p>
+      )}
       {error && <p className="text-xs text-destructive">{error}</p>}
       <p className="text-[10px] text-muted-foreground/70">
         Try: &lsquo;make it premium&rsquo;, &lsquo;remove retaining wall&rsquo;, &lsquo;what&rsquo;s included?&rsquo;, &lsquo;update deck to 60m²&rsquo;

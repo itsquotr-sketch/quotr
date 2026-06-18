@@ -26,6 +26,7 @@ import type { AssistantMessageRow } from "@/lib/assistant-v2/assistant-messages-
 import type { WorkAreaCompletenessInput } from "@/lib/assistant-v2/compute-information-completeness";
 import { computeProjectCompleteness } from "@/lib/assistant-v2/compute-information-completeness";
 import type { EstimateChangeEvent } from "@/lib/cost-engine/recalculate-quick-estimate";
+import { devLog } from "@/lib/dev-log";
 import { parseQuickEstimateSummary } from "@/lib/project-assistant-summary";
 
 export type OptimisticMessage = {
@@ -242,17 +243,23 @@ export function AssistantChatProvider({
         {
           id: `batch-asst-${Date.now()}`,
           role: "assistant",
-          content: "Updating estimate…",
+          content: "Saving answers…",
           pending: true,
         },
       ]);
 
-      applyOptimisticScopeAnswers(answers);
       markUpdating();
+      const startedAt = Date.now();
 
       try {
         const result = await batchSaveAssistantScopeAnswers(projectId, answers);
         if (result.error) throw new Error(result.error);
+
+        setOptimisticMessages((prev) =>
+          prev.map((m) =>
+            m.pending ? { ...m, content: "Updating estimate…" } : m
+          )
+        );
 
         const newCompleteness = computeProjectCompleteness(
           workAreas.map((area) => ({
@@ -265,6 +272,8 @@ export function AssistantChatProvider({
             },
           }))
         );
+
+        applyOptimisticScopeAnswers(answers);
 
         setOptimisticMessages([]);
 
@@ -288,13 +297,27 @@ export function AssistantChatProvider({
                 : `after updating ${answers.length} details`,
           });
         }
+
+        devLog("assistant.batch.timing", {
+          projectId,
+          answerCount: answers.length,
+          msToSave: Date.now() - startedAt,
+          recalculateOnce: true,
+        });
       } catch (error) {
         markIdle();
         const message =
-          error instanceof Error ? error.message : "Could not save.";
+          error instanceof Error
+            ? error.message
+            : "Could not save answers. Try again.";
+        const displayMessage = message.includes("estimate")
+          ? "Answers saved. Estimate needs retry."
+          : "Could not save answers. Try again.";
         setOptimisticMessages((prev) =>
           prev.map((m) =>
-            m.pending ? { ...m, pending: false, content: message, error: message } : m
+            m.pending
+              ? { ...m, pending: false, content: displayMessage, error: displayMessage }
+              : m
           )
         );
       } finally {

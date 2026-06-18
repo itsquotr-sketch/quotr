@@ -51,11 +51,32 @@ export const deckScope: ScopeDefinition = {
         /\bcomposite\s+deck/i,
         /\btimber\s+deck/i,
         /\bhardwood\s+deck/i,
+        /\bkwila\b/i,
+        /\bmerbau\b/i,
+        /\bspotted\s+gum\b/i,
+        /\bblackbutt\b/i,
+        /\btreated\s+pine\b/i,
+        /\bpine\s+deck/i,
+        /\bhardwood\b/i,
+        /\bhard\s+wood\b/i,
+        /\bcomposite\b/i,
       ],
       extractValue: (m) => {
         const text = m[0].toLowerCase();
         if (text.includes("composite")) return "composite";
-        if (text.includes("timber") || text.includes("hardwood")) return "timber";
+        if (
+          text.includes("timber") ||
+          text.includes("hardwood") ||
+          text.includes("hard wood") ||
+          text.includes("kwila") ||
+          text.includes("merbau") ||
+          text.includes("spotted gum") ||
+          text.includes("blackbutt") ||
+          text.includes("treated pine") ||
+          text.includes("pine")
+        ) {
+          return "timber";
+        }
         return null;
       },
     },
@@ -115,17 +136,78 @@ export const deckScope: ScopeDefinition = {
         /\bbudget\s+finish/i,
         /\bpremium\s+finish/i,
         /\bmid[- ]range\s+finish/i,
+        /\bhigh[- ]end\b/i,
+        /\bhigh[- ]quality\b/i,
+        /\bhigh[- ]spec\b/i,
+        /\bluxury\b/i,
+        /\bpremium\b/i,
+        /\bbudget\b/i,
+        /\bbasic\b/i,
+        /\bstandard\b/i,
+        /\bmid[- ]range\b/i,
       ],
       extractValue: (m) => {
         const text = m[0].toLowerCase();
-        if (text.includes("premium")) return "premium";
-        if (text.includes("budget")) return "budget";
-        if (text.includes("standard") || text.includes("mid")) return "standard";
+        if (
+          text.includes("premium") ||
+          text.includes("high-end") ||
+          text.includes("high end") ||
+          text.includes("high-quality") ||
+          text.includes("high quality") ||
+          text.includes("high-spec") ||
+          text.includes("high spec") ||
+          text.includes("luxury")
+        ) {
+          return "premium";
+        }
+        if (text.includes("budget") || text.includes("basic")) return "budget";
+        if (
+          text.includes("standard") ||
+          text.includes("mid-range") ||
+          text.includes("mid range")
+        ) {
+          return "standard";
+        }
         return null;
       },
     },
   ],
   optionalFacts: [
+    {
+      key: "deck.length_m",
+      label: "Deck length",
+      type: "number",
+      unit: "m",
+      required: false,
+      affectsEstimate: false,
+      affectsConfidence: false,
+      questionText: "Deck length?",
+      placeholder: "e.g. 8",
+      extractionPatterns: [
+        /(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?)\s*long\b/i,
+        /\blength\s*(?:of\s*)?(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?)?\b/i,
+        // Ambiguous "5m x 8m deck": convention is width × length (first × second).
+        /(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?)\s*(?:x|by)\s*(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?)?(?:\s+\w+)*\s*deck/i,
+      ],
+      extractValue: (m) => (m[2] != null ? m[2] : m[1]) ?? null,
+    },
+    {
+      key: "deck.width_m",
+      label: "Deck width",
+      type: "number",
+      unit: "m",
+      required: false,
+      affectsEstimate: false,
+      affectsConfidence: false,
+      questionText: "Deck width?",
+      placeholder: "e.g. 5",
+      extractionPatterns: [
+        /(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?)\s*wide\b/i,
+        /\bwidth\s*(?:of\s*)?(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?)?\b/i,
+        /(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?)\s*(?:x|by)\s*(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?)?(?:\s+\w+)*\s*deck/i,
+      ],
+      extractValue: (m) => m[1] ?? null,
+    },
     {
       key: "deck.has_stairs",
       label: "Stairs",

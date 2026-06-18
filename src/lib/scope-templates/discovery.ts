@@ -12,6 +12,7 @@ import {
   templateQuestionToDef,
 } from "@/lib/scope-templates";
 import { extractConstraintsFromNotes } from "@/lib/ai/discovery/constraint-rules";
+import { deriveAdditionalFacts } from "@/lib/scopes/derive-facts";
 import { normalizeQuestionKey } from "@/lib/question-keys";
 
 function buildDescription(
@@ -79,6 +80,28 @@ export function extractFactsFromTemplates(
         break;
       }
     }
+  }
+
+  for (const derivedFact of deriveAdditionalFacts(facts)) {
+    const canonicalKey =
+      normalizeQuestionKey(derivedFact.key) ?? derivedFact.key;
+    if (facts.some((f) => (normalizeQuestionKey(f.key) ?? f.key) === canonicalKey)) {
+      continue;
+    }
+
+    const displayValue =
+      derivedFact.unit && /^\d/.test(derivedFact.value)
+        ? `${derivedFact.value} ${derivedFact.unit}`
+        : derivedFact.value;
+    const dedupeKey = `${canonicalKey}:${displayValue}`;
+    if (seen.has(dedupeKey)) continue;
+    seen.add(dedupeKey);
+
+    facts.push({
+      ...derivedFact,
+      key: canonicalKey,
+      value: displayValue,
+    });
   }
 
   return facts;

@@ -128,7 +128,10 @@ function toPricingQuestion(
   };
 }
 
-const MAX_BATCH_QUESTIONS = 3;
+export const SCOPE_BATCH_MAX_TOTAL = 6;
+export const SCOPE_BATCH_MAX_PER_SCOPE = 4;
+
+const MAX_BATCH_QUESTIONS = SCOPE_BATCH_MAX_TOTAL;
 
 function questionPriority(questionKey: string, inputType: string): number {
   const key = questionKey.toLowerCase();
@@ -150,35 +153,29 @@ function questionPriority(questionKey: string, inputType: string): number {
 
 type RankedQuestion = PricingQuestion & { priority: number };
 
-function interleaveByScope(questions: RankedQuestion[], maxCount: number): PricingQuestion[] {
+function buildScopeQuestionBatch(
+  questions: RankedQuestion[],
+  maxTotal = SCOPE_BATCH_MAX_TOTAL,
+  maxPerScope = SCOPE_BATCH_MAX_PER_SCOPE
+): PricingQuestion[] {
   const byScope = new Map<string, RankedQuestion[]>();
+  const scopeOrder: string[] = [];
+
   for (const q of questions) {
-    const list = byScope.get(q.scopeId) ?? [];
-    list.push(q);
-    byScope.set(q.scopeId, list);
-  }
-
-  for (const list of byScope.values()) {
-    list.sort((a, b) => b.priority - a.priority);
-  }
-
-  const scopeIds = [...byScope.keys()];
-  const result: PricingQuestion[] = [];
-  let round = 0;
-
-  while (result.length < maxCount && scopeIds.length > 0) {
-    let added = false;
-    for (const scopeId of scopeIds) {
-      const list = byScope.get(scopeId);
-      const item = list?.[round];
-      if (item) {
-        result.push(item);
-        added = true;
-        if (result.length >= maxCount) break;
-      }
+    if (!byScope.has(q.scopeId)) {
+      scopeOrder.push(q.scopeId);
+      byScope.set(q.scopeId, []);
     }
-    if (!added) break;
-    round += 1;
+    byScope.get(q.scopeId)!.push(q);
+  }
+
+  const result: PricingQuestion[] = [];
+  for (const scopeId of scopeOrder) {
+    const list = byScope.get(scopeId) ?? [];
+    for (const q of list.slice(0, maxPerScope)) {
+      if (result.length >= maxTotal) return result;
+      result.push(q);
+    }
   }
 
   return result;
@@ -206,6 +203,8 @@ function collectRankedQuestions(
       input.discovery
     );
 
+    const scopeRanked: RankedQuestion[] = [];
+
     for (const question of group.questions) {
       if (!questionBelongsInFlow(question, typeKey)) continue;
       const isRequired = isRequiredFact(question, typeKey);
@@ -227,14 +226,16 @@ function collectRankedQuestions(
       const pq = toPricingQuestion(question, group, requiredOnly);
       if (!pq) continue;
 
-      questions.push({
+      scopeRanked.push({
         ...pq,
         priority: questionPriority(pq.questionKey, pq.inputType),
       });
     }
+
+    scopeRanked.sort((a, b) => b.priority - a.priority);
+    questions.push(...scopeRanked);
   }
 
-  questions.sort((a, b) => b.priority - a.priority);
   return questions;
 }
 
@@ -249,11 +250,11 @@ export function getNextPricingQuestions(
 ): PricingQuestion[] {
   const required = collectRankedQuestions(input, true);
   if (required.length > 0) {
-    return interleaveByScope(required, maxCount);
+    return buildScopeQuestionBatch(required, maxCount);
   }
 
   const optional = collectRankedQuestions(input, false);
-  return interleaveByScope(optional, maxCount);
+  return buildScopeQuestionBatch(optional, maxCount);
 }
 
 export function getNextPricingQuestion(input: {

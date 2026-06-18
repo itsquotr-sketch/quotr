@@ -6,6 +6,8 @@ import {
 } from "@/lib/assistant-v2/get-next-constraint-question";
 import {
   getNextPricingQuestions,
+  getNextPricingQuestion,
+  SCOPE_BATCH_MAX_TOTAL,
   type PricingQuestion,
   type ScopeGroupInput,
 } from "@/lib/assistant-v2/get-next-pricing-question";
@@ -67,17 +69,17 @@ export function getNextAssistantTurn(input: {
   qualityLevel: QualityLevel;
   answeredQuestionKeys: Set<string>;
 }): AssistantTurn | null {
-  const scopeQuestions = getNextPricingQuestions(
-    {
-      scopeGroups: input.scopeGroups,
-      discovery: input.discovery,
-      scopeQuestions: input.scopeQuestions,
-      answeredQuestionKeys: input.answeredQuestionKeys,
-    },
-    3
-  );
+  const pricingInput = {
+    scopeGroups: input.scopeGroups,
+    discovery: input.discovery,
+    scopeQuestions: input.scopeQuestions,
+    answeredQuestionKeys: input.answeredQuestionKeys,
+  };
 
-  const requiredQuestions = scopeQuestions.filter((q) => q.required);
+  const requiredQuestions = getNextPricingQuestions(
+    pricingInput,
+    SCOPE_BATCH_MAX_TOTAL
+  ).filter((q) => q.required);
 
   if (requiredQuestions.length > 0) {
     return {
@@ -100,6 +102,30 @@ export function getNextAssistantTurn(input: {
     };
   }
 
+  const optionalQuestions = getNextPricingQuestions(
+    pricingInput,
+    SCOPE_BATCH_MAX_TOTAL
+  ).filter((q) => !q.required);
+
+  if (optionalQuestions.length > 0) {
+    return {
+      kind: "scope_batch",
+      questions: optionalQuestions,
+      intro: scopeBatchIntro(optionalQuestions),
+      hasRequired: false,
+    };
+  }
+
+  const pendingRequired = getNextPricingQuestion(pricingInput);
+  if (pendingRequired?.required) {
+    return {
+      kind: "scope_batch",
+      questions: [pendingRequired],
+      intro: scopeBatchIntro([pendingRequired]),
+      hasRequired: true,
+    };
+  }
+
   const discoverySlugs =
     input.discovery?.constraints?.map((c) => c.slug) ?? [];
 
@@ -112,18 +138,35 @@ export function getNextAssistantTurn(input: {
   });
 
   if (pendingConstraints.length > 0) {
+    const stillHasRequired =
+      getNextPricingQuestions(pricingInput, 1).some((q) => q.required) ||
+      Boolean(getNextPricingQuestion(pricingInput)?.required);
+
+    if (stillHasRequired) {
+      const requiredBatch = getNextPricingQuestions(
+        pricingInput,
+        SCOPE_BATCH_MAX_TOTAL
+      ).filter((q) => q.required);
+      if (requiredBatch.length > 0) {
+        return {
+          kind: "scope_batch",
+          questions: requiredBatch,
+          intro: scopeBatchIntro(requiredBatch),
+          hasRequired: true,
+        };
+      }
+      const fallback = getNextPricingQuestion(pricingInput);
+      if (fallback?.required) {
+        return {
+          kind: "scope_batch",
+          questions: [fallback],
+          intro: scopeBatchIntro([fallback]),
+          hasRequired: true,
+        };
+      }
+    }
+
     return { kind: "constraint_batch", constraints: pendingConstraints };
-  }
-
-  const optionalQuestions = scopeQuestions.filter((q) => !q.required);
-
-  if (optionalQuestions.length > 0) {
-    return {
-      kind: "scope_batch",
-      questions: optionalQuestions,
-      intro: scopeBatchIntro(optionalQuestions),
-      hasRequired: false,
-    };
   }
 
   return null;
@@ -134,11 +177,10 @@ export function collectAnsweredQuestionKeys(
 ): Set<string> {
   const keys = new Set<string>();
   for (const question of scopeQuestions) {
+    if (!question.scope_answers?.[0]) continue;
     const key = normalizeQuestionKey(question.question_key);
     if (key) keys.add(key);
-    if (question.scope_answers?.[0] && question.question_key) {
-      keys.add(question.question_key);
-    }
+    if (question.question_key) keys.add(question.question_key);
   }
   return keys;
 }

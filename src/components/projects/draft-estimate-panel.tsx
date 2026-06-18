@@ -84,6 +84,29 @@ function ConfidenceDetails({
   );
 }
 
+function RateSourceBadge({ value }: { value: string }) {
+  const normalized = value.trim();
+  const styles =
+    normalized === "Saved rates"
+      ? "border-green-500/30 bg-green-500/10 text-green-700 dark:text-green-400"
+      : normalized === "Placeholder fallback"
+        ? "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400"
+        : normalized === "Template benchmark"
+          ? "border-border bg-muted/30 text-muted-foreground"
+          : "border-border bg-muted/30 text-muted-foreground";
+
+  return (
+    <span
+      className={cn(
+        "inline-flex rounded-full border px-2 py-0.5 text-[10px] font-medium",
+        styles
+      )}
+    >
+      {value}
+    </span>
+  );
+}
+
 export function DraftEstimatePanel({
   projectId,
   quickEstimate,
@@ -234,8 +257,10 @@ export function DraftEstimatePanel({
             </div>
             <div>
               <dt className="text-[10px] text-muted-foreground">Rate source</dt>
-              <dd className="font-medium">
-                {summary?.rateSourceDetail ?? "Template benchmark"}
+              <dd>
+                <RateSourceBadge
+                  value={summary?.rateSourceDetail ?? "Template benchmark"}
+                />
               </dd>
             </div>
           </dl>
@@ -260,6 +285,13 @@ export function DraftEstimatePanel({
                 </p>
               )}
             </div>
+          )}
+
+          {includedAreas.some((a) => a.toLowerCase().includes("kitchen")) && (
+            <p className="rounded-md border border-amber-500/25 bg-amber-500/5 px-2 py-1.5 text-xs text-amber-700 dark:text-amber-300">
+              Kitchen pricing is a rough allowance only — confirm scope and
+              materials before quoting.
+            </p>
           )}
 
           <ConfidenceDetails

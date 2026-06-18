@@ -103,6 +103,66 @@ function formatCurrencyCompact(value: number): string {
   });
 }
 
+function isSavedRateSource(source: WorkAreaRateSourceLine["rateSource"]): boolean {
+  return !isBenchmarkRateSource(source);
+}
+
+function resolveCompactRateBadgeMessage(
+  lines: WorkAreaRateSourceLine[]
+): string {
+  if (lines.length === 0) {
+    return "Rate source: estimate assumptions";
+  }
+
+  const savedCount = lines.filter((line) =>
+    isSavedRateSource(line.rateSource)
+  ).length;
+  const benchmarkCount = lines.length - savedCount;
+
+  if (savedCount === lines.length) {
+    return "Using your saved rates";
+  }
+
+  if (benchmarkCount === lines.length) {
+    return "Using benchmark rates";
+  }
+
+  return "Some benchmark rates used";
+}
+
+function projectIncludesKitchen(
+  estimateIncludes: string[],
+  rateSourceLines: WorkAreaRateSourceLine[]
+): boolean {
+  if (
+    rateSourceLines.some(
+      (line) => line.workAreaTypeKey === "Kitchen renovation"
+    )
+  ) {
+    return true;
+  }
+
+  return estimateIncludes.some((item) =>
+    item.toLowerCase().includes("kitchen")
+  );
+}
+
+function kitchenUsesRoughAllowance(
+  rateSourceLines: WorkAreaRateSourceLine[],
+  rateSourceDetail?: string | null
+): boolean {
+  const kitchenLine = rateSourceLines.find(
+    (line) => line.workAreaTypeKey === "Kitchen renovation"
+  );
+
+  if (kitchenLine) {
+    return isBenchmarkRateSource(kitchenLine.rateSource);
+  }
+
+  const detail = rateSourceDetail?.toLowerCase() ?? "";
+  return detail.includes("rough") || detail.includes("placeholder");
+}
+
 function isValidEstimateChange(event: EstimateChangeEvent): boolean {
   return (
     typeof event.previousLow === "number" &&
@@ -174,6 +234,7 @@ export function AssistantV2LiveEstimatePanel({
   constraintsIncluded = [],
   allowancesIncluded = [],
   rateSourceLines = [],
+  rateSourceDetail = null,
   breakdownOpenRequest = 0,
   benchmarkScopesForOnboarding = [],
   compact = false,
@@ -272,6 +333,10 @@ export function AssistantV2LiveEstimatePanel({
     benchmarkScopesForOnboarding.length > 0;
 
   const rateSourceBanner = resolveRateSourceBanner(rateSourceLines);
+  const compactRateBadgeMessage = resolveCompactRateBadgeMessage(rateSourceLines);
+  const showKitchenRoughAllowanceWarning =
+    projectIncludesKitchen(includesList, rateSourceLines) &&
+    kitchenUsesRoughAllowance(rateSourceLines, rateSourceDetail);
   const isQualityUnknown = qualityLevelRaw === "unknown";
   const isRangeTooWide =
     rangeWidthPercent != null && rangeWidthPercent > 40;
@@ -304,6 +369,18 @@ export function AssistantV2LiveEstimatePanel({
           >
             {estimateQualityTier}
           </span>
+          <span
+            className={cn(
+              "rounded-full px-2 py-0.5 text-[10px] font-medium tracking-wide",
+              compactRateBadgeMessage === "Using your saved rates"
+                ? "bg-primary/10 text-primary"
+                : compactRateBadgeMessage === "Rate source: estimate assumptions"
+                  ? "bg-muted text-muted-foreground"
+                  : "bg-amber-500/10 text-amber-800 dark:text-amber-300"
+            )}
+          >
+            {compactRateBadgeMessage}
+          </span>
           {(status === "updating" || status === "saving") && (
             <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
               <span className="inline-flex gap-0.5">
@@ -329,6 +406,15 @@ export function AssistantV2LiveEstimatePanel({
           </p>
         )}
       </div>
+
+      {showKitchenRoughAllowanceWarning && (
+        <div className="mt-3 rounded-lg border border-amber-500/50 bg-amber-500/15 px-3 py-2 text-xs">
+          <p className="font-medium text-amber-900 dark:text-amber-200">
+            Kitchen estimate is a rough allowance — confirm your kitchen rates
+            before relying on this figure.
+          </p>
+        </div>
+      )}
 
       {rateSourceBanner && !compact && (
         <div

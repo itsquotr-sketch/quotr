@@ -96,6 +96,8 @@ function AssistantV2ShellInner({
   const [liveEstimate, setLiveEstimate] = useState(quickEstimate);
   const [liveScopeQuestions, setLiveScopeQuestions] = useState(scopeQuestions);
   const [liveConfirmedScopes, setLiveConfirmedScopes] = useState(confirmedScopes);
+  const [liveSuggestions, setLiveSuggestions] = useState(suggestions);
+  const [liveDiscovery, setLiveDiscovery] = useState(discovery);
   const [liveDeclinedConstraints, setLiveDeclinedConstraints] = useState(
     declinedConstraintSlugs
   );
@@ -109,6 +111,8 @@ function AssistantV2ShellInner({
     setLiveEstimate(quickEstimate);
     setLiveScopeQuestions(scopeQuestions);
     setLiveConfirmedScopes(confirmedScopes);
+    setLiveSuggestions(suggestions);
+    setLiveDiscovery(discovery);
     setLiveDeclinedConstraints(declinedConstraintSlugs);
     setLiveSelectedConstraints(selectedConstraintSlugs);
     setLiveChatMessages(chatMessages);
@@ -117,6 +121,8 @@ function AssistantV2ShellInner({
     quickEstimate,
     scopeQuestions,
     confirmedScopes,
+    suggestions,
+    discovery,
     declinedConstraintSlugs,
     selectedConstraintSlugs,
     chatMessages,
@@ -128,6 +134,8 @@ function AssistantV2ShellInner({
     setLiveEstimate(payload.quickEstimate);
     setLiveScopeQuestions(payload.scopeQuestions);
     setLiveConfirmedScopes(payload.confirmedScopes);
+    setLiveSuggestions(payload.suggestions);
+    setLiveDiscovery(payload.discovery);
     setLiveDeclinedConstraints(payload.declinedConstraintSlugs);
     setLiveSelectedConstraints(payload.selectedConstraintSlugs);
     setLiveScopePackages(payload.scopePackages ?? []);
@@ -158,10 +166,10 @@ function AssistantV2ShellInner({
         scope.name,
         scope.scope_types?.name ?? null,
         liveScopeQuestions,
-        discovery
+        liveDiscovery
       ),
     }));
-  }, [liveConfirmedScopes, liveScopeQuestions, discovery]);
+  }, [liveConfirmedScopes, liveScopeQuestions, liveDiscovery]);
 
   const finishLevel = normaliseQualityLevel(liveEstimate?.quality_level);
 
@@ -169,21 +177,21 @@ function AssistantV2ShellInner({
     return evaluateAssistantProjectCompleteness({
       scopes: liveConfirmedScopes,
       scopeQuestions: liveScopeQuestions,
-      discovery,
+      discovery: liveDiscovery,
       qualityLevel: finishLevel,
       selectedConstraintSlugs: liveSelectedConstraints,
       declinedConstraintSlugs: liveDeclinedConstraints,
-      pendingSuggestionCount: suggestions.filter((s) => s.status === "pending")
+      pendingSuggestionCount: liveSuggestions.filter((s) => s.status === "pending")
         .length,
     });
   }, [
     liveConfirmedScopes,
     liveScopeQuestions,
-    discovery,
+    liveDiscovery,
     finishLevel,
     liveSelectedConstraints,
     liveDeclinedConstraints,
-    suggestions,
+    liveSuggestions,
   ]);
 
   const completenessPercent = useMemo(
@@ -376,14 +384,14 @@ function AssistantV2ShellInner({
             <div className="flex min-h-0 flex-1 flex-col">
               <AssistantV2Chat
                 projectId={projectId}
-                suggestions={suggestions}
+                suggestions={liveSuggestions}
                 confirmedScopes={liveConfirmedScopes}
-                discovery={discovery}
+                discovery={liveDiscovery}
                 scopeGroups={scopeGroups}
                 scopeQuestions={liveScopeQuestions}
                 qualityLevel={finishLevel}
                 projectCompleteness={projectCompleteness}
-                showGreeting={false}
+                showGreeting={showWelcome}
                 benchmarkScopesForOnboarding={
                   estimateSummary?.benchmarkScopesForOnboarding ?? []
                 }
@@ -401,7 +409,7 @@ function AssistantV2ShellInner({
                   projectId={projectId}
                   confirmedScopes={liveConfirmedScopes}
                   scopeQuestions={liveScopeQuestions}
-                  discovery={discovery}
+                  discovery={liveDiscovery}
                   scopePackages={liveScopePackages}
                 />
                 <AssistantV2ProjectDetails

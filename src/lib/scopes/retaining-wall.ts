@@ -1,6 +1,29 @@
 import { YES_NO_UNSURE } from "@/lib/scopes/shared";
 import type { ScopeDefinition } from "@/lib/scopes/types";
 
+function toMetres(value: string, fullMatch: string): number | null {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return null;
+  const idx = fullMatch.indexOf(value);
+  const snippet = idx >= 0 ? fullMatch.slice(idx, idx + value.length + 6) : fullMatch;
+  if (/\d\s*mm\b/i.test(snippet)) return num / 1000;
+  return num;
+}
+
+function extractHigherHeight(match: RegExpMatchArray): string | null {
+  const full = match[0];
+  if (match[2] != null && match[1] != null) {
+    const a = toMetres(match[1], full);
+    const b = toMetres(match[2], full);
+    if (a == null || b == null) return match[2] ?? match[1] ?? null;
+    const higher = Math.max(a, b);
+    return String(Math.round(higher * 10) / 10);
+  }
+  if (match[1] == null) return null;
+  const single = toMetres(match[1], full);
+  return single == null ? match[1] : String(Math.round(single * 10) / 10);
+}
+
 export const retainingWallScope: ScopeDefinition = {
   id: "retaining_wall",
   name: "Retaining Wall",
@@ -28,6 +51,7 @@ export const retainingWallScope: ScopeDefinition = {
       placeholder: "e.g. 12",
       extractionPatterns: [
         /retaining\s*wall\s*(?:around|about|approx(?:imately)?\.?|is)?\s*(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?|lm)\s*long/i,
+        /(?:over|about|approx(?:imately)?\.?|around)\s*(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?|lm)\s*long/i,
         /(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?|lm)\s*(?:long|length)?\s*(?:retaining\s*)?wall/i,
       ],
       extractValue: (m) => m[1] ?? null,
@@ -43,9 +67,17 @@ export const retainingWallScope: ScopeDefinition = {
       questionText: "Approximate wall height?",
       placeholder: "e.g. 1.2",
       extractionPatterns: [
+        /(?:rakes?|raking)\s+from\s+(\d+(?:\.\d+)?)\s*(?:mm|m|met(?:re|er)s?)?\s+to\s+(\d+(?:\.\d+)?)\s*(?:mm|m|met(?:re|er)s?)/i,
+        /height\s+varies\s+from\s+(\d+(?:\.\d+)?)\s*(?:mm|m|met(?:re|er)s?)?\s+to\s+(\d+(?:\.\d+)?)\s*(?:mm|m|met(?:re|er)s?)/i,
+        /between\s+(\d+(?:\.\d+)?)\s*(?:mm|m|met(?:re|er)s?)?\s+and\s+(\d+(?:\.\d+)?)\s*(?:mm|m|met(?:re|er)s?)\s*high/i,
+        /(\d+(?:\.\d+)?)\s*(?:mm|m|met(?:re|er)s?)\s+to\s+(\d+(?:\.\d+)?)\s*(?:mm|m|met(?:re|er)s?)\s*high/i,
+        /(\d+(?:\.\d+)?)\s*[–-]\s*(\d+(?:\.\d+)?)\s*(?:mm|m|met(?:re|er)s?)\s*high/i,
+        /(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?)?\s*(?:high|height|tall)\s+down\s+to\s+(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?|high|tall)?/i,
+        /(?:varies|taper(?:s)?|rake(?:s)?)\s+between\s+(\d+(?:\.\d+)?)\s*(?:mm|m|met(?:re|er)s?)?\s+and\s+(\d+(?:\.\d+)?)\s*(?:mm|m|met(?:re|er)s?)?\s*(?:high|tall)?/i,
+        /(?:varies|taper(?:s)?|rake(?:s)?)\s+from\s+(\d+(?:\.\d+)?)\s*(?:mm|m|met(?:re|er)s?)?\s+to\s+(\d+(?:\.\d+)?)\s*(?:mm|m|met(?:re|er)s?)?/i,
         /(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?)\s*(?:high|height|tall)\s*(?:retaining\s*)?wall/i,
       ],
-      extractValue: (m) => m[1] ?? null,
+      extractValue: (m) => extractHigherHeight(m),
     },
     {
       key: "retaining_wall.material",
@@ -138,6 +170,20 @@ export const retainingWallScope: ScopeDefinition = {
       questionText: "What is the carting distance?",
       placeholder: "e.g. 15",
       extractionPatterns: [
+        /haul\s+distance\s+(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?)/i,
+        /haul\s+(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?)/i,
+        /(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?)\s+haul/i,
+        /cart\s+spoil\s+(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?)/i,
+        /cart\s+(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?)\b/i,
+        /(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?)\s+to\s+dump/i,
+        /dump\s+(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?)\s+away/i,
+        /trucking\s+distance\s+(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?)?/i,
+        /(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?)\s+to\s+(?:remove|haul|carry)\b.*?(?:earth|spoil|backfill|tip)/i,
+        /(?:distance\s+to\s+(?:remove|haul|carry)|(?:remove|haul|carry)\s+(?:earth|spoil|backfill))\b.*?(?:is\s+)?(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?)/i,
+        /carting\s+distance\s+(?:is\s+)?(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?)/i,
+        /(?:haul|carry)\s+(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?)\b/i,
+        /(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?)\s+(?:away|to\s+tip)\b/i,
+        /(?:remove|carry)\s+spoil\s+(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?)/i,
         /(\d+(?:\.\d+)?)\s*(?:m|met(?:re|er)s?)\s*carting/i,
       ],
       extractValue: (m) => m[1] ?? null,

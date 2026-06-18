@@ -18,7 +18,7 @@ export type DiscoveryFact = {
   value: string;
   unit?: string;
   workAreaTypeKey?: string;
-  source: "notes";
+  source: "notes" | "derived";
   confidence: number;
 };
 

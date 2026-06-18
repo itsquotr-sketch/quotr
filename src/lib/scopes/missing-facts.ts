@@ -139,7 +139,7 @@ export function buildScopeMissingLabels(
     if (!scope) continue;
 
     for (const fact of getMissingFactsForScope(scope, area.answers)) {
-      missing.push(fact.questionText || fact.label);
+      missing.push(fact.label || fact.questionText);
     }
   }
 

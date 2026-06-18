@@ -44,6 +44,7 @@ import {
 } from "@/lib/assistant-v2/completeness/evaluate-project-completeness";
 import { useEstimateUpdate } from "@/components/projects/estimate-update-context";
 import { cn } from "@/lib/utils";
+import { devLog } from "@/lib/dev-log";
 
 function CommandConfirmationActions({
   projectId,
@@ -209,7 +210,6 @@ export function AssistantV2Chat({
   const {
     allMessages,
     persistedMessages,
-    submitScopeAnswer,
     flushScopeBatch,
     submitConstraintBatch,
     submitWorkAreaConfirmation,
@@ -269,8 +269,50 @@ export function AssistantV2Chat({
   );
 
   const pendingSuggestions = suggestions.filter((s) => s.status === "pending");
-  const showWorkAreaConfirmation =
-    pendingSuggestions.length > 0 && !flushInFlight;
+  const pendingSuggestionKey = pendingSuggestions
+    .map((s) => `${s.id}:${s.status}`)
+    .join(",");
+  const showWorkAreaConfirmation = pendingSuggestions.length > 0;
+
+  useEffect(() => {
+    devLog("assistant.confirmation.state", {
+      suggestionsCount: suggestions.length,
+      pendingSuggestionsCount: pendingSuggestions.length,
+      suggestions: suggestions.map((s) => ({
+        id: s.id,
+        name: s.suggested_name,
+        status: s.status,
+      })),
+      suggestionStatuses: suggestions.map((s) => s.status),
+      showWorkAreaConfirmation,
+      showActiveTurn: Boolean(
+        nextTurn &&
+          confirmedScopes.length > 0 &&
+          !flushInFlight &&
+          !showWorkAreaConfirmation
+      ),
+      flushInFlight,
+      confirmedScopesCount: confirmedScopes.length,
+    });
+  }, [
+    suggestions,
+    pendingSuggestionKey,
+    pendingSuggestions.length,
+    showWorkAreaConfirmation,
+    nextTurn,
+    confirmedScopes.length,
+    flushInFlight,
+  ]);
+
+  useEffect(() => {
+    if (!showWorkAreaConfirmation) return;
+    devLog("assistant.confirmation.render", {
+      rendered: true,
+      pendingSuggestionNames: suggestions
+        .filter((s) => s.status === "pending")
+        .map((s) => s.suggested_name),
+    });
+  }, [showWorkAreaConfirmation, pendingSuggestionKey, suggestions]);
 
   const activeTurnFingerprint =
     nextTurn?.kind === "scope_batch"
@@ -461,8 +503,6 @@ export function AssistantV2Chat({
           <ActiveTurnBubble
             projectId={projectId}
             turn={nextTurn}
-            optimisticAnswers={optimisticAnswers}
-            onScopeAnswer={submitScopeAnswer}
             onScopeBatchComplete={flushScopeBatch}
             onConstraintBatch={submitConstraintBatch}
             onQualityAnswer={(level, label) => submitQualityLevel(level, label)}
@@ -489,8 +529,6 @@ export function AssistantV2Chat({
 function ActiveTurnBubble({
   projectId,
   turn,
-  optimisticAnswers,
-  onScopeAnswer,
   onScopeBatchComplete,
   onConstraintBatch,
   onQualityAnswer,
@@ -498,13 +536,6 @@ function ActiveTurnBubble({
 }: {
   projectId: string;
   turn: AssistantTurn;
-  optimisticAnswers: Record<string, string>;
-  onScopeAnswer: (
-    questionId: string,
-    questionKey: string,
-    answer: string,
-    label: string
-  ) => void;
   onScopeBatchComplete: (
     answers: {
       questionId: string;
@@ -557,8 +588,6 @@ function ActiveTurnBubble({
       <ScopeBatchBubble
         intro={turn.intro}
         questions={turn.questions}
-        optimisticAnswers={optimisticAnswers}
-        onScopeAnswer={onScopeAnswer}
         onBatchComplete={onScopeBatchComplete}
       />
     );
@@ -599,19 +628,10 @@ function ActiveTurnBubble({
 function ScopeBatchBubble({
   intro,
   questions,
-  optimisticAnswers,
-  onScopeAnswer,
   onBatchComplete,
 }: {
   intro: string;
   questions: PricingQuestion[];
-  optimisticAnswers: Record<string, string>;
-  onScopeAnswer: (
-    questionId: string,
-    questionKey: string,
-    answer: string,
-    label: string
-  ) => void;
   onBatchComplete: (
     answers: {
       questionId: string;
@@ -621,88 +641,109 @@ function ScopeBatchBubble({
     }[]
   ) => void;
 }) {
+  const { flushInFlight } = useAssistantChat();
+  const { status } = useEstimateUpdate();
   const [localAnswers, setLocalAnswers] = useState<
     Record<string, { answer: string; label: string }>
   >({});
+  const [submitted, setSubmitted] = useState(false);
   const flushedRef = useRef(false);
   const questionIds = questions.map((q) => q.questionId).join(",");
+
+  const saving = submitted && flushInFlight;
+  const controlsDisabled = submitted || saving;
+  const savingMessage =
+    status === "updating" ? "Updating estimate…" : "Saving answers…";
 
   useEffect(() => {
     flushedRef.current = false;
     setLocalAnswers({});
+    setSubmitted(false);
   }, [questionIds]);
+
+  const groupedQuestions = useMemo(() => {
+    const groups: { scopeName: string; questions: PricingQuestion[] }[] = [];
+    const indexByScope = new Map<string, number>();
+
+    for (const q of questions) {
+      let idx = indexByScope.get(q.scopeName);
+      if (idx === undefined) {
+        idx = groups.length;
+        indexByScope.set(q.scopeName, idx);
+        groups.push({ scopeName: q.scopeName, questions: [] });
+      }
+      groups[idx]!.questions.push(q);
+    }
+
+    return groups;
+  }, [questions]);
 
   const merged = useMemo(() => {
     const m: Record<string, { answer: string; label: string }> = {};
     for (const q of questions) {
-      const opt = optimisticAnswers[q.questionKey];
       const local = localAnswers[q.questionKey];
       if (local) {
         m[q.questionKey] = local;
-      } else if (opt) {
-        const label =
-          q.options.find((o) => o.value === opt)?.label ?? opt;
-        m[q.questionKey] = { answer: opt, label };
       }
     }
     return m;
-  }, [questions, optimisticAnswers, localAnswers]);
+  }, [questions, localAnswers]);
 
-  const allAnswered = questions.every((q) => merged[q.questionKey]);
+  const hasAnswers = questions.some((q) => merged[q.questionKey]);
+  const requiredAnswered = questions
+    .filter((q) => q.required)
+    .every((q) => merged[q.questionKey]);
+  const canSubmit = hasAnswers && requiredAnswered && !controlsDisabled;
 
-  const tryFlush = useCallback(() => {
-    if (!allAnswered || flushedRef.current) return;
+  const handleSubmit = useCallback(() => {
+    if (!canSubmit || flushedRef.current) return;
 
-    const batch = questions.map((q) => {
-      const item = merged[q.questionKey]!;
-      return {
-        questionId: q.questionId,
-        questionKey: q.questionKey,
-        answer: item.answer,
-        label: item.label,
-      };
-    });
+    const batch = questions
+      .filter((q) => merged[q.questionKey])
+      .map((q) => {
+        const item = merged[q.questionKey]!;
+        return {
+          questionId: q.questionId,
+          questionKey: q.questionKey,
+          answer: item.answer,
+          label: item.label,
+        };
+      });
+
+    if (batch.length === 0) return;
 
     flushedRef.current = true;
+    setSubmitted(true);
     onBatchComplete(batch);
-  }, [allAnswered, questions, merged, onBatchComplete]);
-
-  useEffect(() => {
-    if (allAnswered) {
-      tryFlush();
-    }
-  }, [allAnswered, tryFlush]);
+  }, [canSubmit, questions, merged, onBatchComplete]);
 
   function handleAnswer(
     q: PricingQuestion,
     answer: string,
     label: string
   ) {
+    if (controlsDisabled) return;
     setLocalAnswers((prev) => ({
       ...prev,
       [q.questionKey]: { answer, label },
     }));
-    onScopeAnswer(q.questionId, q.questionKey, answer, label);
   }
 
   const [naturalAnswer, setNaturalAnswer] = useState("");
 
   function handleNaturalSubmit() {
+    if (controlsDisabled) return;
+
     const parsed = parseNaturalLanguageBatchAnswers(naturalAnswer, questions);
     if (parsed.length === 0) return;
 
-    for (const item of parsed) {
-      onScopeAnswer(
-        item.questionId,
-        item.questionKey,
-        item.answer,
-        item.label
-      );
-    }
-
-    if (parsed.length === questions.length) {
-      onBatchComplete(parsed);
-    }
+    setLocalAnswers((prev) => {
+      const next = { ...prev };
+      for (const item of parsed) {
+        next[item.questionKey] = { answer: item.answer, label: item.label };
+      }
+      return next;
+    });
     setNaturalAnswer("");
   }
 
@@ -719,18 +760,44 @@ function ScopeBatchBubble({
           </>
         )}
       </p>
-      <div className="mt-4 space-y-4">
-        {questions.map((q) => (
-          <ScopeQuestionRow
-            key={q.questionId}
-            question={q}
-            selected={merged[q.questionKey]?.answer ?? ""}
-            onAnswer={(answer, label) => handleAnswer(q, answer, label)}
-          />
+      {saving && (
+        <p className="mt-2 flex items-center text-xs text-muted-foreground">
+          {savingMessage}
+          <LoadingDots />
+        </p>
+      )}
+      <div
+        className={cn(
+          "mt-4 space-y-5",
+          controlsDisabled && "pointer-events-none opacity-70"
+        )}
+      >
+        {groupedQuestions.map((group) => (
+          <div key={group.scopeName} className="space-y-4">
+            {groupedQuestions.length > 1 && (
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                {group.scopeName}
+              </p>
+            )}
+            {group.questions.map((q) => (
+              <ScopeQuestionRow
+                key={q.questionId}
+                question={q}
+                selected={merged[q.questionKey]?.answer ?? ""}
+                disabled={controlsDisabled}
+                onAnswer={(answer, label) => handleAnswer(q, answer, label)}
+              />
+            ))}
+          </div>
         ))}
       </div>
       {questions.length > 1 && (
-        <div className="mt-4 space-y-2 border-t pt-3">
+        <div
+          className={cn(
+            "mt-4 space-y-2 border-t pt-3",
+            controlsDisabled && "pointer-events-none opacity-70"
+          )}
+        >
           <p className="text-xs text-muted-foreground">
             Or answer in one line — e.g. 40sqm, elevated, timber
           </p>
@@ -740,6 +807,7 @@ function ScopeBatchBubble({
               onChange={(e) => setNaturalAnswer(e.target.value)}
               placeholder="Type your answers…"
               className="h-9"
+              disabled={controlsDisabled}
               onKeyDown={(e) => {
                 if (e.key === "Enter") handleNaturalSubmit();
               }}
@@ -749,24 +817,23 @@ function ScopeBatchBubble({
               size="sm"
               variant="secondary"
               onClick={handleNaturalSubmit}
-              disabled={!naturalAnswer.trim()}
+              disabled={controlsDisabled || !naturalAnswer.trim()}
             >
-              Send
+              Apply
             </Button>
           </div>
         </div>
       )}
 
-      {questions.some((q) => q.inputType === "number") && allAnswered && (
-        <Button
-          type="button"
-          size="sm"
-          className="mt-4"
-          onClick={tryFlush}
-        >
-          Update estimate
-        </Button>
-      )}
+      <Button
+        type="button"
+        size="sm"
+        className="mt-4"
+        onClick={handleSubmit}
+        disabled={!canSubmit || saving}
+      >
+        {saving ? savingMessage : "Submit answers"}
+      </Button>
     </AssistantBubble>
   );
 }
@@ -774,10 +841,12 @@ function ScopeBatchBubble({
 function ScopeQuestionRow({
   question: q,
   selected,
+  disabled = false,
   onAnswer,
 }: {
   question: PricingQuestion;
   selected: string;
+  disabled?: boolean;
   onAnswer: (answer: string, label: string) => void;
 }) {
   const [numberValue, setNumberValue] = useState("");
@@ -791,6 +860,7 @@ function ScopeQuestionRow({
           <AnswerChips
             options={q.options}
             value={selected}
+            disabled={disabled}
             onSelect={(value) => {
               const label =
                 q.options.find((o) => o.value === value)?.label ?? value;
@@ -806,6 +876,7 @@ function ScopeQuestionRow({
               value={numberValue}
               placeholder={q.placeholder}
               className="h-9 max-w-[140px]"
+              disabled={disabled}
               onChange={(e) => setNumberValue(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && numberValue.trim()) {
@@ -825,6 +896,7 @@ function ScopeQuestionRow({
             type="text"
             placeholder={q.placeholder}
             className="h-9"
+            disabled={disabled}
             onKeyDown={(e) => {
               const val = (e.target as HTMLInputElement).value;
               if (e.key === "Enter" && val.trim()) {

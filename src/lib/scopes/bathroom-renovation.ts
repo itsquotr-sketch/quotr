@@ -48,6 +48,42 @@ export const bathroomRenovationScope: ScopeDefinition = {
         { value: "premium", label: "Premium / high-end" },
         { value: "unknown", label: "Not sure yet" },
       ],
+      extractionPatterns: [
+        /\bpremium\s+(?:bathroom|ensuite|finish)\b/i,
+        /\bhigh[- ]end\s+(?:bathroom|tiles|fixtures)\b/i,
+        /\bhigh\s+end\s+bathroom\b/i,
+        /\bhigh[- ]quality\s+bathroom\b/i,
+        /\bhigh[- ]spec\s+bathroom\b/i,
+        /\bluxury\s+bathroom\b/i,
+        /\bbudget\s+bathroom\b/i,
+        /\bbasic\s+bathroom\b/i,
+        /\bstandard\s+bathroom\b/i,
+        /\bmid[- ]range\s+bathroom\b/i,
+      ],
+      extractValue: (m) => {
+        const text = m[0].toLowerCase();
+        if (
+          text.includes("premium") ||
+          text.includes("high-end") ||
+          text.includes("high end") ||
+          text.includes("high-quality") ||
+          text.includes("high quality") ||
+          text.includes("high-spec") ||
+          text.includes("high spec") ||
+          text.includes("luxury")
+        ) {
+          return "premium";
+        }
+        if (text.includes("budget") || text.includes("basic")) return "budget";
+        if (
+          text.includes("standard") ||
+          text.includes("mid-range") ||
+          text.includes("mid range")
+        ) {
+          return "standard";
+        }
+        return null;
+      },
     },
     {
       key: "bathroom.layout_changing",
@@ -74,6 +110,39 @@ export const bathroomRenovationScope: ScopeDefinition = {
         { value: "partial", label: "Partial height" },
         { value: "unknown", label: "Not sure yet" },
       ],
+      extractionPatterns: [
+        /\bfull[- ]height\s+tiles?\b/i,
+        /\bfull\s+height\s+til(?:e|ing)\b/i,
+        /\btiled\s+to\s+(?:the\s+)?ceiling\b/i,
+        /\btiled\s+to\s+full\s+height\b/i,
+        /\bfull\s+wall\s+til(?:e|ing)\b/i,
+        /\bpartial[- ]height\s+tiles?\b/i,
+        /\bpartial\s+til(?:e|ing)\b/i,
+        /\bsplashback\s+only\b/i,
+        /\btile\s+to\s+splash\b/i,
+        /\btile\s+to\s+half\s+height\b/i,
+        /\bfloor\s+and\s+wall(?:s)?\s+til(?:e|ing)?\b/i,
+        /\btiling\s+of\s+floor\s+and\s+walls\b/i,
+      ],
+      extractValue: (m) => {
+        const text = m[0].toLowerCase();
+        if (
+          text.includes("partial") ||
+          text.includes("splashback") ||
+          text.includes("splash") ||
+          text.includes("half height")
+        ) {
+          return "partial";
+        }
+        if (
+          text.includes("full") ||
+          text.includes("ceiling") ||
+          text.includes("floor and wall")
+        ) {
+          return "full";
+        }
+        return null;
+      },
     },
   ],
   optionalFacts: [

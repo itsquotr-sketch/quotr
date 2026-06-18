@@ -43,8 +43,10 @@ import { logSupabaseError } from "@/lib/supabase/log-error";
 import { getQuickEstimateForProject } from "@/lib/quick-estimate-data";
 import { quickEstimateMarginSchema } from "@/lib/validations/project-assistant";
 import type { QualityLevel } from "@/lib/constants/quality-level";
+import type { DiscoveryResult } from "@/lib/ai/discovery/types";
 import type {
   ProjectScope,
+  ProjectScopeSuggestion,
   QuickEstimate,
 } from "@/types/database";
 import type { AssistantMessageRow } from "@/lib/assistant-v2/assistant-messages-data";
@@ -242,7 +244,8 @@ export async function batchSaveAssistantScopeAnswers(
     questionKey: string;
     answer: string;
     label: string;
-  }[]
+  }[],
+  options?: { skipRecalculate?: boolean }
 ): Promise<AssistantV2ActionState> {
   const { user, organisationId } = await requireOrganisation();
   const supabase = await createClient();
@@ -252,6 +255,7 @@ export async function batchSaveAssistantScopeAnswers(
     projectId,
     userId: user.id,
     answers,
+    skipRecalculate: options?.skipRecalculate,
   });
 
   if (result.error) {
@@ -446,6 +450,8 @@ export type AssistantSyncPayload = {
   quickEstimate: QuickEstimate | null;
   scopeQuestions: ScopeQuestionWithAnswers[];
   confirmedScopes: (ProjectScope & { scope_types: { name: string } | null })[];
+  suggestions: ProjectScopeSuggestion[];
+  discovery: DiscoveryResult | null;
   selectedConstraintSlugs: string[];
   declinedConstraintSlugs: string[];
   scopePackages: import("@/types/database").ProjectScopePackage[];
@@ -474,6 +480,8 @@ export async function syncAssistantState(
       quickEstimate: data.quickEstimate,
       scopeQuestions: data.scopeQuestions,
       confirmedScopes: data.confirmedScopes,
+      suggestions: data.suggestions,
+      discovery: data.discovery,
       selectedConstraintSlugs: data.selectedConstraintSlugs,
       declinedConstraintSlugs: data.declinedConstraintSlugs,
       scopePackages: data.scopePackages ?? [],
